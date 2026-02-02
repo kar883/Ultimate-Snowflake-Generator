@@ -107,6 +107,7 @@ export interface SnowflakeConfig {
   slotWidth: number;
   quality: DesignQuality;
   syncAllLayers: boolean;
+  globalStrokeWeight: number;
 }
 
 export interface FontOption {
@@ -126,6 +127,7 @@ export interface ShortcutConfig {
   undo: ShortcutDef;
   redo: ShortcutDef;
   toggleView: ShortcutDef;
+  forceRegenerate: ShortcutDef;
   exportCombinedSTL: ShortcutDef;
   exportBasePlaneSTL: ShortcutDef;
   exportCrossPlaneSTL: ShortcutDef;

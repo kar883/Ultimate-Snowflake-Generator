@@ -65,22 +65,24 @@ const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose, config
         </div>
 
         {/* Scrollable List */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-2 custom-scrollbar">
-            {(Object.keys(tempConfig) as Array<keyof ShortcutConfig>).map((action) => (
-                <div key={action} className="flex items-center justify-between p-2 bg-slate-800/50 rounded-lg border border-white/5 hover:border-white/10 transition-colors">
-                    <span className="text-xs font-bold text-slate-300 capitalize">{action.replace(/([A-Z])/g, ' $1').trim()}</span>
-                    <button 
-                        onClick={() => setListeningFor(action)}
-                        className={`min-w-[80px] h-7 px-2 rounded-md text-[10px] font-mono font-bold transition-all border ${
-                            listeningFor === action 
-                                ? 'bg-sky-500 text-white border-sky-400 animate-pulse' 
-                                : 'bg-slate-900 text-sky-400 border-white/10 hover:border-sky-500/50'
-                        }`}
-                    >
-                        {listeningFor === action ? 'Press keys...' : formatShortcut(tempConfig[action])}
-                    </button>
-                </div>
-            ))}
+        <div className="flex-1 overflow-y-auto p-5 space-y-2 custom-scrollbar max-h-96">
+            <div className="grid grid-cols-2 gap-3">
+                {(Object.keys(tempConfig) as Array<keyof ShortcutConfig>).map((action) => (
+                    <div key={action} className="flex items-center justify-between p-2 bg-slate-800/50 rounded-lg border border-white/5 hover:border-white/10 transition-colors">
+                        <span className="text-xs font-bold text-slate-300 capitalize mr-2">{action.replace(/([A-Z])/g, ' $1').trim()}</span>
+                        <button 
+                            onClick={() => setListeningFor(action)}
+                            className={`min-w-[70px] h-6 px-2 rounded-md text-[9px] font-mono font-bold transition-all border ${
+                                listeningFor === action 
+                                    ? 'bg-sky-500 text-white border-sky-400 animate-pulse' 
+                                    : 'bg-slate-900 text-sky-400 border-white/10 hover:border-sky-500/50'
+                            }`}
+                        >
+                            {listeningFor === action ? '...' : formatShortcut(tempConfig[action])}
+                        </button>
+                    </div>
+                ))}
+            </div>
         </div>
 
         {/* Footer */}

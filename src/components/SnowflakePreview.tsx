@@ -4,6 +4,7 @@ import { SnowflakeConfig, LayerConfig, TextGroupConfig, HubConfig, AbstractConfi
 import { FONT_TTF_URLS } from '../constants';
 import opentype from 'opentype.js';
 import { InfoTooltip } from './Tooltip';
+import { modelCache2D, hashConfig } from '../geometryCache';
 
 interface SnowflakePreviewProps {
   config: SnowflakeConfig; 
@@ -38,6 +39,8 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   const [fonts, setFonts] = useState<Record<string, opentype.Font>>({});
   const [viewTransform, setViewTransform] = useState({ x: 0, y: 0, scale: 1.8 });
   const [containerSize, setContainerSize] = useState({ width: 800, height: 800 });
+  const [cachedSvgContent, setCachedSvgContent] = useState<string | null>(null);
+  const [isGeneratingSvg, setIsGeneratingSvg] = useState(false);
   
   const modelDiameter = calculatedDiameter || 200;
 
@@ -146,7 +149,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
       const startX = group.textX + u.startXOffset;
       const endX = startX + u.length;
       const topY = (group.mirrorOffset / 2) + u.yOffset;
-      const t = u.thickness;
+      const t = u.thickness + config.globalStrokeWeight;
       const angleStep = 360 / group.arms;
       const instances = [];
       for (let i = 0; i < group.arms; i++) {
@@ -191,8 +194,9 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
             const instances = [];
             for (let i = 0; i < group.arms; i++) {
                 const angle = i * angleStep + group.rotationOffset;
-                instances.push(<g key={`arm-${i}`} transform={`rotate(${angle}) translate(${group.textX}, ${group.mirrorOffset / 2})`}><path d={d} fill={color} /></g>);
-                if (group.mirrorEnabled) { instances.push(<g key={`arm-mirror-${i}`} transform={`rotate(${angle}) translate(${group.textX}, ${-group.mirrorOffset / 2}) scale(1, -1)`}><path d={d} fill={color} /></g>); }
+                const strokeWidth = config.globalStrokeWeight;
+                instances.push(<g key={`arm-${i}`} transform={`rotate(${angle}) translate(${group.textX}, ${group.mirrorOffset / 2})`}><path d={d} fill={color} stroke={color} strokeWidth={strokeWidth} /></g>);
+                if (group.mirrorEnabled) { instances.push(<g key={`arm-mirror-${i}`} transform={`rotate(${angle}) translate(${group.textX}, ${-group.mirrorOffset / 2}) scale(1, -1)`}><path d={d} fill={color} stroke={color} strokeWidth={strokeWidth} /></g>); }
             }
             textPaths = <g>{instances}</g>;
         }
@@ -228,7 +232,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
             }
             holeD += "Z"; d += " " + holeD;
         }
-        return <g key={`hub-${idx}`} transform={`rotate(${hub.rotationOffset})`}><path d={d} fill={color} fillRule="evenodd" /></g>;
+        return <g key={`hub-${idx}`} transform={`rotate(${hub.rotationOffset})`}><path d={d} fill={color} fillRule="evenodd" stroke={color} strokeWidth={config.globalStrokeWeight} /></g>;
     });
   };
 
@@ -312,8 +316,8 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
               const angleStep = 360 / abs.arms; const arms = [];
               for(let i=0; i<abs.arms; i++) {
                   const angle = i * angleStep + abs.rotationOffset;
-                  arms.push(<g key={`fract-arm-${i}`} transform={`rotate(${angle}) translate(0, ${abs.mirrorOffset/2})`}>{polygons.map((d, idx) => (<path key={idx} d={d} fill={color} stroke={color} strokeWidth={0.5} strokeLinejoin="round" />))}</g>);
-                  if (abs.mirrorEnabled) { arms.push(<g key={`fract-arm-mirror-${i}`} transform={`rotate(${angle}) translate(0, ${-abs.mirrorOffset/2}) scale(1, -1)`}>{polygons.map((d, idx) => (<path key={idx} d={d} fill={color} stroke={color} strokeWidth={0.5} strokeLinejoin="round" />))}</g>); }
+                  arms.push(<g key={`fract-arm-${i}`} transform={`rotate(${angle}) translate(0, ${abs.mirrorOffset/2})`}>{polygons.map((d, idx) => (<path key={idx} d={d} fill={color} stroke={color} strokeWidth={config.globalStrokeWeight} strokeLinejoin="round" />))}</g>);
+                  if (abs.mirrorEnabled) { arms.push(<g key={`fract-arm-mirror-${i}`} transform={`rotate(${angle}) translate(0, ${-abs.mirrorOffset/2}) scale(1, -1)`}>{polygons.map((d, idx) => (<path key={idx} d={d} fill={color} stroke={color} strokeWidth={config.globalStrokeWeight} strokeLinejoin="round" />))}</g>); }
               }
               return <g key={`abs-${idx}`}>{arms}</g>;
           }
@@ -332,8 +336,8 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
           const angleStep = 360 / abs.arms; const arms = [];
           for(let i=0; i<abs.arms; i++) {
               const angle = i * angleStep + abs.rotationOffset;
-              arms.push(<g key={`abs-arm-${i}`} transform={`rotate(${angle}) translate(0, ${abs.mirrorOffset/2})`}><path d={lineD} fill={color} /></g>);
-              if (abs.mirrorEnabled) { arms.push(<g key={`abs-arm-mirror-${i}`} transform={`rotate(${angle}) translate(0, ${-abs.mirrorOffset/2}) scale(1, -1)`}><path d={lineD} fill={color} /></g>); }
+              arms.push(<g key={`abs-arm-${i}`} transform={`rotate(${angle}) translate(0, ${abs.mirrorOffset/2})`}><path d={lineD} fill={color} stroke={color} strokeWidth={config.globalStrokeWeight} /></g>);
+              if (abs.mirrorEnabled) { arms.push(<g key={`abs-arm-mirror-${i}`} transform={`rotate(${angle}) translate(0, ${-abs.mirrorOffset/2}) scale(1, -1)`}><path d={lineD} fill={color} stroke={color} strokeWidth={config.globalStrokeWeight} /></g>); }
           }
           return <g key={`abs-${idx}`}>{arms}</g>;
       });

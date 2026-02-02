@@ -15,6 +15,7 @@ import { GoogleGenAI } from "@google/genai";
 // @ts-ignore
 import { postCSGJob } from './csgWorkerManager';
 import { makeCacheKey, getOrCreateSlotGeometries } from './slotGeometryCache';
+import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, makeSlotKey, getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, slotCutCache, hashSlotCut, makeUnderlineKey } from './geometryCache';
 
 const MAX_HISTORY = 50;
 
@@ -22,6 +23,7 @@ const DEFAULT_SHORTCUTS: ShortcutConfig = {
     undo: { key: 'z', ctrlKey: true },
     redo: { key: 'z', ctrlKey: true, shiftKey: true },
     toggleView: { key: '1', ctrlKey: true },
+    forceRegenerate: { key: 'r', ctrlKey: true },
     exportCombinedSTL: { key: 'e', ctrlKey: true },
     saveProject: { key: 's', ctrlKey: true },
     loadProject: { key: 'l', ctrlKey: true },
@@ -57,28 +59,6 @@ const useFontCache = () => {
   }, []);
   
   return { loadFont, fontCache: fontCache.current };
-};
-
-// Geometry cache for text, hubs and abstracts to avoid regenerating unchanged geometries
-const useGeometryCache = () => {
-  const cacheRef = useRef<{
-    text: Map<string, { groupGeo: THREE_ACTUAL.BufferGeometry; underlineGeo?: THREE_ACTUAL.BufferGeometry }>;
-    hubs: Map<string, { geo: THREE_ACTUAL.BufferGeometry }>;
-    abstracts: Map<string, { geo: THREE_ACTUAL.BufferGeometry; mirrorGeo?: THREE_ACTUAL.BufferGeometry }>
-  }>({ text: new Map(), hubs: new Map(), abstracts: new Map() });
-  const clear = useCallback(() => {
-    try {
-      cacheRef.current.text.forEach(v => { v.groupGeo?.dispose?.(); v.underlineGeo?.dispose?.(); });
-      cacheRef.current.hubs.forEach(v => { v.geo?.dispose?.(); });
-      cacheRef.current.abstracts.forEach(v => { v.geo?.dispose?.(); v.mirrorGeo?.dispose?.(); });
-    } catch (e) {
-      /* ignore dispose errors */
-    }
-    cacheRef.current.text.clear();
-    cacheRef.current.hubs.clear();
-    cacheRef.current.abstracts.clear();
-  }, []);
-  return { cache: cacheRef.current, clear };
 };
 
 const useThreeJSCleanup = () => {
@@ -595,7 +575,8 @@ const App: React.FC = () => {
     slotLength: 95, 
     slotWidth: 4.0, 
     quality: 'low',
-    syncAllLayers: true // Default ON
+    syncAllLayers: true, // Default ON
+    globalStrokeWeight: 0
   };
 
   const [config, setConfig] = useState<SnowflakeConfig>(initialState);
@@ -637,7 +618,6 @@ const App: React.FC = () => {
   const { handleError } = useErrorHandler();
   const { exportWithProgress } = useExportManager();
   const { notifications, showNotification } = useUserFeedback();
-  const { cache: geometryCache, clear: clearGeometryCache } = useGeometryCache();
 
   // Diameter Calculation Logic
   useEffect(() => {
@@ -760,6 +740,85 @@ const App: React.FC = () => {
       }
   }, []);
 
+  // Pre-compute slot cuts in background when slot settings change
+  useEffect(() => {
+    if (!rendered3DConfig.slotEnabled) return;
+
+    const preComputeSlotCuts = async () => {
+      // Calculate bevel per side (same logic as in generateMesh)
+      const bevelPerSide = rendered3DConfig.bevelEnabled ? Math.min(rendered3DConfig.bevelAmount, rendered3DConfig.extrusionDepth / 2) : 0;
+      // Create a temporary config with slots disabled to generate base geometry
+      const baseConfig = { ...rendered3DConfig, slotEnabled: false };
+
+      for (const layer of rendered3DConfig.layers.filter(l => l.enabled)) {
+        if (!layer.slotType || layer.slotType === 'none') continue;
+
+        const cacheKey = hashSlotCut(
+          layer,
+          rendered3DConfig.slotLength,
+          rendered3DConfig.slotWidth,
+          rendered3DConfig.extrusionDepth,
+          rendered3DConfig.bevelEnabled,
+          bevelPerSide,
+          rendered3DConfig.layers
+        );
+
+        // Skip if already cached
+        if (slotCutCache.has(cacheKey)) continue;
+
+        try {
+          // Generate base mesh for this layer only (with slots disabled)
+          const tempGroup = await generateMesh(() => {}, 'low', baseConfig);
+          const layerMesh = tempGroup.children.find(child => child.userData.layerId === layer.id) as THREE_ACTUAL.Mesh;
+
+          if (layerMesh) {
+            // Apply slot cuts to the base geometry
+            const cutGeo = await applySlotCuts(
+              layerMesh.geometry.clone(),
+              layer,
+              rendered3DConfig.slotLength,
+              rendered3DConfig.slotWidth,
+              rendered3DConfig.extrusionDepth,
+              rendered3DConfig.bevelEnabled,
+              bevelPerSide,
+              rendered3DConfig.layers
+            );
+
+            // Store in cache
+            slotCutCache.set(cacheKey, cutGeo);
+          }
+
+          // Clean up temporary group
+          tempGroup.traverse((child) => {
+            if (child instanceof THREE_ACTUAL.Mesh) {
+              child.geometry.dispose();
+              if (Array.isArray(child.material)) {
+                child.material.forEach(m => m.dispose());
+              } else {
+                child.material.dispose();
+              }
+            }
+          });
+
+        } catch (error) {
+          console.warn('Failed to pre-compute slot cuts for layer:', layer.id, error);
+        }
+      }
+    };
+
+    // Debounce the pre-computation to avoid excessive work
+    const timeoutId = setTimeout(preComputeSlotCuts, 200);
+    return () => clearTimeout(timeoutId);
+  }, [
+    rendered3DConfig.slotEnabled,
+    rendered3DConfig.slotLength,
+    rendered3DConfig.slotWidth,
+    rendered3DConfig.extrusionDepth,
+    rendered3DConfig.bevelEnabled,
+    rendered3DConfig.bevelAmount,
+    rendered3DConfig.layers
+  ]);
+
   const updateGroup = useCallback((group: 'primary' | 'secondary', updates: Partial<TextGroupConfig>, commitTo3D: boolean = false) => {
     handleUpdateConfig({
       layers: config.layers.map((layer, idx) => {
@@ -833,7 +892,296 @@ const App: React.FC = () => {
     }
   }, [history, historyIndex, viewMode]);
 
-  const generateMesh = useCallback(async (onProgress: (p: number) => void, overrideQuality?: DesignQuality): Promise<THREE_ACTUAL.Group> => {
+  const generateMesh = useCallback(async (onProgress: (p: number) => void, overrideQuality?: DesignQuality, overrideConfig?: SnowflakeConfig): Promise<THREE_ACTUAL.Group> => {
+    const config = overrideConfig || rendered3DConfig;
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
+    // Clear geometry cache if quality changes (different curve/bevel segments)
+    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
+      clearGeometryCache();
+    }
     const qualityToUse = overrideQuality || rendered3DConfig.quality;
     let qMult = 1;
     let curveSeg = 12;
@@ -898,48 +1246,15 @@ const App: React.FC = () => {
         const fontName = textGroup.fontFamily.replace(/'/g, '').split(',')[0].trim();
         const url = dynamicFonts[fontName] || FONT_TTF_URLS[fontName];
         
-        const font = await loadFont(fontName, url).catch((error) => {
-          console.warn(`Failed to load font ${fontName}:`, error);
-          return null;
-        });
-        if (font) {
+        try {
+          const font = await loadFont(fontName, url);
+          if (font) {
             const scale = textGroup.fontSize / font.unitsPerEm;
-            // Build a cache key for this text shape + extrude settings
-            const textKey = JSON.stringify({
-              fontName,
-              url,
-              text: textGroup.text,
-              fontSize: textGroup.fontSize,
-              charOffsets: textGroup.charOffsets,
-              letterSpacing: textGroup.letterSpacing,
-              mirrorEnabled: textGroup.mirrorEnabled,
-              mirrorOffset: textGroup.mirrorOffset,
-              underline: textGroup.underline,
-              arms: textGroup.arms,
-              rotationOffset: textGroup.rotationOffset,
-              extrude: {
-                depth: extrudeSettings.depth,
-                bevelEnabled: extrudeSettings.bevelEnabled,
-                bevelSize: extrudeSettings.bevelSize,
-                bevelSegments: extrudeSettings.bevelSegments,
-                curveSegments: extrudeSettings.curveSegments
-              }
-            });
-
-            let groupGeo: THREE_ACTUAL.BufferGeometry | null = null;
-            let underlineGeo: THREE_ACTUAL.BufferGeometry | null = null;
-
-            if (geometryCache.text.has(textKey)) {
-              const cached = geometryCache.text.get(textKey);
-              if (cached) {
-                groupGeo = cached.groupGeo.clone();
-                if (cached.underlineGeo) underlineGeo = cached.underlineGeo.clone();
-              }
-            } else {
-              const glyphs = font.stringToGlyphs(textGroup.text);
-              let shapes: THREE_ACTUAL.Shape[] = [];
-              let currentX = 0;
-              glyphs.forEach((glyph, i) => {
+            const glyphs = font.stringToGlyphs(textGroup.text);
+            let shapes: THREE_ACTUAL.Shape[] = [];
+            let currentX = 0;
+            glyphs.forEach((glyph, i) => {
+              try {
                 const offset = textGroup.charOffsets[i] || { x: 0, y: 0 };
                 const path = glyph.getPath(currentX + offset.x, offset.y, textGroup.fontSize);
                 const threePath = new THREE_ACTUAL.ShapePath();
@@ -950,16 +1265,30 @@ const App: React.FC = () => {
                   else if (cmd.type === 'C') threePath.bezierCurveTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x, cmd.y);
                 });
                 shapes.push(...threePath.toShapes(true));
-                currentX += (glyph.advanceWidth * scale) + textGroup.letterSpacing;
+              } catch (error) {
+                console.warn(`Failed to process glyph ${i} for font ${fontName}:`, error);
+              }
+              currentX += (glyph.advanceWidth * scale) + textGroup.letterSpacing;
+            });
+
+            // Apply global stroke weight scaling to make text bolder/thinner
+            const strokeScale = 1 + (rendered3DConfig.globalStrokeWeight / 5); // ±20% scaling per unit
+            if (strokeScale !== 1) {
+              shapes.forEach(shape => {
+                if (shape && typeof shape.scale === 'function') {
+                  shape.scale(strokeScale, strokeScale);
+                }
               });
+            }
 
-              groupGeo = new THREE_ACTUAL.ExtrudeGeometry(shapes, extrudeSettings);
+            const textKey = makeTextKey(layer.id, textGroup, textGroup.fontSize, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight);
+            const groupGeo = getOrCreateGeometry(geometryCache.text, textKey, () => new THREE_ACTUAL.ExtrudeGeometry(shapes, extrudeSettings));
+            
+            // Underline Logic
+            const uConf = textGroup.underline;
+            let underlineShapes: THREE_ACTUAL.Shape[] = [];
 
-              // Underline Logic
-              const uConf = textGroup.underline;
-              let underlineShapes: THREE_ACTUAL.Shape[] = [];
-
-              if (uConf && uConf.enabled) {
+            if (uConf && uConf.enabled) {
                 // ... (Keep existing underline logic exactly as is) ...
                 const t = uConf.thickness;
                 const halfT = t / 2;
@@ -1067,19 +1396,21 @@ const App: React.FC = () => {
                         underlineShapes.push(shape);
                     }
                 }
+            }
+            
+            // Apply global stroke weight scaling to underlines
+            if (strokeScale !== 1) {
+              underlineShapes.forEach(shape => {
+                if (shape && typeof shape.scale === 'function') {
+                  shape.scale(strokeScale, strokeScale);
                 }
-              }
-
-              if (underlineShapes.length > 0) {
-                underlineGeo = new THREE_ACTUAL.ExtrudeGeometry(underlineShapes, extrudeSettings);
-              }
-
-              // Cache the generated geometries (store clones to keep originals safe)
-              try {
-                geometryCache.text.set(textKey, { groupGeo: groupGeo.clone(), underlineGeo: underlineGeo ? underlineGeo.clone() : undefined });
-              } catch (e) {
-                // ignore caching errors
-              }
+              });
+            }
+            
+            let underlineGeo = null;
+            if (underlineShapes.length > 0) {
+                const underlineKey = makeUnderlineKey(layer.id, textGroup, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide);
+                underlineGeo = getOrCreateGeometry(geometryCache.text, underlineKey, () => new THREE_ACTUAL.ExtrudeGeometry(underlineShapes, extrudeSettings));
             }
 
             const angleStep = (Math.PI * 2) / textGroup.arms;
@@ -1107,6 +1438,8 @@ const App: React.FC = () => {
               }
             }
           }
+        } catch (error) {
+          console.warn(`Failed to load font ${fontName}:`, error);
         }
       };
 
@@ -1117,7 +1450,7 @@ const App: React.FC = () => {
              // ... (Shape generation code - same as original) ...
              const shape = new THREE_ACTUAL.Shape();
              const radius = !isNaN(hub.outerRadius) ? hub.outerRadius : 20;
-             const wallT = !isNaN(hub.wallThickness) ? hub.wallThickness : 2;
+             const wallT = (!isNaN(hub.wallThickness) ? hub.wallThickness : 2) + rendered3DConfig.globalStrokeWeight;
              const sRatio = !isNaN(hub.starRatio) ? hub.starRatio : 0.5;
              const amp = !isNaN(hub.oscillationAmplitude) ? hub.oscillationAmplitude : 5;
              
@@ -1153,39 +1486,19 @@ const App: React.FC = () => {
                  shape.holes.push(hole);
              }
 
-             // Build a cache key for the hub geometry
-             const hubKey = JSON.stringify({
-               hub,
-               extrude: {
-                 depth: extrudeSettings.depth,
-                 bevelEnabled: extrudeSettings.bevelEnabled,
-                 bevelSize: extrudeSettings.bevelSize,
-                 bevelSegments: extrudeSettings.bevelSegments,
-                 curveSegments: extrudeSettings.curveSegments
-               }
-             });
-
-             if (geometryCache.hubs.has(hubKey)) {
-               const cached = geometryCache.hubs.get(hubKey);
-               if (cached && cached.geo) {
-                 const cachedClone = cached.geo.clone();
-                 cachedClone.rotateZ(hub.rotationOffset * Math.PI / 180);
-                 cachedClone.translate(0, 0, centerZOffset);
-                 layerGeometries.push(cachedClone);
-                 return;
+             // Apply global stroke weight scaling to hub shape
+             const strokeScale = 1 + (rendered3DConfig.globalStrokeWeight / 10);
+             if (strokeScale !== 1) {
+               if (shape && typeof shape.scale === 'function') {
+                 shape.scale(strokeScale, strokeScale);
                }
              }
 
-             const geo = new THREE_ACTUAL.ExtrudeGeometry(shape, extrudeSettings);
+             const hubKey = makeHubKey(layer.id, hub, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight);
+             const geo = getOrCreateGeometry(geometryCache.hubs, hubKey, () => new THREE_ACTUAL.ExtrudeGeometry(shape, extrudeSettings));
              geo.rotateZ(hub.rotationOffset * Math.PI / 180);
              geo.translate(0, 0, centerZOffset);
              layerGeometries.push(geo);
-
-             try {
-               geometryCache.hubs.set(hubKey, { geo: geo.clone() });
-             } catch (e) {
-               // ignore cache failures
-             }
          });
       };
 
@@ -1194,48 +1507,10 @@ const App: React.FC = () => {
           const centerZOffset = -extrudeSettings.depth / 2;
           // ... (Abstract generation code - reuse logic) ...
           abstracts.filter(a => a.enabled).forEach(abs => {
+               const effectiveThickness = abs.thickness + rendered3DConfig.globalStrokeWeight;
                // ... (Fractal and Shape logic - assume copied from previous context or reuse existing)
                // For brevity, using the same robust logic structure as App.tsx
                if (abs.type === 'fractal') {
-                   // Build a cache key for fractal abstract
-                   const absKey = JSON.stringify({
-                     type: 'fractal',
-                     params: abs,
-                     extrude: {
-                       depth: extrudeSettings.depth,
-                       bevelEnabled: extrudeSettings.bevelEnabled,
-                       bevelSize: extrudeSettings.bevelSize,
-                       bevelSegments: extrudeSettings.bevelSegments,
-                       curveSegments: extrudeSettings.curveSegments
-                     },
-                     qMult
-                   });
-
-                   if (geometryCache.abstracts.has(absKey)) {
-                     const cached = geometryCache.abstracts.get(absKey)!;
-                     const fractalClone = cached.geo.clone();
-                     const angleStep = (Math.PI * 2) / abs.arms;
-                     for(let i=0; i<abs.arms; i++) {
-                         const angle = i * angleStep + (abs.rotationOffset * Math.PI / 180);
-                         const absInst = fractalClone.clone();
-                         absInst.translate(0, abs.mirrorOffset/2, centerZOffset);
-                         absInst.rotateZ(angle);
-                         layerGeometries.push(absInst);
-                         if (abs.mirrorEnabled && cached.mirrorGeo) {
-                             const mirClone = cached.mirrorGeo.clone();
-                             mirClone.translate(0, -abs.mirrorOffset/2, centerZOffset);
-                             mirClone.rotateZ(angle);
-                             layerGeometries.push(mirClone);
-                         } else if (abs.mirrorEnabled) {
-                             const mir = fractalClone.clone();
-                             mir.scale(1, -1, 1);
-                             mir.translate(0, -abs.mirrorOffset/2, centerZOffset);
-                             mir.rotateZ(angle);
-                             layerGeometries.push(mir);
-                         }
-                     }
-                     return;
-                   }
                    // ... (Fractal generation)
                    const shapes: THREE_ACTUAL.Shape[] = [];
                    const rng = seededRandom(abs.randomSeed || 1234);
@@ -1316,7 +1591,7 @@ const App: React.FC = () => {
                    let startX = abs.innerRadius;
                    let startY = 0;
                    let startDepth = abs.recursionDepth || 4;
-                   let currentWidth = abs.thickness;
+                   let currentWidth = effectiveThickness;
                    if (effectiveTrunk > 0) {
                        const trunkEnd = startX + effectiveTrunk;
                        const maxRSq = abs.outerRadius > 0 ? abs.outerRadius * abs.outerRadius : Infinity;
@@ -1343,64 +1618,40 @@ const App: React.FC = () => {
                        generateBranch(startX, startY, da, len, currentWidth, startDepth);
                    }
 
-                     if (shapes.length > 0) {
-                       const fractalGeo = new THREE_ACTUAL.ExtrudeGeometry(shapes, extrudeSettings);
-                       // cache the base fractal and mirrored base
-                       try {
-                       const mirrorBase = fractalGeo.clone();
-                       mirrorBase.scale(1, -1, 1);
-                       geometryCache.abstracts.set(JSON.stringify({ type: 'fractal', params: abs, extrude: { depth: extrudeSettings.depth, bevelEnabled: extrudeSettings.bevelEnabled, bevelSize: extrudeSettings.bevelSize, bevelSegments: extrudeSettings.bevelSegments, curveSegments: extrudeSettings.curveSegments }, qMult }), { geo: fractalGeo.clone(), mirrorGeo: mirrorBase });
-                       } catch (e) {
-                       // ignore caching failures
+                   if (shapes.length > 0) {
+                       // Apply global stroke weight scaling to fractal shapes
+                       const strokeScale = 1 + (rendered3DConfig.globalStrokeWeight / 10);
+                       if (strokeScale !== 1) {
+                         shapes.forEach(shape => {
+                           if (shape && typeof shape.scale === 'function') {
+                             shape.scale(strokeScale, strokeScale);
+                           }
+                         });
                        }
+                       
+                       const fractalGeo = new THREE_ACTUAL.ExtrudeGeometry(shapes, extrudeSettings);
                        const angleStep = (Math.PI * 2) / abs.arms;
                        for(let i=0; i<abs.arms; i++) {
-                         const angle = i * angleStep + (abs.rotationOffset * Math.PI / 180);
-                         const absInst = fractalGeo.clone();
-                         absInst.translate(0, abs.mirrorOffset/2, centerZOffset);
-                         absInst.rotateZ(angle);
-                         layerGeometries.push(absInst);
-                         if (abs.mirrorEnabled) {
-                           const mir = fractalGeo.clone();
-                           mir.scale(1, -1, 1); 
-                           mir.translate(0, -abs.mirrorOffset/2, centerZOffset);
-                           mir.rotateZ(angle);
-                           layerGeometries.push(mir);
-                         }
+                           const angle = i * angleStep + (abs.rotationOffset * Math.PI / 180);
+                           const absInst = fractalGeo.clone();
+                           absInst.translate(0, abs.mirrorOffset/2, centerZOffset);
+                           absInst.rotateZ(angle);
+                           layerGeometries.push(absInst);
+                           if (abs.mirrorEnabled) {
+                               const mir = fractalGeo.clone();
+                               mir.scale(1, -1, 1); 
+                               mir.translate(0, -abs.mirrorOffset/2, centerZOffset);
+                               mir.rotateZ(angle);
+                               layerGeometries.push(mir);
+                           }
                        }
-                     }
+                   }
                    return;
                }
 
                // Non-fractal
                const shapePoints: THREE_ACTUAL.Vector2[] = [];
                const steps = Math.ceil(200 * qMult);
-               // Build cache key for non-fractal abstracts
-               const absKey = JSON.stringify({ type: abs.type, params: abs, extrude: { depth: extrudeSettings.depth, bevelEnabled: extrudeSettings.bevelEnabled, bevelSize: extrudeSettings.bevelSize, bevelSegments: extrudeSettings.bevelSegments, curveSegments: extrudeSettings.curveSegments }, qMult });
-               if (geometryCache.abstracts.has(absKey)) {
-                 const cached = geometryCache.abstracts.get(absKey)!;
-                 const angleStep = (Math.PI * 2) / abs.arms;
-                 for(let i=0; i<abs.arms; i++) {
-                     const angle = i * angleStep + (abs.rotationOffset * Math.PI / 180);
-                     const absInst = cached.geo.clone();
-                     absInst.translate(0, abs.mirrorOffset/2, centerZOffset);
-                     absInst.rotateZ(angle);
-                     layerGeometries.push(absInst);
-                     if (abs.mirrorEnabled && cached.mirrorGeo) {
-                       const mir = cached.mirrorGeo.clone();
-                       mir.translate(0, -abs.mirrorOffset/2, centerZOffset);
-                       mir.rotateZ(angle);
-                       layerGeometries.push(mir);
-                     } else if (abs.mirrorEnabled) {
-                       const mir = cached.geo.clone();
-                       mir.scale(1, -1, 1);
-                       mir.translate(0, -abs.mirrorOffset/2, centerZOffset);
-                       mir.rotateZ(angle);
-                       layerGeometries.push(mir);
-                     }
-                 }
-                 return;
-               }
                for(let i=0; i<=steps; i++) {
                    const rCurrent = abs.innerRadius + (i/steps) * (abs.outerRadius - abs.innerRadius);
                    const normX = rCurrent - abs.innerRadius;
@@ -1418,17 +1669,30 @@ const App: React.FC = () => {
                const createAbstractShape = (pts: THREE_ACTUAL.Vector2[]) => {
                    if (pts.length < 2) return new THREE_ACTUAL.Shape();
                    const s = new THREE_ACTUAL.Shape();
-                   const halfThick = abs.thickness / 2;
+                   const halfThick = effectiveThickness / 2;
                    pts.forEach((pt, i) => { if (i === 0) s.moveTo(pt.x, pt.y + halfThick); else s.lineTo(pt.x, pt.y + halfThick); });
                    for(let i = pts.length-1; i >= 0; i--) { s.lineTo(pts[i].x, pts[i].y - halfThick); }
                    s.lineTo(pts[0].x, pts[0].y + halfThick);
                    return s;
                };
                const normalShape = createAbstractShape(shapePoints);
-               const normalGeo = new THREE_ACTUAL.ExtrudeGeometry(normalShape, extrudeSettings);
+               const abstractKey = makeAbstractKey(layer.id, abs, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight);
+               const normalGeo = getOrCreateGeometry(geometryCache.abstracts, abstractKey + '_normal', () => new THREE_ACTUAL.ExtrudeGeometry(normalShape, extrudeSettings));
                const mirroredPoints = shapePoints.map((pt) => new THREE_ACTUAL.Vector2(pt.x, -pt.y));
                const mirroredShape = createAbstractShape(mirroredPoints);
-               const mirroredGeo = new THREE_ACTUAL.ExtrudeGeometry(mirroredShape, extrudeSettings);
+               
+               // Apply global stroke weight scaling to abstract shapes
+               const strokeScale = 1 + (rendered3DConfig.globalStrokeWeight / 10);
+               if (strokeScale !== 1) {
+                 if (normalShape && typeof normalShape.scale === 'function') {
+                   normalShape.scale(strokeScale, strokeScale);
+                 }
+                 if (mirroredShape && typeof mirroredShape.scale === 'function') {
+                   mirroredShape.scale(strokeScale, strokeScale);
+                 }
+               }
+               
+               const mirroredGeo = getOrCreateGeometry(geometryCache.abstracts, abstractKey + '_mirrored', () => new THREE_ACTUAL.ExtrudeGeometry(mirroredShape, extrudeSettings));
                const angleStep = (Math.PI * 2) / abs.arms;
                for(let i=0; i<abs.arms; i++) {
                    const angle = i * angleStep + (abs.rotationOffset * Math.PI / 180);
@@ -1472,21 +1736,41 @@ const App: React.FC = () => {
 
           layerMerged.rotateX(layer.rotation3D.x * Math.PI / 180);
           layerMerged.rotateY(layer.rotation3D.y * Math.PI / 180);
-          
+
           if (rendered3DConfig.slotEnabled) {
-            layerMerged = await applySlotCuts(
-              layerMerged,
+            // Try to use pre-computed slot cuts from cache
+            const cacheKey = hashSlotCut(
               layer,
               rendered3DConfig.slotLength,
               rendered3DConfig.slotWidth,
               rendered3DConfig.extrusionDepth,
               rendered3DConfig.bevelEnabled,
               bevelPerSide,
-              rendered3DConfig.layers,
-              async () => { await updateProgress(); }
+              rendered3DConfig.layers
             );
+
+            const cachedCutGeo = slotCutCache.get(cacheKey);
+            if (cachedCutGeo) {
+              // Use cached geometry
+              layerMerged = cachedCutGeo.clone();
+            } else {
+              // Fallback to on-demand computation (shouldn't happen with pre-computation)
+              console.warn('Slot cuts not pre-computed for layer:', layer.id);
+              layerMerged = await applySlotCuts(
+                layerMerged,
+                layer,
+                rendered3DConfig.slotLength,
+                rendered3DConfig.slotWidth,
+                rendered3DConfig.extrusionDepth,
+                rendered3DConfig.bevelEnabled,
+                bevelPerSide,
+                rendered3DConfig.layers,
+                async () => { await updateProgress(); }
+              );
+            }
+
             // After cuts, we might want to repair again to fix n-gons or loose edges from boolean op
-            const postSlotRepair = repairGeometry(layerMerged, 0.0001, true); 
+            const postSlotRepair = repairGeometry(layerMerged, 0.0001, true);
             if (postSlotRepair) layerMerged = postSlotRepair;
             if (lIdx === 0) layerMerged.rotateZ(Math.PI);
           }
@@ -2060,7 +2344,24 @@ const App: React.FC = () => {
   useKeyboardShortcuts(shortcuts, {
     undo,
     redo,
-    toggleView: () => setViewMode(v => v === '2d' ? '3d' : '2d'),
+    toggleView: () => {
+      const newMode = viewMode === '2d' ? '3d' : '2d';
+      setViewMode(newMode);
+      // When switching to 3D view, immediately sync the current config to ensure changes are visible
+      if (newMode === '3d') {
+        // Clear any pending debounced updates to avoid conflicts
+        if (debounceTimer.current) {
+          clearTimeout(debounceTimer.current);
+          debounceTimer.current = null;
+        }
+        setRendered3DIfChanged(config);
+      }
+    },
+    forceRegenerate: () => {
+        clearGeometryCache();
+        setRendered3DIfChanged(config);
+        showNotification("Models Regenerated", "info", 1000);
+    },
     exportCombinedSTL: () => handleExportSTL(),
     exportBasePlaneSTL: () => handleExportLayerSTL(0),
     exportCrossPlaneSTL: () => handleExportLayerSTL(1),

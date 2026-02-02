@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 import { SnowflakeConfig, ShortcutConfig } from '../types';
 import { InfoTooltip } from './Tooltip';
+import { modelCache3D, hashConfig } from '../geometryCache';
 
 interface Snowflake3DProps {
   config: SnowflakeConfig;
@@ -155,20 +156,41 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, 
     });
   }, [config.layers]);
 
-  // Generate Mesh
+  // Generate Mesh with Caching
   useEffect(() => {
     let active = true;
+    const configHash = hashConfig(config);
+
     const load = async () => {
         if (!sceneRef.current) return;
-        setLoading(true);
+
+        // Check cache first
+        let group = modelCache3D.get(configHash);
+        let needsGeneration = !group;
+
+        if (needsGeneration) {
+            setLoading(true);
+        }
 
         try {
-            const group = await generateMesh(() => {
-                // No-op for immediate update requests if sync generation is fast
-            });
-            
+            if (needsGeneration) {
+                // Generate mesh in background
+                group = await generateMesh(() => {
+                    // Progress callback - could be used for loading indicator
+                });
+
+                if (!active) return;
+
+                // Cache the generated mesh
+                modelCache3D.set(configHash, group.clone());
+            } else {
+                // Use cached mesh - clone it for this instance
+                group = group.clone();
+            }
+
             if (!active) return;
-            
+
+            // Clean up previous mesh
             if (meshGroupRef.current) {
                 sceneRef.current.remove(meshGroupRef.current);
                 meshGroupRef.current.traverse(c => {
@@ -197,7 +219,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, 
                     c.material = mat.clone(); // Clone material to allow individual transparency
                     c.castShadow = true;
                     c.receiveShadow = true;
-                    
+
                     if (c.geometry) {
                         const pos = c.geometry.attributes.position;
                         if (pos) {
@@ -226,7 +248,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, 
 
             sceneRef.current.add(group);
             meshGroupRef.current = group;
-            
+
             // Trigger layer state application
             applyLayerStates();
 
@@ -238,10 +260,13 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, 
         } catch (e) {
             console.error(e);
         } finally {
-            if (active) setLoading(false);
+            if (active && needsGeneration) setLoading(false);
         }
     };
+
+    // Start loading immediately (will be instant if cached)
     load();
+
     return () => { active = false; };
   }, [config, generateMesh, color]);
 

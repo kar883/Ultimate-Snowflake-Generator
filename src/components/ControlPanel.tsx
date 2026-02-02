@@ -32,6 +32,7 @@ const DESCRIPTIONS: Record<string, string> = {
   "Model Color": "The base color applied to the 3D mesh and 2D preview.",
   "Edge Profile": "Adds rounded or slanted edges to the 3D model for a more realistic look.",
   "Extrusion Depth": "The thickness of the snowflake planes in millimeters.",
+  "Global Boldness": "Makes all text, abstracts, hubs, and underlines appear bolder. Higher values make them thicker.",
   "Preview Resolution": "Controls the geometric detail of the 3D preview. Lower is faster, higher is smoother.",
   "Profile Shape": "Choose Fillet for rounded edges or Chamfer for flat, angled edges.",
   "Bevel Amount": "The distance the bevel extends from the edges.",
@@ -44,17 +45,18 @@ const DESCRIPTIONS: Record<string, string> = {
   "Outer Radius": "The measurement from the origin point to the outer most edge of the model.",
   "Radius Lock": "Forces the design to stay within your target size. When locked, changing fonts or spacing will move words inward or outward to maintain this exact size.",
   "Inner Radius": "The distance between the center of the snowflake and the start of the text.",
-  "Stroke Weight": "Adds additional thickness to the font's lines.",
+  "Letter Spacing": "Adjusts the space between individual characters. Negative values can make cursive letters overlap and fuse together.",
+  "Boldness": "Adds additional thickness to the font's lines.",
   "Manual Rotation": "Rotates the entire group of text around the snowflake's center.",
   "Offset X": "Moves the selected character horizontally within the text string.",
   "Offset Y": "Moves the selected character vertically within the text string.",
   "Hub Shape": "Changes the geometry of the central ring (Circle, Star, or Polygon).",
   "Hub Radius": "The distance from the center to the edge of the hub ring.",
-  "Wall Thickness": "The thickness of the hub ring when 'Hollow' is enabled.",
+  "Hub Boldness": "The thickness of the hub ring when 'Hollow' is enabled.",
   "Shape Arms": "Number of procedural arms for the abstract pattern.",
   "Frequency": "How rapidly the wave pattern oscillates along its length.",
   "Amplitude": "The height of the waves in the abstract pattern.",
-  "Shape Thickness": "The line weight of the procedural abstract shape.",
+  "Abstract Boldness": "The line weight of the procedural abstract shape.",
   "Abstract Outer Radius": "How far the abstract shape extends from the center.",
   "Rot X": "3D rotation around the X-axis for this specific plane.",
   "Rot Y": "3D rotation around the Y-axis for this specific plane.",
@@ -848,6 +850,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                   </div>
 
                   {renderSlider("Extrusion Depth", config.extrusionDepth, 1, 20, 0.1, (v, c) => onUpdate({ extrusionDepth: v }, c), "mm", false, 3)}
+                  {renderSlider("Global Boldness", config.globalStrokeWeight, 0, 10, 0.1, (v, c) => onUpdate({ globalStrokeWeight: v }, c), "mm", false, 0)}
                   <ControlRow label="Preview Resolution" onReset={() => onUpdate({ quality: 'low' }, true)} isModified={config.quality !== 'low'}>
                      <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-lg">
                         {(['low', 'med', 'high'] as const).map(q => (<button key={q} onClick={() => onUpdate({ quality: q }, true)} className={`py-1 text-[9px] font-black uppercase rounded transition-all ${config.quality === q ? 'bg-sky-500 text-white' : 'text-slate-500'}`}>{q}</button>))}
@@ -963,7 +966,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                    />
                  </div>
                  {renderSlider("Inner Radius", groupData.textX, -100, 300, 0.1, (v, c) => handleGroupDistChange(v, c), "mm", false, activeGroup === 'primary' ? 20 : 10)}
-                 {renderSlider("Stroke Weight", groupData.thickness, 0, 10, 0.1, (v, c) => updateGroupWithLock(activeGroup, { thickness: v }, c), "mm", false, 0)}
+                 {renderSlider("Boldness", groupData.thickness, -5, 10, 0.1, (v, c) => updateGroupWithLock(activeGroup, { thickness: v }, c), "mm", false, 0)}
+                 {renderSlider("Letter Spacing", groupData.letterSpacing, -5, 20, 0.1, (v, c) => updateGroup(activeGroup, { letterSpacing: v }, c), "mm", false, 0)}
                  {renderSlider("Manual Rotation", groupData.rotationOffset, -180, 180, 1, (v, c) => updateGroup(activeGroup, { rotationOffset: v }, c), "°", false, activeGroup === 'primary' ? 0 : 30)}
               </div>
 
@@ -1068,7 +1072,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                         20,
                         <span className="text-[10px] font-black text-slate-500 ml-2">(D: <span className="text-white">{(activeLayer.hubs[selectedHubIndex].outerRadius * 2).toFixed(1)}mm</span>)</span>
                      )}
-                     {activeLayer.hubs[selectedHubIndex].hollow && renderSlider("Wall Thickness", activeLayer.hubs[selectedHubIndex].wallThickness, 0.5, 20, 0.1, (v, c) => updateHubConfig({ wallThickness: v }, c), "mm", false, 2)}
+                     {activeLayer.hubs[selectedHubIndex].hollow && renderSlider("Boldness", activeLayer.hubs[selectedHubIndex].wallThickness, 0.5, 20, 0.1, (v, c) => updateHubConfig({ wallThickness: v }, c), "mm", false, 2)}
                      {activeLayer.hubs[selectedHubIndex].shape !== 'circle' && renderSlider("Hub Sides", activeLayer.hubs[selectedHubIndex].sides, 3, 24, 1, (v, c) => updateHubConfig({ sides: v }, c), "", false, 6)}
                      {activeLayer.hubs[selectedHubIndex].shape === 'star' && renderSlider("Star Ratio", activeLayer.hubs[selectedHubIndex].starRatio, 0.1, 0.9, 0.05, (v, c) => updateHubConfig({ starRatio: v }, c), "", false, 0.5)}
                      
@@ -1191,7 +1195,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                             60,
                             <span className="text-[10px] font-black text-slate-500 ml-2">(D: <span className="text-white">{(activeLayer.abstracts[selectedAbstractIndex].outerRadius * 2).toFixed(1)}mm</span>)</span>
                         )}
-                        {renderSlider("Thickness", activeLayer.abstracts[selectedAbstractIndex].thickness, 0.5, 10, 0.1, (v, c) => updateAbstractConfig({ thickness: v }, c), "mm", false, 2)}
+                        {renderSlider("Boldness", activeLayer.abstracts[selectedAbstractIndex].thickness, 0.5, 10, 0.1, (v, c) => updateAbstractConfig({ thickness: v }, c), "mm", false, 2)}
                         
                         {activeLayer.abstracts[selectedAbstractIndex].type === 'fractal' && (
                             <div className="space-y-4 pt-2">

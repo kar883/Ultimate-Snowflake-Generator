@@ -11,18 +11,14 @@ export default defineConfig({
     // https: false, // Removed to resolve TS error. Default is HTTP.
     
     headers: {
-      // Enable Permissions Policy for local-fonts
-      'Permissions-Policy': 'local-fonts=(self)',
-      
-      // Also enable other useful permissions
-      'Feature-Policy': 'local-fonts "self"',
+      // Enable Permissions Policy for local-fonts (no quotes around self)
+      'Permissions-Policy': 'local-fonts=(self)'
     },
   },
   
   preview: {
     headers: {
-      'Permissions-Policy': 'local-fonts=(self)',
-      'Feature-Policy': 'local-fonts "self"',
+      'Permissions-Policy': 'local-fonts=(self)'
     },
   },
   
