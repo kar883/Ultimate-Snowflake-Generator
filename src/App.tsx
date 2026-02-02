@@ -1113,15 +1113,8 @@ const App: React.FC = () => {
               currentX += (glyph.advanceWidth * scale) + textGroup.letterSpacing;
             });
 
-            // Apply global stroke weight scaling to make text bolder/thinner
-            const strokeScale = 1 + (rendered3DConfig.globalStrokeWeight / 5); // ±20% scaling per unit
-            if (strokeScale !== 1) {
-              shapes.forEach(shape => {
-                if (shape && typeof shape.scale === 'function') {
-                  shape.scale(strokeScale, strokeScale);
-                }
-              });
-            }
+            // REMOVED: Global stroke weight scaling - 3D model should be exact replica of 2D
+            // No scaling applied to ensure perfect 2D to 3D correspondence
 
             const textKey = makeTextKey(layer.id, textGroup, textGroup.fontSize, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight);
             const groupGeo = getOrCreateGeometry(geometryCache.text, textKey, () => new THREE_ACTUAL.ExtrudeGeometry(shapes, extrudeSettings));
@@ -1240,14 +1233,8 @@ const App: React.FC = () => {
                 }
             }
             
-            // Apply global stroke weight scaling to underlines
-            if (strokeScale !== 1) {
-              underlineShapes.forEach(shape => {
-                if (shape && typeof shape.scale === 'function') {
-                  shape.scale(strokeScale, strokeScale);
-                }
-              });
-            }
+            // REMOVED: Global stroke weight scaling from underlines - 3D model should be exact replica of 2D
+            // No scaling applied to ensure perfect 2D to 3D correspondence
             
             let underlineGeo = null;
             if (underlineShapes.length > 0) {
@@ -1292,7 +1279,7 @@ const App: React.FC = () => {
              // ... (Shape generation code - same as original) ...
              const shape = new THREE_ACTUAL.Shape();
              const radius = !isNaN(hub.outerRadius) ? hub.outerRadius : 20;
-             const wallT = (!isNaN(hub.wallThickness) ? hub.wallThickness : 2) + rendered3DConfig.globalStrokeWeight;
+             const wallT = (!isNaN(hub.wallThickness) ? hub.wallThickness : 2); // REMOVED: globalStrokeWeight addition - 3D model should be exact replica of 2D
              const sRatio = !isNaN(hub.starRatio) ? hub.starRatio : 0.5;
              const amp = !isNaN(hub.oscillationAmplitude) ? hub.oscillationAmplitude : 5;
              
@@ -1328,13 +1315,8 @@ const App: React.FC = () => {
                  shape.holes.push(hole);
              }
 
-             // Apply global stroke weight scaling to hub shape
-             const strokeScale = 1 + (rendered3DConfig.globalStrokeWeight / 10);
-             if (strokeScale !== 1) {
-               if (shape && typeof shape.scale === 'function') {
-                 shape.scale(strokeScale, strokeScale);
-               }
-             }
+             // REMOVED: Global stroke weight scaling from hub shape - 3D model should be exact replica of 2D
+             // No scaling applied to ensure perfect 2D to 3D correspondence
 
              const hubKey = makeHubKey(layer.id, hub, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight);
              const geo = getOrCreateGeometry(geometryCache.hubs, hubKey, () => new THREE_ACTUAL.ExtrudeGeometry(shape, extrudeSettings));
@@ -1349,7 +1331,7 @@ const App: React.FC = () => {
           const centerZOffset = -extrudeSettings.depth / 2;
           // ... (Abstract generation code - reuse logic) ...
           abstracts.filter(a => a.enabled).forEach(abs => {
-               const effectiveThickness = abs.thickness + rendered3DConfig.globalStrokeWeight;
+               const effectiveThickness = abs.thickness; // REMOVED: globalStrokeWeight addition - 3D model should be exact replica of 2D
                // ... (Fractal and Shape logic - assume copied from previous context or reuse existing)
                // For brevity, using the same robust logic structure as App.tsx
                if (abs.type === 'fractal') {
@@ -1461,15 +1443,8 @@ const App: React.FC = () => {
                    }
 
                    if (shapes.length > 0) {
-                       // Apply global stroke weight scaling to fractal shapes
-                       const strokeScale = 1 + (rendered3DConfig.globalStrokeWeight / 10);
-                       if (strokeScale !== 1) {
-                         shapes.forEach(shape => {
-                           if (shape && typeof shape.scale === 'function') {
-                             shape.scale(strokeScale, strokeScale);
-                           }
-                         });
-                       }
+                       // REMOVED: Global stroke weight scaling from fractal shapes - 3D model should be exact replica of 2D
+                       // No scaling applied to ensure perfect 2D to 3D correspondence
                        
                        const fractalGeo = new THREE_ACTUAL.ExtrudeGeometry(shapes, extrudeSettings);
                        const angleStep = (Math.PI * 2) / abs.arms;
@@ -1523,16 +1498,8 @@ const App: React.FC = () => {
                const mirroredPoints = shapePoints.map((pt) => new THREE_ACTUAL.Vector2(pt.x, -pt.y));
                const mirroredShape = createAbstractShape(mirroredPoints);
                
-               // Apply global stroke weight scaling to abstract shapes
-               const strokeScale = 1 + (rendered3DConfig.globalStrokeWeight / 10);
-               if (strokeScale !== 1) {
-                 if (normalShape && typeof normalShape.scale === 'function') {
-                   normalShape.scale(strokeScale, strokeScale);
-                 }
-                 if (mirroredShape && typeof mirroredShape.scale === 'function') {
-                   mirroredShape.scale(strokeScale, strokeScale);
-                 }
-               }
+               // REMOVED: Global stroke weight scaling from abstract shapes - 3D model should be exact replica of 2D
+               // No scaling applied to ensure perfect 2D to 3D correspondence
                
                const mirroredGeo = getOrCreateGeometry(geometryCache.abstracts, abstractKey + '_mirrored', () => new THREE_ACTUAL.ExtrudeGeometry(mirroredShape, extrudeSettings));
                const angleStep = (Math.PI * 2) / abs.arms;
