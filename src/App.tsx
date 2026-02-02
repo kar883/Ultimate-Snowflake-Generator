@@ -1120,35 +1120,48 @@ const App: React.FC = () => {
             // ============================================================================
             const totalStrokeWeight = (rendered3DConfig.globalStrokeWeight || 0) + (textGroup.thickness || 0);
             
-            if (totalStrokeWeight > 0.1) {
+            // Only apply offset if boldness is significant enough to be visible
+            // This prevents unnecessary processing for small values
+            if (totalStrokeWeight > 0.3) { // Increased threshold from 0.1 to 0.3
               const offsetShapes: THREE_ACTUAL.Shape[] = [];
               
-              for (const shape of shapes) {
-                try {
-                  // Get the points from the THREE.Shape
-                  const points = shape.getPoints(50); // Increase point count for smooth curves
-                  
-                  // Convert to polyline format for Cavalier processing
-                  const polyline = CavalierPathOperations.vector2ArrayToPolyline(points, true);
-                  
-                  // Apply parallel offset - SVG stroke expands equally on both sides,
-                  // so we use half the stroke weight as the offset distance
-                  const offsetDistance = totalStrokeWeight / 2;
-                  const offsetPolylines = CavalierPathOperations.parallelOffset([polyline], offsetDistance);
-                  
-                  // Convert the offset polylines back to THREE.Shape objects
-                  for (const offsetPline of offsetPolylines) {
-                    const offsetPoints = CavalierPathOperations.polylineToVector2Array(offsetPline, 30);
+              // Process shapes in smaller batches to prevent freezing
+              const batchSize = 3; // Process 3 shapes at a time
+              for (let i = 0; i < shapes.length; i += batchSize) {
+                const batch = shapes.slice(i, i + batchSize);
+                
+                for (const shape of batch) {
+                  try {
+                    // Use fewer points for better performance
+                    const points = shape.getPoints(20); // Reduced from 50 for performance
                     
-                    if (offsetPoints.length > 2) {
-                      const offsetShape = new THREE_ACTUAL.Shape(offsetPoints);
-                      offsetShapes.push(offsetShape);
+                    // Convert to polyline format for Cavalier processing
+                    const polyline = CavalierPathOperations.vector2ArrayToPolyline(points, true);
+                    
+                    // Apply parallel offset - SVG stroke expands equally on both sides,
+                    // so we use half the stroke weight as the offset distance
+                    const offsetDistance = totalStrokeWeight / 2;
+                    const offsetPolylines = CavalierPathOperations.parallelOffset([polyline], offsetDistance);
+                    
+                    // Convert the offset polylines back to THREE.Shape objects
+                    for (const offsetPline of offsetPolylines) {
+                      const offsetPoints = CavalierPathOperations.polylineToVector2Array(offsetPline, 15); // Reduced from 30 for performance
+                      
+                      if (offsetPoints.length > 2) {
+                        const offsetShape = new THREE_ACTUAL.Shape(offsetPoints);
+                        offsetShapes.push(offsetShape);
+                      }
                     }
+                  } catch (error) {
+                    console.warn('Failed to offset shape, using original:', error);
+                    // Fallback: use the original shape if offset fails
+                    offsetShapes.push(shape);
                   }
-                } catch (error) {
-                  console.warn('Failed to offset shape, using original:', error);
-                  // Fallback: use the original shape if offset fails
-                  offsetShapes.push(shape);
+                }
+                
+                // Yield control back to the browser periodically to prevent freezing
+                if (i + batchSize < shapes.length) {
+                  await new Promise(resolve => setTimeout(resolve, 0));
                 }
               }
               
@@ -1279,25 +1292,36 @@ const App: React.FC = () => {
             }
             
             // Apply the same offset to underlines if needed
-            if (underlineShapes.length > 0 && totalStrokeWeight > 0.1) {
+            if (underlineShapes.length > 0 && totalStrokeWeight > 0.3) { // Match the increased threshold
               const offsetUnderlineShapes: THREE_ACTUAL.Shape[] = [];
               
-              for (const shape of underlineShapes) {
-                try {
-                  const points = shape.getPoints(50);
-                  const polyline = CavalierPathOperations.vector2ArrayToPolyline(points, true);
-                  const offsetPolylines = CavalierPathOperations.parallelOffset([polyline], totalStrokeWeight / 2);
-                  
-                  for (const offsetPline of offsetPolylines) {
-                    const offsetPoints = CavalierPathOperations.polylineToVector2Array(offsetPline, 30);
-                    if (offsetPoints.length > 2) {
-                      const offsetShape = new THREE_ACTUAL.Shape(offsetPoints);
-                      offsetUnderlineShapes.push(offsetShape);
+              // Process underlines in batches too
+              const batchSize = 2;
+              for (let i = 0; i < underlineShapes.length; i += batchSize) {
+                const batch = underlineShapes.slice(i, i + batchSize);
+                
+                for (const shape of batch) {
+                  try {
+                    const points = shape.getPoints(15); // Reduced for performance
+                    const polyline = CavalierPathOperations.vector2ArrayToPolyline(points, true);
+                    const offsetPolylines = CavalierPathOperations.parallelOffset([polyline], totalStrokeWeight / 2);
+                    
+                    for (const offsetPline of offsetPolylines) {
+                      const offsetPoints = CavalierPathOperations.polylineToVector2Array(offsetPline, 10); // Reduced for performance
+                      if (offsetPoints.length > 2) {
+                        const offsetShape = new THREE_ACTUAL.Shape(offsetPoints);
+                        offsetUnderlineShapes.push(offsetShape);
+                      }
                     }
+                  } catch (error) {
+                    console.warn('Failed to offset underline, using original:', error);
+                    offsetUnderlineShapes.push(shape);
                   }
-                } catch (error) {
-                  console.warn('Failed to offset underline, using original:', error);
-                  offsetUnderlineShapes.push(shape);
+                }
+                
+                // Yield control for underlines too
+                if (i + batchSize < underlineShapes.length) {
+                  await new Promise(resolve => setTimeout(resolve, 0));
                 }
               }
               
