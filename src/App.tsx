@@ -16,6 +16,7 @@ import { GoogleGenAI } from "@google/genai";
 import { postCSGJob } from './csgWorkerManager';
 import { makeCacheKey, getOrCreateSlotGeometries } from './slotGeometryCache';
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, makeSlotKey, getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, slotCutCache, hashSlotCut, makeUnderlineKey } from './geometryCache';
+import { CavalierPathOperations } from './cavalierContours';
 
 const MAX_HISTORY = 50;
 
@@ -1113,8 +1114,52 @@ const App: React.FC = () => {
               currentX += (glyph.advanceWidth * scale) + textGroup.letterSpacing;
             });
 
-            // REMOVED: Global stroke weight scaling - 3D model should be exact replica of 2D
-            // No scaling applied to ensure perfect 2D to 3D correspondence
+            // ============================================================================
+            // FIX: Apply boldness offset using Cavalier Contours algorithm
+            // This creates the exact visual match between 2D stroke and 3D geometry
+            // ============================================================================
+            const totalStrokeWeight = (rendered3DConfig.globalStrokeWeight || 0) + (textGroup.thickness || 0);
+            
+            if (totalStrokeWeight > 0.1) {
+              const offsetShapes: THREE_ACTUAL.Shape[] = [];
+              
+              for (const shape of shapes) {
+                try {
+                  // Get the points from the THREE.Shape
+                  const points = shape.getPoints(50); // Increase point count for smooth curves
+                  
+                  // Convert to polyline format for Cavalier processing
+                  const polyline = CavalierPathOperations.vector2ArrayToPolyline(points, true);
+                  
+                  // Apply parallel offset - SVG stroke expands equally on both sides,
+                  // so we use half the stroke weight as the offset distance
+                  const offsetDistance = totalStrokeWeight / 2;
+                  const offsetPolylines = CavalierPathOperations.parallelOffset([polyline], offsetDistance);
+                  
+                  // Convert the offset polylines back to THREE.Shape objects
+                  for (const offsetPline of offsetPolylines) {
+                    const offsetPoints = CavalierPathOperations.polylineToVector2Array(offsetPline, 30);
+                    
+                    if (offsetPoints.length > 2) {
+                      const offsetShape = new THREE_ACTUAL.Shape(offsetPoints);
+                      offsetShapes.push(offsetShape);
+                    }
+                  }
+                } catch (error) {
+                  console.warn('Failed to offset shape, using original:', error);
+                  // Fallback: use the original shape if offset fails
+                  offsetShapes.push(shape);
+                }
+              }
+              
+              // Replace the original shapes with the offset (bold) shapes
+              if (offsetShapes.length > 0) {
+                shapes = offsetShapes;
+              }
+            }
+            // ============================================================================
+            // END FIX
+            // ============================================================================
 
             const textKey = makeTextKey(layer.id, textGroup, textGroup.fontSize, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight);
             const groupGeo = getOrCreateGeometry(geometryCache.text, textKey, () => new THREE_ACTUAL.ExtrudeGeometry(shapes, extrudeSettings));
@@ -1233,8 +1278,33 @@ const App: React.FC = () => {
                 }
             }
             
-            // REMOVED: Global stroke weight scaling from underlines - 3D model should be exact replica of 2D
-            // No scaling applied to ensure perfect 2D to 3D correspondence
+            // Apply the same offset to underlines if needed
+            if (underlineShapes.length > 0 && totalStrokeWeight > 0.1) {
+              const offsetUnderlineShapes: THREE_ACTUAL.Shape[] = [];
+              
+              for (const shape of underlineShapes) {
+                try {
+                  const points = shape.getPoints(50);
+                  const polyline = CavalierPathOperations.vector2ArrayToPolyline(points, true);
+                  const offsetPolylines = CavalierPathOperations.parallelOffset([polyline], totalStrokeWeight / 2);
+                  
+                  for (const offsetPline of offsetPolylines) {
+                    const offsetPoints = CavalierPathOperations.polylineToVector2Array(offsetPline, 30);
+                    if (offsetPoints.length > 2) {
+                      const offsetShape = new THREE_ACTUAL.Shape(offsetPoints);
+                      offsetUnderlineShapes.push(offsetShape);
+                    }
+                  }
+                } catch (error) {
+                  console.warn('Failed to offset underline, using original:', error);
+                  offsetUnderlineShapes.push(shape);
+                }
+              }
+              
+              if (offsetUnderlineShapes.length > 0) {
+                underlineShapes = offsetUnderlineShapes;
+              }
+            }
             
             let underlineGeo = null;
             if (underlineShapes.length > 0) {
