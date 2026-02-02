@@ -27,43 +27,11 @@ const Toggle: React.FC<{
   </label>
 );
 
-const SlotModeToggle: React.FC<{
-  mode: '2-plane' | '3-plane';
-  onChange: (mode: '2-plane' | '3-plane') => void;
-}> = ({ mode, onChange }) => (
-  <div className="flex items-center gap-2">
-    <span className="text-[9px] font-bold text-slate-500 uppercase">Mode:</span>
-    <div className="flex items-center gap-1 p-1 bg-slate-800/50 rounded-full border border-white/10">
-      <button
-        onClick={() => onChange('2-plane')}
-        className={`px-2 py-0.5 text-[8px] font-medium rounded-full transition-all ${
-          mode === '2-plane'
-            ? 'bg-sky-600 text-white'
-            : 'text-slate-500 hover:text-white'
-        }`}
-      >
-        2-Plane
-      </button>
-      <button
-        onClick={() => onChange('3-plane')}
-        className={`px-2 py-0.5 text-[8px] font-medium rounded-full transition-all ${
-          mode === '3-plane'
-            ? 'bg-sky-600 text-white'
-            : 'text-slate-500 hover:text-white'
-        }`}
-      >
-        3-Plane
-      </button>
-    </div>
-  </div>
-);
-
 const DESCRIPTIONS: Record<string, string> = {
   "Project Name": "The filename used when saving or exporting your design.",
   "Model Color": "The base color applied to the 3D mesh and 2D preview.",
   "Edge Profile": "Adds rounded or slanted edges to the 3D model for a more realistic look.",
   "Extrusion Depth": "The thickness of the snowflake planes in millimeters.",
-  "Global Boldness": "Makes all text, abstracts, hubs, and underlines appear bolder. Higher values make them thicker. Note: 3D boldness may not work properly with all fonts - some complex or decorative fonts may not render correctly.",
   "Preview Resolution": "Controls the geometric detail of the 3D preview. Lower is faster, higher is smoother.",
   "Profile Shape": "Choose Fillet for rounded edges or Chamfer for flat, angled edges.",
   "Bevel Amount": "The distance the bevel extends from the edges.",
@@ -71,25 +39,22 @@ const DESCRIPTIONS: Record<string, string> = {
   "Enable Half-Lap Slots": "Cuts slots into the planes so they can physically slide together (interlock).",
   "Slot Length": "The depth of the cut-out slot.",
   "Slot Clearance": "How wide the slot is. Usually set slightly larger than the thickness of the material.",
-  "Slot Mode": "Choose between 2-plane (90°) or 3-plane (120°) interlocking configurations.",
-  "Free Floating Check": "Detects and highlights enabled planes that have no content, helping identify empty layers that might need adjustment.",
   "Phrase Content": "The text used to generate the snowflake's symmetrical arms. Leave blank for AI to randomly choose a word.",
   "Arms / Symmetry": "The number of times the text or shape repeats around the center.",
   "Outer Radius": "The measurement from the origin point to the outer most edge of the model.",
   "Radius Lock": "Forces the design to stay within your target size. When locked, changing fonts or spacing will move words inward or outward to maintain this exact size.",
   "Inner Radius": "The distance between the center of the snowflake and the start of the text.",
-  "Letter Spacing": "Adjusts the space between individual characters. Negative values can make cursive letters overlap and fuse together.",
-  "Boldness": "Adds additional thickness to the font's lines.",
+  "Stroke Weight": "Adds additional thickness to the font's lines.",
   "Manual Rotation": "Rotates the entire group of text around the snowflake's center.",
   "Offset X": "Moves the selected character horizontally within the text string.",
   "Offset Y": "Moves the selected character vertically within the text string.",
   "Hub Shape": "Changes the geometry of the central ring (Circle, Star, or Polygon).",
   "Hub Radius": "The distance from the center to the edge of the hub ring.",
-  "Hub Boldness": "The thickness of the hub ring when 'Hollow' is enabled.",
+  "Wall Thickness": "The thickness of the hub ring when 'Hollow' is enabled.",
   "Shape Arms": "Number of procedural arms for the abstract pattern.",
   "Frequency": "How rapidly the wave pattern oscillates along its length.",
   "Amplitude": "The height of the waves in the abstract pattern.",
-  "Abstract Boldness": "The line weight of the procedural abstract shape.",
+  "Shape Thickness": "The line weight of the procedural abstract shape.",
   "Abstract Outer Radius": "How far the abstract shape extends from the center.",
   "Rot X": "3D rotation around the X-axis for this specific plane.",
   "Rot Y": "3D rotation around the Y-axis for this specific plane.",
@@ -756,14 +721,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   };
 
   const handleLayerUpdate = (idx: number, updates: Partial<LayerConfig>, commitTo3D: boolean = false) => {
-    console.log(`🔄 Layer toggle: idx=${idx}, updates=`, updates);
-    console.log(`🔄 Before update:`, config.layers.map(l => ({name: l.name, enabled: l.enabled, id: l.id})));
-    
     const newLayers = [...config.layers];
     newLayers[idx] = { ...newLayers[idx], ...updates };
-    
-    console.log(`🔄 After update:`, newLayers.map(l => ({name: l.name, enabled: l.enabled, id: l.id})));
-    
     onUpdate({ layers: newLayers }, commitTo3D);
   };
 
@@ -871,41 +830,6 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
           {activeTab === 'global' && (
              <div className="space-y-6 animate-in fade-in duration-200">
                <div className="p-3 bg-slate-800/30 rounded-xl border border-white/5 space-y-5">
-                  {/* Language Selection */}
-                  <div className="space-y-2">
-                      <div className="flex justify-between items-center">
-                          <div className="flex items-center gap-4">
-                              <div className="flex items-center">
-                                  <InfoTooltip label="Language" description="Select the interface language" />
-                                  {config.language !== 'en' && (
-                                      <button onClick={() => onUpdate({ language: 'en' })} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title="Reset">
-                                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
-                                      </button>
-                                  )}
-                              </div>
-                              <Toggle label="Tooltips" checked={showTooltips} onChange={setShowTooltips} />
-                          </div>
-                      </div>
-                      <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-lg">
-                          {[
-                              { code: 'en', name: 'English' },
-                              { code: 'es', name: 'Español' },
-                              { code: 'fr', name: 'Français' },
-                              { code: 'de', name: 'Deutsch' },
-                              { code: 'zh', name: '中文' },
-                              { code: 'ja', name: '日本語' }
-                          ].map(lang => (
-                              <button 
-                                  key={lang.code} 
-                                  onClick={() => onUpdate({ language: lang.code as any }, true)} 
-                                  className={`py-1 text-[9px] font-black uppercase rounded transition-all ${config.language === lang.code ? 'bg-sky-500 text-white' : 'text-slate-500'}`}
-                              >
-                                  {lang.name}
-                              </button>
-                          ))}
-                      </div>
-                  </div>
-
                   <div className="space-y-2">
                       <div className="flex justify-between items-center">
                           <div className="flex items-center gap-4">
@@ -917,13 +841,13 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                       </button>
                                   )}
                               </div>
+                              <Toggle label="Tooltips" checked={showTooltips} onChange={setShowTooltips} />
                           </div>
                       </div>
                       <input type="color" value={config.color} onChange={(e) => onUpdate({ color: e.target.value })} className="w-full h-8 bg-slate-900 border border-white/10 rounded-lg cursor-pointer p-0.5" />
                   </div>
 
                   {renderSlider("Extrusion Depth", config.extrusionDepth, 1, 20, 0.1, (v, c) => onUpdate({ extrusionDepth: v }, c), "mm", false, 3)}
-                  {renderSlider("Global Boldness", config.globalStrokeWeight, 0, 10, 0.1, (v, c) => onUpdate({ globalStrokeWeight: v }, c), "mm", false, 0)}
                   <ControlRow label="Preview Resolution" onReset={() => onUpdate({ quality: 'low' }, true)} isModified={config.quality !== 'low'}>
                      <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-lg">
                         {(['low', 'med', 'high'] as const).map(q => (<button key={q} onClick={() => onUpdate({ quality: q }, true)} className={`py-1 text-[9px] font-black uppercase rounded transition-all ${config.quality === q ? 'bg-sky-500 text-white' : 'text-slate-500'}`}>{q}</button>))}
@@ -1015,8 +939,6 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                 </div>
               </div>
               
-              {renderSlider("Font Size", groupData.fontSize, 10, 200, 1, (v, c) => updateGroupWithLock(activeGroup, { fontSize: v }, c), "px", false, 34)}
-              
               <div className="space-y-4 pt-4 border-t border-white/5">
                  {renderSlider("Arms / Symmetry", groupData.arms, 2, 24, 1, (v, c) => updateGroup(activeGroup, { arms: v }, c), "", false, 6)}
                  <div className="space-y-2">
@@ -1041,8 +963,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                    />
                  </div>
                  {renderSlider("Inner Radius", groupData.textX, -100, 300, 0.1, (v, c) => handleGroupDistChange(v, c), "mm", false, activeGroup === 'primary' ? 20 : 10)}
-                 {renderSlider("Boldness", groupData.thickness, -5, 10, 0.1, (v, c) => updateGroupWithLock(activeGroup, { thickness: v }, c), "mm", false, 0)}
-                 {renderSlider("Letter Spacing", groupData.letterSpacing, -5, 20, 0.1, (v, c) => updateGroup(activeGroup, { letterSpacing: v }, c), "mm", false, 0)}
+                 {renderSlider("Stroke Weight", groupData.thickness, 0, 10, 0.1, (v, c) => updateGroupWithLock(activeGroup, { thickness: v }, c), "mm", false, 0)}
                  {renderSlider("Manual Rotation", groupData.rotationOffset, -180, 180, 1, (v, c) => updateGroup(activeGroup, { rotationOffset: v }, c), "°", false, activeGroup === 'primary' ? 0 : 30)}
               </div>
 
@@ -1095,7 +1016,6 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
 
           {activeTab === 'Letter Ctrl' && (
              <div className="space-y-4 animate-in fade-in duration-200">
-                {renderSlider("Font Size", groupData.fontSize, 10, 200, 1, (v, c) => updateGroupWithLock(activeGroup, { fontSize: v }, c), "px", false, 34)}
                 <div className="flex space-x-2 overflow-x-auto custom-scrollbar pb-2 h-11">
                     {groupData.text.split('').map((char, i) => (<button key={i} onClick={() => setSelectedCharIndex(i)} className={`min-w-[40px] h-9 rounded-lg text-lg font-bold border transition-all ${selectedCharIndex === i ? 'bg-sky-600 border-sky-500 text-white shadow-lg' : 'bg-slate-800 border-white/5 text-slate-400'}`}>{char}</button>))}
                 </div>
@@ -1148,7 +1068,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                         20,
                         <span className="text-[10px] font-black text-slate-500 ml-2">(D: <span className="text-white">{(activeLayer.hubs[selectedHubIndex].outerRadius * 2).toFixed(1)}mm</span>)</span>
                      )}
-                     {activeLayer.hubs[selectedHubIndex].hollow && renderSlider("Boldness", activeLayer.hubs[selectedHubIndex].wallThickness, 0.5, 20, 0.1, (v, c) => updateHubConfig({ wallThickness: v }, c), "mm", false, 2)}
+                     {activeLayer.hubs[selectedHubIndex].hollow && renderSlider("Wall Thickness", activeLayer.hubs[selectedHubIndex].wallThickness, 0.5, 20, 0.1, (v, c) => updateHubConfig({ wallThickness: v }, c), "mm", false, 2)}
                      {activeLayer.hubs[selectedHubIndex].shape !== 'circle' && renderSlider("Hub Sides", activeLayer.hubs[selectedHubIndex].sides, 3, 24, 1, (v, c) => updateHubConfig({ sides: v }, c), "", false, 6)}
                      {activeLayer.hubs[selectedHubIndex].shape === 'star' && renderSlider("Star Ratio", activeLayer.hubs[selectedHubIndex].starRatio, 0.1, 0.9, 0.05, (v, c) => updateHubConfig({ starRatio: v }, c), "", false, 0.5)}
                      
@@ -1250,10 +1170,10 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                     {activeLayer.abstracts[selectedAbstractIndex].enabled && (
                       <>
                         {activeLayer.abstracts[selectedAbstractIndex].type !== 'fractal' && (
-                            <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-lg">
-                              {(['line', 'sine', 'zigzag'] as const).map(t => (
-                                <button key={t} onClick={() => updateAbstractConfig({ type: t }, true)} className={`py-1 text-[9px] font-black uppercase rounded transition-all ${activeLayer.abstracts[selectedAbstractIndex].type === t ? 'bg-sky-600 text-white' : 'text-slate-500'}`}>{t}</button>
-                              ))}
+                            <div className="grid grid-cols-4 gap-1 bg-slate-900 p-1 rounded-lg">
+                                {(['line', 'sine', 'zigzag', 'spiral'] as const).map(t => (
+                                    <button key={t} onClick={() => updateAbstractConfig({ type: t }, true)} className={`py-1 text-[9px] font-black uppercase rounded transition-all ${activeLayer.abstracts[selectedAbstractIndex].type === t ? 'bg-sky-600 text-white' : 'text-slate-500'}`}>{t}</button>
+                                ))}
                             </div>
                         )}
 
@@ -1271,7 +1191,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                             60,
                             <span className="text-[10px] font-black text-slate-500 ml-2">(D: <span className="text-white">{(activeLayer.abstracts[selectedAbstractIndex].outerRadius * 2).toFixed(1)}mm</span>)</span>
                         )}
-                        {renderSlider("Boldness", activeLayer.abstracts[selectedAbstractIndex].thickness, 0.5, 10, 0.1, (v, c) => updateAbstractConfig({ thickness: v }, c), "mm", false, 2)}
+                        {renderSlider("Thickness", activeLayer.abstracts[selectedAbstractIndex].thickness, 0.5, 10, 0.1, (v, c) => updateAbstractConfig({ thickness: v }, c), "mm", false, 2)}
                         
                         {activeLayer.abstracts[selectedAbstractIndex].type === 'fractal' && (
                             <div className="space-y-4 pt-2">
@@ -1377,10 +1297,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                       type="checkbox" 
                                       className="hidden" 
                                       checked={layer.enabled} 
-                                      onChange={(e) => {
-                                        console.log(`🔄 Toggle clicked: layer=${layer.name} (idx=${idx}), enabled=${e.target.checked}`);
-                                        handleLayerUpdate(idx, { enabled: e.target.checked }, true);
-                                      }} 
+                                      onChange={(e) => handleLayerUpdate(idx, { enabled: e.target.checked }, true)} 
                                     />
                                   </label>
                                 </div>
@@ -1433,34 +1350,15 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
         <div className="p-2 bg-slate-900/80 border-t border-white/10 shrink-0 flex flex-col gap-2">
             <div className="grid grid-cols-2 gap-2">
                <InfoTooltip label="Auto Slots" description={DESCRIPTIONS["Auto Slots"]} className="w-full">
-                 <div className={`${config.slotEnabled ? 'bg-sky-600/10 border-sky-500/30' : 'bg-slate-800/50 border-white/5'} p-2 rounded-lg border transition-all`}>
-                    <button 
-                        onClick={() => config.slotEnabled ? onUpdate({ slotEnabled: false }, true) : onAutoConfigureSlots()} 
-                        className={`${btnBase} w-full ${config.slotEnabled ? 'bg-sky-600 hover:bg-sky-500 text-white shadow-lg' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white'} flex items-center justify-between px-3`}
-                    >
-                        <span>Cut Slots</span>
-                        <div className={`w-6 h-3 rounded-full border transition-colors relative ${config.slotEnabled ? 'bg-white/20 border-white/50' : 'bg-black/20 border-white/10'}`}>
-                          <div className={`absolute top-0.5 left-0.5 w-1.5 h-1.5 rounded-full bg-white transition-all ${config.slotEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
-                        </div>
-                    </button>
-                    {/* Slot Mode Toggle - integrated within the banner */}
-                    {config.slotEnabled && (
-                        <div className="mt-2 pt-2 border-t border-white/10">
-                            <SlotModeToggle 
-                                mode={config.slotMode || '2-plane'} 
-                                onChange={(mode) => {
-                                    onUpdate({ slotMode: mode }, true);
-                                    onAutoConfigureSlots();
-                                    // Force immediate 3D model refresh when slot mode changes
-                                    setTimeout(() => {
-                                        // Trigger immediate 3D regeneration
-                                        onUpdate({}, true);
-                                    }, 100);
-                                }}
-                            />
-                        </div>
-                    )}
-                 </div>
+                 <button 
+                    onClick={() => config.slotEnabled ? onUpdate({ slotEnabled: false }, true) : onAutoConfigureSlots()} 
+                    className={`${btnBase} w-full ${config.slotEnabled ? 'bg-sky-600 hover:bg-sky-500 text-white shadow-lg' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white'} flex items-center justify-between px-3`}
+                 >
+                    <span>Cut Slots</span>
+                    <div className={`w-6 h-3 rounded-full border transition-colors relative ${config.slotEnabled ? 'bg-white/20 border-white/50' : 'bg-black/20 border-white/10'}`}>
+                      <div className={`absolute top-0.5 left-0.5 w-1.5 h-1.5 rounded-full bg-white transition-all ${config.slotEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
+                    </div>
+                 </button>
                </InfoTooltip>
                <AiRandomizerMenu onGenerate={onAiPolish} isLoading={aiLoading} progress={aiProgress} className="w-full" />
             </div>

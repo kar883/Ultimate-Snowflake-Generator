@@ -22,7 +22,7 @@ export interface HubConfig {
 export interface AbstractConfig {
   id: string;
   enabled: boolean;
-  type: 'line' | 'sine' | 'zigzag' | 'fractal';
+  type: 'line' | 'sine' | 'zigzag' | 'spiral' | 'fractal';
   arms: number;
   rotationOffset: number;
   innerRadius: number;
@@ -103,14 +103,10 @@ export interface SnowflakeConfig {
   bevelAmount: number;
   bevelSegments: number;
   slotEnabled: boolean;
-  slotMode: '2-plane' | '3-plane';
   slotLength: number;
   slotWidth: number;
   quality: DesignQuality;
   syncAllLayers: boolean;
-  globalStrokeWeight: number;
-  freeFloatingCheck: boolean;
-  language: 'en' | 'es' | 'fr' | 'de' | 'zh' | 'ja';
 }
 
 export interface FontOption {
@@ -130,7 +126,6 @@ export interface ShortcutConfig {
   undo: ShortcutDef;
   redo: ShortcutDef;
   toggleView: ShortcutDef;
-  forceRegenerate: ShortcutDef;
   exportCombinedSTL: ShortcutDef;
   exportBasePlaneSTL: ShortcutDef;
   exportCrossPlaneSTL: ShortcutDef;

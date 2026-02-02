@@ -4,7 +4,6 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 import { SnowflakeConfig, ShortcutConfig } from '../types';
 import { InfoTooltip } from './Tooltip';
-import { modelCache3D, hashConfig, clearGeometryCache } from '../geometryCache';
 
 interface Snowflake3DProps {
   config: SnowflakeConfig;
@@ -17,10 +16,9 @@ interface Snowflake3DProps {
   initialDiameter?: number;
   shortcuts?: ShortcutConfig;
   isVisible: boolean;
-  detectFreeFloatingBodies?: (config: SnowflakeConfig) => string[];
 }
 
-const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, undo, redo, canUndo, canRedo, initialDiameter, shortcuts, isVisible, detectFreeFloatingBodies }) => {
+const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, undo, redo, canUndo, canRedo, initialDiameter, shortcuts, isVisible }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -57,19 +55,14 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, 
     const height = containerRef.current.clientHeight;
 
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 2000);
-    camera.position.set(100, -100, 400); // Better angle to see edge-on planes
+    camera.position.set(0, -300, 200);
     camera.up.set(0, 0, 1);
     camera.lookAt(0, 0, 0);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ 
-        antialias: true,
-        alpha: true,
-        powerPreference: "high-performance",
-        failIfMajorPerformanceCaveat: false
-    });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Limit pixel ratio for performance
+    renderer.setPixelRatio(window.devicePixelRatio);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -95,14 +88,8 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, 
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.0); // System Default
     dirLight.position.set(500, 1000, 500);
     dirLight.castShadow = true;
-    dirLight.shadow.mapSize.width = 1024; // Reduced for performance
-    dirLight.shadow.mapSize.height = 1024; // Reduced for performance
-    dirLight.shadow.camera.near = 0.1;
-    dirLight.shadow.camera.far = 2000;
-    dirLight.shadow.camera.left = -500;
-    dirLight.shadow.camera.right = 500;
-    dirLight.shadow.camera.top = 500;
-    dirLight.shadow.camera.bottom = -500;
+    dirLight.shadow.mapSize.width = 2048;
+    dirLight.shadow.mapSize.height = 2048;
     scene.add(dirLight);
 
     const backLight = new THREE.DirectionalLight(0x38bdf8, 0.5); // System Default
@@ -156,10 +143,10 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, 
 
   // Sync Layer States
   useEffect(() => {
+    // Reconcile layer states when config layers changes
     setLayerStates(prev => {
         const next = { ...prev };
         config.layers.forEach(l => {
-            // Initialize if missing. Default to visible.
             if (!next[l.id]) {
                 next[l.id] = { visible: true, transparent: false };
             }
@@ -168,101 +155,20 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, 
     });
   }, [config.layers]);
 
-  // Generate Mesh with Caching
+  // Generate Mesh
   useEffect(() => {
     let active = true;
-    const configHash = hashConfig(config);
-
     const load = async () => {
         if (!sceneRef.current) return;
-
-        // Ensure caches are cleared so stroke/thickness changes always regenerate
-        try { clearGeometryCache(); } catch (e) { /* ignore */ }
-
-        // Clear cache to force fresh generation (Cross Plane is missing from cached versions)
-        modelCache3D.clear();
-        console.log(`🔍 CACHE CLEARED - Forcing fresh generation due to missing Cross Plane`);
-
-        // Check cache first
-        let group = modelCache3D.get(configHash);
-        let needsGeneration = !group;
-
-        if (needsGeneration) {
-            setLoading(true);
-        }
+        setLoading(true);
 
         try {
-            if (needsGeneration) {
-                // Use requestIdleCallback for non-critical mesh generation to prevent UI blocking
-                const generateMeshInBackground = () => {
-                    return new Promise<void>((resolve) => {
-                        const generate = (deadline?: IdleDeadline) => {
-                            if (deadline && deadline.timeRemaining() > 0 || !deadline) {
-                                // Generate mesh in background
-                                generateMesh(() => {
-                                    // Progress callback - could be used for loading indicator
-                                }).then(result => {
-                                    group = result;
-                                    resolve();
-                                });
-                            } else {
-                                // Schedule for next idle period
-                                requestIdleCallback(generate);
-                            }
-                        };
-                        
-                        if (window.requestIdleCallback) {
-                            requestIdleCallback(generate);
-                        } else {
-                            // Fallback for browsers that don't support requestIdleCallback
-                            setTimeout(generate, 0);
-                        }
-                    });
-                };
-                
-                await generateMeshInBackground();
-
-                if (!active) return;
-
-                // Cache clearing is no longer necessary - the cache issue has been resolved
-                // with the performance optimizations that eliminated duplicate clearGeometryCache() calls
-                // modelCache3D.clear();
-                // console.log(`🔍 CACHE CLEARED - Forcing fresh generation due to missing Cross Plane`);
-
-                // Cache the generated mesh
-                modelCache3D.set(configHash, group.clone());
-            } else {
-                // Use cached mesh - clone it for this instance
-                console.log(`🔍 USING CACHED MESH - Checking contents before clone:`);
-                const cachedGroup = modelCache3D.get(configHash);
-                if (cachedGroup) {
-                    console.log(`🔍 CACHED GROUP CONTENTS: ${cachedGroup.children.length} children`);
-                    cachedGroup.children.forEach((child, index) => {
-                        console.log(`  Cached Child ${index}:`, {
-                            name: (child as THREE.Mesh).name || 'unnamed',
-                            type: child.type,
-                            isMesh: child instanceof THREE.Mesh,
-                            visible: (child as THREE.Mesh).visible
-                        });
-                    });
-                }
-                group = group.clone();
-            }
-
-            if (!active) return;
-
-            // CRITICAL DEBUG: Check group contents RIGHT BEFORE material application
-            console.log(`🔍 PRE-MATERIAL GROUP CONTENTS: ${group.children.length} children`);
-            group.children.forEach((child, index) => {
-                console.log(`  Pre-Material Child ${index}:`, {
-                    name: (child as THREE.Mesh).name || 'unnamed',
-                    type: child.type,
-                    isMesh: child instanceof THREE.Mesh,
-                    visible: (child as THREE.Mesh).visible
-                });
+            const group = await generateMesh(() => {
+                // No-op for immediate update requests if sync generation is fast
             });
-
-            // Clean up previous mesh
+            
+            if (!active) return;
+            
             if (meshGroupRef.current) {
                 sceneRef.current.remove(meshGroupRef.current);
                 meshGroupRef.current.traverse(c => {
@@ -282,92 +188,16 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, 
                 side: THREE.DoubleSide
             });
 
-            // Create red material for free floating bodies
-            const redMat = new THREE.MeshStandardMaterial({
-                color: new THREE.Color('#ff0000'),
-                roughness: 0.2,
-                metalness: 0.1,
-                side: THREE.DoubleSide
-            });
-
-            // Detect free floating bodies if check is enabled
-            const freeFloatingLayers = config.freeFloatingCheck && detectFreeFloatingBodies 
-                ? detectFreeFloatingBodies(config) 
-                : [];
-
             // Measure Diameter: Calculate Max Radius from (0,0) across all vertices
             // We do this BEFORE centering the group to get the true design radius
             let maxRadiusSq = 0;
 
-            // CRITICAL DEBUG: Check what's being traversed
-            console.log(`🔍 TRAVERSAL DEBUG: Group has ${group.children.length} children`);
-            group.children.forEach((child, index) => {
-                console.log(`  Traverse Child ${index}:`, {
-                    name: (child as THREE.Mesh).name || 'unnamed',
-                    type: child.type,
-                    isMesh: child instanceof THREE.Mesh,
-                    visible: (child as THREE.Mesh).visible
-                });
-            });
-
             group.traverse(c => {
                 if (c instanceof THREE.Mesh) {
-                    console.log(`🔍 TRAVERSE: Processing mesh ${(c as THREE.Mesh).name || 'unnamed'}`);
-                    
-                    // Check if this mesh is a free floating body
-                    const meshName = (c as THREE.Mesh).name || '';
-                    const meshId = (c as THREE.Mesh).userData.layerId || '';
-                    
-                    // More robust free floating detection
-                    let isFreeFloating = false;
-                    if (freeFloatingLayers.length > 0) {
-                        isFreeFloating = freeFloatingLayers.some(layerName => {
-                            const lowerLayerName = layerName.toLowerCase();
-                            const lowerMeshName = meshName.toLowerCase();
-                            const lowerMeshId = meshId.toLowerCase();
-                            
-                            // Check multiple ways the layer might be identified
-                            return lowerMeshName.includes(lowerLayerName) ||
-                                   lowerLayerName.includes(lowerMeshName) ||
-                                   lowerMeshId.includes(lowerLayerName) ||
-                                   lowerLayerName.includes(lowerMeshId) ||
-                                   (lowerMeshName.includes('base') && lowerLayerName.includes('base')) ||
-                                   (lowerMeshName.includes('cross') && lowerLayerName.includes('cross')) ||
-                                   (lowerMeshName.includes('tilt') && lowerLayerName.includes('tilt'));
-                        });
-                    }
-                    
-                    console.log(`🔍 FREE FLOATING CHECK: mesh="${meshName}", id="${meshId}", freeFloating=${isFreeFloating}, freeFloatingLayers=${JSON.stringify(freeFloatingLayers)}`);
-                    
-                    // Apply appropriate material
-                    if (isFreeFloating) {
-                        c.material = redMat.clone();
-                        console.log(`🚨 FREE FLOATING: Applied red material to ${meshName}`);
-                    } else {
-                        c.material = mat.clone();
-                    }
-                    
+                    c.material = mat.clone(); // Clone material to allow individual transparency
                     c.castShadow = true;
                     c.receiveShadow = true;
-
-                    // CRITICAL DEBUG: Check material application
-                    console.log(`🔍 MATERIAL DEBUG for mesh ${(c as THREE.Mesh).name || 'unnamed'}:`);
-                    console.log(`  - Material exists: ${!!c.material}`);
-                    console.log(`  - Material type: ${c.material?.type}`);
-                    console.log(`  - Material color:`, (c.material as THREE.MeshStandardMaterial).color);
-                    console.log(`  - Material visible: ${c.visible}`);
-                    console.log(`  - Mesh in scene: ${c.parent?.type === 'Group'}`);
                     
-                    // SPECIAL DEBUG: Check if this is Cross Plane
-                    if ((c as THREE.Mesh).name === 'Cross Plane') {
-                        console.log(`🎯 CROSS PLANE SPECIAL DEBUG:`);
-                        console.log(`  - Final visible: ${c.visible}`);
-                        console.log(`  - Final material:`, c.material);
-                        console.log(`  - Final position:`, c.position);
-                        console.log(`  - Final rotation:`, c.rotation);
-                        console.log(`  - Final scale:`, c.scale);
-                    }
-
                     if (c.geometry) {
                         const pos = c.geometry.attributes.position;
                         if (pos) {
@@ -385,7 +215,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, 
                 }
             });
 
-            const calculatedDiameter = Math.round((Math.sqrt(maxRadiusSq) * 2) * 10) / 10; // Round to 1 decimal place
+            const calculatedDiameter = Math.sqrt(maxRadiusSq) * 2;
             setModelDiameter(calculatedDiameter);
 
             // Center the group visually (Bounding Box Center)
@@ -396,7 +226,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, 
 
             sceneRef.current.add(group);
             meshGroupRef.current = group;
-
+            
             // Trigger layer state application
             applyLayerStates();
 
@@ -408,13 +238,10 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, 
         } catch (e) {
             console.error(e);
         } finally {
-            if (active && needsGeneration) setLoading(false);
+            if (active) setLoading(false);
         }
     };
-
-    // Start loading immediately (will be instant if cached)
     load();
-
     return () => { active = false; };
   }, [config, generateMesh, color]);
 
@@ -423,22 +250,13 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, 
       meshGroupRef.current.children.forEach(c => {
           if (c instanceof THREE.Mesh) {
               const id = c.userData.layerId;
-              
-              // Resolve global visibility from config
-              const layerConf = config.layers.find(l => l.id === id);
-              const isGloballyEnabled = layerConf ? layerConf.enabled : true;
-
               const state = layerStates[id];
-              if (c.material instanceof THREE.MeshStandardMaterial) {
-                  // CRITICAL FIX: Use layer enabled state as default if no state exists
-                  const isVisible = state ? state.visible : isGloballyEnabled; // Default to layer's enabled state
-                  c.visible = isVisible && isGloballyEnabled;
-                  c.material.transparent = state ? state.transparent : false;
-                  c.material.opacity = c.material.transparent ? 0.05 : 1.0;
-                  c.material.depthWrite = !c.material.transparent;
+              if (state && c.material instanceof THREE.MeshStandardMaterial) {
+                  c.visible = state.visible;
+                  c.material.transparent = state.transparent;
+                  c.material.opacity = state.transparent ? 0.05 : 1.0; // Reduced to 0.05 for minimal visibility
+                  c.material.depthWrite = !state.transparent;
                   c.material.needsUpdate = true;
-                  
-                  console.log(`🔍 ${layerConf?.name || 'Unknown'}: visible=${c.visible}, enabled=${isGloballyEnabled}, state=${JSON.stringify(state)}`);
               }
           }
       });

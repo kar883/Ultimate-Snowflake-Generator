@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { SnowflakeConfig, TextGroupConfig, HubConfig, CharOffset, LayerConfig, AbstractConfig, DesignQuality, UnderlineConfig, ShortcutConfig } from './types';
+import { SnowflakeConfig, TextGroupConfig, HubConfig, CharOffset, LayerConfig, AbstractConfig, DesignQuality, UnderlineConfig } from './types';
 import { CURSIVE_FONTS, FONT_TTF_URLS } from './constants';
 import ControlPanel from './components/ControlPanel';
 import SnowflakePreview from './components/SnowflakePreview';
@@ -12,31 +12,11 @@ import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUti
 import opentype from 'opentype.js';
 import JSZip from 'jszip';
 import { GoogleGenAI } from "@google/genai";
+
 // @ts-ignore
-import { postCSGJob } from './csgWorkerManager';
-import { makeCacheKey, getOrCreateSlotGeometries } from './slotGeometryCache';
-import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, makeSlotKey, getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, slotCutCache, hashSlotCut, makeUnderlineKey } from './geometryCache';
+import { Brush, Evaluator, SUBTRACTION, ADDITION } from 'three-bvh-csg';
 
 const MAX_HISTORY = 50;
-
-const DEFAULT_SHORTCUTS: ShortcutConfig = {
-    undo: { key: 'z', ctrlKey: true },
-    redo: { key: 'z', ctrlKey: true, shiftKey: true },
-    toggleView: { key: '1', ctrlKey: true },
-    forceRegenerate: { key: 'r', ctrlKey: true },
-    exportCombinedSTL: { key: 'e', ctrlKey: true },
-    saveProject: { key: 's', ctrlKey: true },
-    loadProject: { key: 'l', ctrlKey: true },
-    exportBasePlaneSTL: { key: 'a', ctrlKey: true },
-    exportCrossPlaneSTL: { key: 'd', ctrlKey: true },
-    exportTiltPlaneSTL: { key: 's', ctrlKey: true, shiftKey: true }, 
-    switchToGlobalTab: { key: '1', altKey: true },
-    switchToTextTab: { key: '2', altKey: true },
-    switchToLetterCtrlTab: { key: '3', altKey: true },
-    switchToHubsTab: { key: '4', altKey: true },
-    switchToAbstractTab: { key: '5', altKey: true },
-    switchToPlanesTab: { key: '6', altKey: true },
-};
 
 const useFontCache = () => {
   const fontCache = useRef<Record<string, opentype.Font>>({});
@@ -119,6 +99,27 @@ const useErrorHandler = () => {
   return { error, handleError };
 };
 
+const useConfigUpdater = (initialConfig: SnowflakeConfig) => {
+  const [config, setConfig] = useState<SnowflakeConfig>(initialConfig);
+  const [config3D, setConfig3D] = useState<SnowflakeConfig>(initialConfig);
+  
+  const updateConfig = useCallback((
+    updates: Partial<SnowflakeConfig>, 
+    commitTo3D: boolean = false,
+    addToHistory: boolean = true
+  ) => {
+    setConfig(prev => {
+      const next = { ...prev, ...updates };
+      if (commitTo3D) {
+        setConfig3D(next);
+      }
+      return next;
+    });
+  }, []);
+  
+  return { config, config3D, updateConfig, setConfig3D };
+};
+
 const useExportManager = () => {
   const [exportProgress, setExportProgress] = useState<number>(0);
   const [isExporting, setIsExporting] = useState(false);
@@ -189,46 +190,44 @@ const useUserFeedback = () => {
   return { notifications, showNotification, removeNotification };
 };
 
-const useKeyboardShortcuts = (
-    shortcuts: ShortcutConfig, 
-    callbacks: { [key in keyof ShortcutConfig]?: () => void } & { forceUpdate3D: () => void }
-) => {
+const useKeyboardShortcuts = (callbacks: {
+  undo: () => void;
+  redo: () => void;
+  toggleView: () => void;
+  exportSTL: () => void;
+}) => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const isInput = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
-      
-      if (e.key === 'Enter' && !isInput) {
-          e.preventDefault();
-          callbacks.forceUpdate3D();
-          return;
-      }
-
-      if (isInput) {
-        if (!e.ctrlKey && !e.altKey && !e.metaKey) return;
+      // Prevent shortcuts from firing when typing in inputs
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
       }
       
-      const check = (def: any) => {
-          if (!def) return false;
-          return e.key.toLowerCase() === def.key.toLowerCase() &&
-                 !!e.ctrlKey === !!def.ctrlKey &&
-                 !!e.shiftKey === !!def.shiftKey &&
-                 !!e.altKey === !!def.altKey &&
-                 !!e.metaKey === !!def.metaKey;
-      };
-
-      const actions = Object.keys(shortcuts) as (keyof ShortcutConfig)[];
-      for (const action of actions) {
-          if (check(shortcuts[action]) && callbacks[action]) {
-              e.preventDefault();
-              callbacks[action]!();
-              return;
-          }
+      if (e.ctrlKey || e.metaKey) {
+        switch (e.key) {
+          case 'z':
+            e.preventDefault();
+            if (e.shiftKey) {
+              callbacks.redo();
+            } else {
+              callbacks.undo();
+            }
+            break;
+          case 'e':
+            e.preventDefault();
+            callbacks.exportSTL();
+            break;
+          case '1':
+            e.preventDefault();
+            callbacks.toggleView();
+            break;
+        }
       }
     };
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [shortcuts, callbacks]);
+  }, [callbacks]);
 };
 
 // ... Geometry helpers condensed ...
@@ -315,201 +314,86 @@ const seededRandom = (seed: number) => {
   };
 };
 
-const createSlotGeometries = (layer: LayerConfig, baseSlotLength: number, baseSlotWidth: number, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, allLayers: LayerConfig[], slotMode?: '2-plane' | '3-plane'): THREE_ACTUAL.BufferGeometry[] => {
+const createSlotGeometries = (layer: LayerConfig, baseSlotLength: number, baseSlotWidth: number, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, allLayers: LayerConfig[]): THREE_ACTUAL.BufferGeometry[] => {
   if (!layer.slotType || layer.slotType === 'none') return [];
   const slots: THREE_ACTUAL.BufferGeometry[] = [];
   const enabledLayers = allLayers.filter(l => l.enabled);
-  
-  // Use slotMode to determine the actual number of planes for slot cutting
-  let numPlanes = enabledLayers.length;
-  if (slotMode === '2-plane') {
-    numPlanes = 2; // Force 2-plane mode regardless of enabled layers
-  } else if (slotMode === '3-plane') {
-    numPlanes = 3; // Force 3-plane mode regardless of enabled layers
-  }
-  
+  const numPlanes = enabledLayers.length;
   const adjLength = layer.slotLengthAdjustment || 0;
   const adjWidth = layer.slotWidthOffset || 0;
-  
   const slotLength = baseSlotLength + adjLength;
   const rotationOffset = layer.primary.rotationOffset;
-  
-  // `extrusionDepth` is the TOTAL material thickness (including bevel).
-  // The `bevelAmount` passed here is the per-side bevel thickness.
   const materialThickness = extrusionDepth;
-  const bevelPerSide = bevelEnabled ? bevelAmount : 0;
-  // Remaining core thickness after bevels on both sides (not used for cut depth,
-  // but useful to reason about geometry if needed).
-  const coreThickness = Math.max(0.001, materialThickness - (bevelPerSide * 2));
-  const cutThickness = baseSlotWidth + adjWidth;
-  // Ensure cuts fully pass through the total material thickness (with small margin).
-  const cutDepth = materialThickness + 8.0;
-  
-  const SLOT_EXTENSION = 200; 
-
+  const cutThickness = baseSlotWidth + adjWidth; 
+  const cutDepth = materialThickness + 8.0; 
+  const SLOT_EXTENSION = 200;
   const createBlade = (length: number, xOffset: number, thickness: number, extent: number, angleX: number, angleZ: number) => {
     const overlap = 2.0; 
     const totalLen = length + overlap;
     const geo = new THREE_ACTUAL.BoxGeometry(totalLen, extent, thickness, 4, 2, 2);
-    
     const centerX = xOffset + (length - overlap) / 2;
-    
     const eps = 0.001;
     geo.translate(centerX + (Math.random() - 0.5) * eps, (Math.random() - 0.5) * eps, (Math.random() - 0.5) * eps);
-    
     const rotEps = 0.0001; 
     geo.rotateX(angleX * Math.PI / 180 + (Math.random() - 0.5) * rotEps);
     geo.rotateZ(angleZ * Math.PI / 180 + (Math.random() - 0.5) * rotEps);
-    
     return geo;
   };
-
   const createVerticalBlade = (length: number, xOffset: number) => {
     return createBlade(length, xOffset, cutThickness, cutDepth, 90, -rotationOffset);
   };
-
-  if (numPlanes === 2) {
-    slots.push(createVerticalBlade(slotLength + SLOT_EXTENSION, 0));
-    return slots;
-  }
-
+  if (numPlanes === 2) { slots.push(createVerticalBlade(slotLength + SLOT_EXTENSION, 0)); return slots; }
   if (numPlanes === 3) {
     const layerIndex = enabledLayers.findIndex(l => l.id === layer.id);
-    
     if (layerIndex === 0) {
-      // First layer: Two angled cuts at 120° and 240°
       slots.push(createBlade(slotLength + SLOT_EXTENSION, 0, cutThickness, cutDepth, 120, -rotationOffset));
       slots.push(createBlade(slotLength + SLOT_EXTENSION, 0, cutThickness, cutDepth, 240, -rotationOffset));
-      
     } else if (layerIndex === 1) {
-      // Second layer: Horizontal cut + one angled cut
       slots.push(createBlade(slotLength + SLOT_EXTENSION, 0, cutDepth, cutThickness, 330, -rotationOffset));
-      const xOffsetShort = slotLength * 0.75; 
-      const shortLength = (slotLength * 0.25) + SLOT_EXTENSION;
+      const xOffsetShort = slotLength * 0.75; const shortLength = (slotLength * 0.25) + SLOT_EXTENSION;
       slots.push(createBlade(shortLength, xOffsetShort, cutThickness, cutDepth, 60, -rotationOffset + 180));
-      
     } else if (layerIndex === 2) {
-      // Third layer: Two angled cuts + extended horizontal
       slots.push(createBlade(slotLength + SLOT_EXTENSION, 0, cutThickness, cutDepth, 240, -rotationOffset));
       slots.push(createBlade(slotLength + SLOT_EXTENSION, 0, cutThickness, cutDepth, 120, -rotationOffset));
-      const extLen = slotLength * 0.75;
-      const extOff = -extLen;
-      slots.push(createBlade(extLen, extOff, cutDepth, cutThickness, 30, -rotationOffset));
+      const extLen = slotLength * 0.75; const extOff = -extLen;
+      slots.push(createBlade(extLen, extOff, cutDepth, cutThickness, 330, -rotationOffset));
     }
     return slots;
   }
-
   slots.push(createVerticalBlade(slotLength + SLOT_EXTENSION, 0));
   return slots;
 };
 
-const applySlotCuts = async (layerGeo: THREE_ACTUAL.BufferGeometry, layer: LayerConfig, slotLength: number, slotWidth: number, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, allLayers: LayerConfig[], onProgress?: () => Promise<void>, slotMode?: '2-plane' | '3-plane'): Promise<THREE_ACTUAL.BufferGeometry> => {
-  const cacheKey = makeCacheKey(layer.id || 'layer', slotLength, slotWidth, extrusionDepth, bevelEnabled, bevelAmount);
-  const slotGeometries = getOrCreateSlotGeometries(cacheKey, () => createSlotGeometries(layer, slotLength, slotWidth, extrusionDepth, bevelEnabled, bevelAmount, allLayers, slotMode));
-  if (slotGeometries.length === 0) return layerGeo;
-  // Serialize Base early so filtered worker calls can reference it.
-  const baseData = {
-      position: layerGeo.attributes.position.array,
-      normal: layerGeo.attributes.normal?.array,
-      index: layerGeo.index?.array
-  };
-
-  // Fast AABB filter: rotate slot blades into the same orientation as the
-  // provided `layerGeo` and skip any blades whose bounding box doesn't
-  // intersect the layer's bounding box. This avoids expensive CSG work
-  // when blades don't affect the plane. We keep original `slotGeometries`
-  // intact for disposal and worker serialization, but only send the
-  // intersecting subset to the worker.
+const performCSGSubtraction = (baseGeo: THREE_ACTUAL.BufferGeometry, slotGeo: THREE_ACTUAL.BufferGeometry, evaluator: Evaluator): THREE_ACTUAL.BufferGeometry => {
   try {
-    if (!layerGeo.boundingBox) layerGeo.computeBoundingBox();
-    const layerBB = layerGeo.boundingBox ? layerGeo.boundingBox.clone() : null;
-    if (layerBB) {
-      const rotX = layer.rotation3D?.x ? layer.rotation3D.x * Math.PI / 180 : 0;
-      const rotY = layer.rotation3D?.y ? layer.rotation3D.y * Math.PI / 180 : 0;
-      const rotZ = layer.rotation3D?.z ? layer.rotation3D.z * Math.PI / 180 : 0;
-      const rotMat = new THREE_ACTUAL.Matrix4();
-      rotMat.makeRotationX(rotX).multiply(new THREE_ACTUAL.Matrix4().makeRotationY(rotY)).multiply(new THREE_ACTUAL.Matrix4().makeRotationZ(rotZ));
+    const repairedBase = repairGeometry(baseGeo, 0.0001, true);
+    const repairedSlot = repairGeometry(slotGeo, 0.0001, true); 
+    if (!repairedBase || !repairedSlot) return baseGeo;
+    const baseBrush = new Brush(repairedBase);
+    const slotBrush = new Brush(repairedSlot);
+    baseBrush.updateMatrixWorld();
+    slotBrush.updateMatrixWorld();
+    const result = evaluator.evaluate(baseBrush, slotBrush, SUBTRACTION);
+    const finalGeo = repairGeometry(result.geometry, 0.0001, true);
+    result.geometry.dispose();
+    return finalGeo || baseGeo;
+  } catch (error) { console.warn("CSG Subtraction failed", error); return baseGeo; }
+};
 
-      const keptSlots: THREE_ACTUAL.BufferGeometry[] = [];
-      for (const g of slotGeometries) {
-        try {
-          const clone = g.clone();
-          clone.applyMatrix4(rotMat);
-          clone.computeBoundingBox();
-          const gbb = clone.boundingBox;
-          // small padding to be safe
-          if (gbb && layerBB.expandByScalar) {
-            const padded = gbb.clone().expandByScalar(0.5);
-            if (layerBB.intersectsBox(padded)) keptSlots.push(g);
-          } else if (gbb && layerBB.intersectsBox(gbb)) {
-            keptSlots.push(g);
-          }
-          clone.dispose?.();
-        } catch (e) {
-          // If anything goes wrong, be conservative and keep the slot
-          keptSlots.push(g);
-        }
-      }
-
-      if (keptSlots.length === 0) {
-        // Nothing intersects — dispose slot geometries and return original mesh
-        slotGeometries.forEach(s => s.dispose());
-        return layerGeo;
-      }
-
-      // Replace slotsData to only include keptSlots
-      const slotsData = keptSlots.map(g => ({
-        position: g.attributes.position.array,
-        normal: g.attributes.normal?.array,
-        index: g.index?.array
-      }));
-
-      // Worker Communication (filtered) via manager
-      return postCSGJob(baseData, slotsData, layer.rotation3D)
-        .then((e: any) => {
-          const { position, normal, index } = e;
-          const resultGeo = new THREE_ACTUAL.BufferGeometry();
-          resultGeo.setAttribute('position', new THREE_ACTUAL.BufferAttribute(position, 3));
-          if (normal) resultGeo.setAttribute('normal', new THREE_ACTUAL.BufferAttribute(normal, 3));
-          if (index) resultGeo.setIndex(new THREE_ACTUAL.BufferAttribute(index, 1));
-          // Dispose original slots (we kept references in slotGeometries)
-          slotGeometries.forEach(g => g.dispose());
-          return resultGeo;
-        })
-        .catch((err: any) => {
-          console.error('CSG Worker Error', err);
-          slotGeometries.forEach(g => g.dispose());
-          return layerGeo;
-        });
-    }
-  } catch (e) {
-    console.warn('Slot AABB filtering failed, proceeding with full CSG', e);
+const applySlotCuts = async (layerGeo: THREE_ACTUAL.BufferGeometry, layer: LayerConfig, slotLength: number, slotWidth: number, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, allLayers: LayerConfig[], evaluator: Evaluator, onProgress?: () => Promise<void>): Promise<THREE_ACTUAL.BufferGeometry> => {
+  const slotGeometries = createSlotGeometries(layer, slotLength, slotWidth, extrusionDepth, bevelEnabled, bevelAmount, allLayers);
+  if (slotGeometries.length === 0) return layerGeo;
+  let result = layerGeo;
+  for (let i = 0; i < slotGeometries.length; i++) {
+    const slotGeo = slotGeometries[i];
+    const rotatedSlotGeo = slotGeo.clone();
+    rotatedSlotGeo.rotateX(layer.rotation3D.x * Math.PI / 180);
+    rotatedSlotGeo.rotateY(layer.rotation3D.y * Math.PI / 180);
+    result = performCSGSubtraction(result, rotatedSlotGeo, evaluator);
+    rotatedSlotGeo.dispose();
+    if (onProgress) await onProgress();
   }
-
-    // Fallback: serialize all slots (reuse `baseData` declared earlier)
-    const allSlotsData = slotGeometries.map(g => ({
-      position: g.attributes.position.array,
-      normal: g.attributes.normal?.array,
-      index: g.index?.array
-    }));
-
-    // If we fell through (no layerBB or error), fall back to original worker call
-    return postCSGJob(baseData, allSlotsData, layer.rotation3D)
-      .then((e: any) => {
-        const { position, normal, index } = e;
-        const resultGeo = new THREE_ACTUAL.BufferGeometry();
-        resultGeo.setAttribute('position', new THREE_ACTUAL.BufferAttribute(position, 3));
-        if (normal) resultGeo.setAttribute('normal', new THREE_ACTUAL.BufferAttribute(normal, 3));
-        if (index) resultGeo.setIndex(new THREE_ACTUAL.BufferAttribute(index, 1));
-        // Dispose original slots
-        slotGeometries.forEach(g => g.dispose());
-        return resultGeo;
-      })
-      .catch((err: any) => {
-        console.error('CSG Worker Error', err);
-        slotGeometries.forEach(g => g.dispose());
-        return layerGeo; // Fallback to original
-      });
+  return result;
 };
 
 const createDefaultTextGroup = (text: string, rotation: number, fontSize: number, textX: number): TextGroupConfig => ({
@@ -543,85 +427,22 @@ const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isEnabled 
   slotWidthOffset: 0
 });
 
-const calculateOptimalSlots = (layers: LayerConfig[], slotMode: '2-plane' | '3-plane'): LayerConfig[] => {
+const calculateOptimalSlots = (layers: LayerConfig[]): LayerConfig[] => {
   const updatedLayers = JSON.parse(JSON.stringify(layers)) as LayerConfig[];
   const enabled = updatedLayers.filter(l => l.enabled);
   const count = enabled.length;
-  
-  if (count < 2) { 
-    console.warn('Need at least 2 enabled layers for slot calculation'); 
-    return updatedLayers; 
+  if (count < 2) { console.warn('Need at least 2 enabled layers for slot calculation'); return updatedLayers; }
+  if (count === 2) {
+    enabled[0].rotation3D = { x: 0, y: 0 }; enabled[0].slotType = 'half-back';
+    enabled[1].rotation3D = { x: 90, y: 0 }; enabled[1].slotType = 'half-front';
+  } else if (count === 3) {
+    enabled[0].rotation3D = { x: 0, y: 0 }; enabled[0].slotType = 'third-back';
+    enabled[1].rotation3D = { x: 120, y: 0 }; enabled[1].slotType = 'third-middle';
+    enabled[2].rotation3D = { x: 240, y: 0 }; enabled[2].slotType = 'third-front';
+  } else {
+    enabled.forEach((layer, index) => { const angle = (360 / count) * index; layer.rotation3D = { x: angle, y: 0 }; layer.slotType = 'custom'; });
   }
-
-  if (slotMode === '2-plane') {
-    // For 2-plane mode, use only first 2 enabled layers at 90 degrees
-    if (count >= 2) {
-      enabled[0].rotation3D = { x: 0, y: 0 }; 
-      enabled[0].slotType = 'half-back';
-      enabled[1].rotation3D = { x: 90, y: 0 }; 
-      enabled[1].slotType = 'half-front';
-      
-      // Disable any additional layers for 2-plane mode
-      for (let i = 2; i < enabled.length; i++) {
-        enabled[i].enabled = false;
-      }
-    }
-  } else if (slotMode === '3-plane') {
-    // For 3-plane mode, use first 3 enabled layers at 120 degrees
-    if (count >= 3) {
-      enabled[0].rotation3D = { x: 0, y: 0 }; 
-      enabled[0].slotType = 'third-back';
-      enabled[1].rotation3D = { x: 120, y: 0 }; 
-      enabled[1].slotType = 'third-middle';
-      enabled[2].rotation3D = { x: 240, y: 0 }; 
-      enabled[2].slotType = 'third-front';
-      
-      // Disable any additional layers for 3-plane mode
-      for (let i = 3; i < enabled.length; i++) {
-        enabled[i].enabled = false;
-      }
-    } else if (count === 2) {
-      // Fallback to 2-plane configuration if only 2 layers
-      enabled[0].rotation3D = { x: 0, y: 0 }; 
-      enabled[0].slotType = 'half-back';
-      enabled[1].rotation3D = { x: 90, y: 0 }; 
-      enabled[1].slotType = 'half-front';
-    }
-  }
-  
   return updatedLayers;
-};
-
-// Free floating bodies detection function
-const detectFreeFloatingBodies = (config: SnowflakeConfig): string[] => {
-  const freeFloatingLayers: string[] = [];
-  
-  for (const layer of config.layers) {
-    if (!layer.enabled) continue;
-    
-    let hasContent = false;
-    
-    // Check if layer has any enabled content
-    if (layer.primary.enabled && layer.primary.text.trim()) {
-      hasContent = true;
-    }
-    if (layer.secondary.enabled && layer.secondary.text.trim()) {
-      hasContent = true;
-    }
-    if (layer.hubs.some(h => h.enabled)) {
-      hasContent = true;
-    }
-    if (layer.abstracts.some(a => a.enabled)) {
-      hasContent = true;
-    }
-    
-    // If layer is enabled but has no content, it's a free floating body
-    if (!hasContent) {
-      freeFloatingLayers.push(layer.name || `Layer ${layer.id}`);
-    }
-  }
-  
-  return freeFloatingLayers;
 };
 
 const App: React.FC = () => {
@@ -642,33 +463,16 @@ const App: React.FC = () => {
     bevelAmount: 0.4,
     bevelSegments: 5, 
     slotEnabled: false,
-    slotMode: '2-plane', // Default to 2-plane mode
     slotLength: 95, 
     slotWidth: 4.0, 
     quality: 'low',
-    syncAllLayers: true, // Default ON
-    globalStrokeWeight: 0,
-    freeFloatingCheck: false,
-    language: 'en'
+    syncAllLayers: true // Default ON
   };
 
   const [config, setConfig] = useState<SnowflakeConfig>(initialState);
   const [config3D, setConfig3D] = useState<SnowflakeConfig>(initialState); 
   const [rendered3DConfig, setRendered3DConfig] = useState<SnowflakeConfig>(initialState); 
-  // Guarded setter: only update rendered3DConfig when it actually differs
-  const setRendered3DIfChanged = useCallback((next: SnowflakeConfig) => {
-    setRendered3DConfig(prev => {
-      try {
-        if (JSON.stringify(prev) === JSON.stringify(next)) return prev;
-      } catch (e) {
-        // Fallback: if stringify fails, fall through and set
-      }
-      return next;
-    });
-  }, []);
   const [designDiameter, setDesignDiameter] = useState(0); 
-  const [activeTab, setActiveTab] = useState<'global' | 'text' | 'Letter Ctrl' | 'hubs' | 'abstract' | 'planes'>('text');
-  const [shortcuts, setShortcuts] = useState<ShortcutConfig>(DEFAULT_SHORTCUTS);
 
   const [history, setHistory] = useState<SnowflakeConfig[]>([initialState]);
   const [historyIndex, setHistoryIndex] = useState(0);
@@ -683,14 +487,18 @@ const App: React.FC = () => {
   
   const svgRef = useRef<SVGSVGElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const csgEvaluator = useRef(null); // No longer needed on main thread for cutting
-  const debounceTimer = useRef<NodeJS.Timeout | null>(null);
+  const csgEvaluator = useRef(new Evaluator());
 
   const { loadFont } = useFontCache();
   const { cleanup } = useThreeJSCleanup();
   const { handleError } = useErrorHandler();
   const { exportWithProgress } = useExportManager();
   const { notifications, showNotification } = useUserFeedback();
+
+  useEffect(() => {
+    csgEvaluator.current.attributes = ['position', 'normal'];
+    csgEvaluator.current.useGroups = false;
+  }, []);
 
   // Diameter Calculation Logic
   useEffect(() => {
@@ -774,177 +582,19 @@ const App: React.FC = () => {
     return () => { active = false; };
   }, [config, dynamicFonts, loadFont]);
 
-  const handleUpdateConfig = useCallback((updates: Partial<SnowflakeConfig>, commitTo3D: boolean = false) => {
+  const handleUpdateConfig = (updates: Partial<SnowflakeConfig>, commitTo3D: boolean = false) => {
     setConfig(prev => {
       const next = { ...prev, ...updates };
-      
-      if (debounceTimer.current) {
-          clearTimeout(debounceTimer.current);
-          debounceTimer.current = null;
-      }
-
       if (commitTo3D) {
         setConfig3D(next);
-        setHistory(h => {
-            const newHistory = [...h.slice(0, historyIndex + 1), JSON.parse(JSON.stringify(next))];
-            if (newHistory.length > MAX_HISTORY) return newHistory.slice(newHistory.length - MAX_HISTORY);
-            return newHistory;
-        });
-        setHistoryIndex(i => Math.min(i + 1, MAX_HISTORY - 1));
-        
-        // Immediate update for 3D view (whether visible or not, it keeps it in sync)
-        setRendered3DIfChanged(next);
-      } else {
-        // Debounce update for 3D view
-        // If in 3D mode: fast debounce (300ms) for responsiveness
-        // If in 2D mode: slow debounce (1000ms) to avoid lagging the UI with background generation
-        const delay = viewMode === '3d' ? 300 : 1000;
-        debounceTimer.current = setTimeout(() => {
-          setRendered3DIfChanged(next);
-        }, delay);
+        setHistory(h => [...h.slice(0, historyIndex + 1), JSON.parse(JSON.stringify(next))]);
+        setHistoryIndex(i => i + 1);
       }
       return next;
     });
-  }, [historyIndex, viewMode]);
+  };
 
-  useEffect(() => {
-      return () => {
-          if (debounceTimer.current) clearTimeout(debounceTimer.current);
-      }
-  }, []);
-
-  // Keyboard shortcut handler for model regeneration
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      // Ctrl/Cmd + R to regenerate model with proper orientation
-      if ((event.ctrlKey || event.metaKey) && event.key === 'r') {
-        event.preventDefault();
-        // Force immediate regeneration with current slot mode
-        setRendered3DIfChanged(config);
-        showNotification('Model regenerated with current slot orientation', 'success');
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [config, setRendered3DIfChanged, showNotification]);
-
-  // Auto-detect visible planes and set default slot cut mode
-  useEffect(() => {
-    const enabledLayers = config.layers.filter(l => l.enabled);
-    const enabledCount = enabledLayers.length;
-    
-    if (enabledCount === 2 && config.slotMode !== '2-plane') {
-      // Auto-switch to 2-plane mode when exactly 2 planes are visible
-      handleUpdateConfig({ slotMode: '2-plane' }, false);
-    } else if (enabledCount === 3 && config.slotMode !== '3-plane') {
-      // Auto-switch to 3-plane mode when exactly 3 planes are visible
-      handleUpdateConfig({ slotMode: '3-plane' }, false);
-    }
-    
-    // Auto-refresh 3D model when planes are toggled
-    if (viewMode === '3d') {
-      // Force immediate 3D regeneration when plane visibility changes
-      const timeoutId = setTimeout(() => {
-        setRendered3DIfChanged(config);
-      }, 100);
-      return () => clearTimeout(timeoutId);
-    }
-  }, [config.layers, config.slotMode, handleUpdateConfig, viewMode, setRendered3DIfChanged]);
-
-  // Pre-compute slot cuts in background with debouncing to prevent UI blocking
-  useEffect(() => {
-    if (!rendered3DConfig.slotEnabled) return;
-
-    const preComputeSlotCuts = async () => {
-      console.log('🔧 Starting slot cut pre-computation...');
-      
-      // Calculate bevel per side (same logic as in generateMesh)
-      const bevelPerSide = rendered3DConfig.bevelEnabled ? Math.min(rendered3DConfig.bevelAmount, rendered3DConfig.extrusionDepth / 2) : 0;
-      // Create a temporary config with slots disabled to generate base geometry
-      const baseConfig = { ...rendered3DConfig, slotEnabled: false };
-
-      const enabledLayers = rendered3DConfig.layers.filter(l => l.enabled);
-      console.log(`🔧 Processing ${enabledLayers.length} enabled layers for slot pre-computation`);
-
-      for (const layer of enabledLayers) {
-        if (!layer.slotType || layer.slotType === 'none') {
-          console.log(`🔧 Skipping layer ${layer.id || 'unknown'} - no slot type`);
-          continue;
-        }
-
-        const cacheKey = hashSlotCut(
-          layer,
-          rendered3DConfig.slotLength,
-          rendered3DConfig.slotWidth,
-          rendered3DConfig.extrusionDepth,
-          rendered3DConfig.bevelEnabled,
-          bevelPerSide,
-          rendered3DConfig.layers,
-          rendered3DConfig.slotMode
-        );
-
-        // Skip if already cached
-        if (slotCutCache.has(cacheKey)) {
-          console.log(`🔧 Slot cuts already cached for layer: ${layer.id || 'unknown'}`);
-          continue;
-        }
-
-        console.log(`🔧 Pre-computing slot cuts for layer: ${layer.id || 'unknown'}`);
-
-        try {
-          // Generate base mesh for this layer only (with slots disabled) - use low quality for speed
-          const tempGroup = await generateMesh(() => {}, 'low', baseConfig);
-          const layerMesh = tempGroup.children.find(child => child.userData.layerId === layer.id) as THREE_ACTUAL.Mesh;
-
-          if (layerMesh) {
-            // Apply slot cuts to the base geometry
-            const cutGeo = await applySlotCuts(
-              layerMesh.geometry.clone(),
-              layer,
-              rendered3DConfig.slotLength,
-              rendered3DConfig.slotWidth,
-              rendered3DConfig.extrusionDepth,
-              rendered3DConfig.bevelEnabled,
-              bevelPerSide,
-              rendered3DConfig.layers,
-              undefined,
-              rendered3DConfig.slotMode
-            );
-
-            // Store in cache
-            slotCutCache.set(cacheKey, cutGeo);
-            console.log(`✅ Successfully cached slot cuts for layer: ${layer.id || 'unknown'}`);
-          } else {
-            console.warn(`⚠️ Could not find layer mesh for: ${layer.id || 'unknown'}`);
-          }
-
-          // Clean up temporary group
-          tempGroup.traverse((child) => {
-            if (child instanceof THREE_ACTUAL.Mesh) {
-              child.geometry.dispose();
-              if (Array.isArray(child.material)) {
-                child.material.forEach(m => m.dispose());
-              } else {
-                child.material.dispose();
-              }
-            }
-          });
-
-        } catch (error) {
-          console.warn(`❌ Error pre-computing slot cuts for layer ${layer.id || 'unknown'}:`, error);
-        }
-      }
-      
-      console.log('🔧 Slot cut pre-computation completed');
-    };
-
-    // Debounce slot pre-computation to prevent blocking UI during rapid changes
-    const timeoutId = setTimeout(preComputeSlotCuts, 500);
-    return () => clearTimeout(timeoutId);
-  }, [rendered3DConfig.slotEnabled, rendered3DConfig.slotLength, rendered3DConfig.slotWidth, rendered3DConfig.extrusionDepth, rendered3DConfig.bevelEnabled, rendered3DConfig.bevelAmount, rendered3DConfig.layers, rendered3DConfig.slotMode]);
-
-  const updateGroup = useCallback((group: 'primary' | 'secondary', updates: Partial<TextGroupConfig>, commitTo3D: boolean = false) => {
+  const updateGroup = (group: 'primary' | 'secondary', updates: Partial<TextGroupConfig>, commitTo3D: boolean = false) => {
     handleUpdateConfig({
       layers: config.layers.map((layer, idx) => {
         if (idx === config.activeLayerIndex || config.syncAllLayers) {
@@ -953,9 +603,9 @@ const App: React.FC = () => {
         return layer;
       })
     }, commitTo3D);
-  }, [config.layers, config.activeLayerIndex, config.syncAllLayers, handleUpdateConfig]);
+  };
 
-  const updateCharOffset = useCallback((group: 'primary' | 'secondary', charIndex: number, offset: Partial<CharOffset>, commitTo3D: boolean = false) => {
+  const updateCharOffset = (group: 'primary' | 'secondary', charIndex: number, offset: Partial<CharOffset>, commitTo3D: boolean = false) => {
     handleUpdateConfig({
       layers: config.layers.map((layer, idx) => {
         if (idx === config.activeLayerIndex || config.syncAllLayers) {
@@ -967,9 +617,9 @@ const App: React.FC = () => {
         return layer;
       })
     }, commitTo3D);
-  }, [config.layers, config.activeLayerIndex, config.syncAllLayers, handleUpdateConfig]);
+  };
 
-  const updateHubs = useCallback((newHubs: HubConfig[], commitTo3D: boolean = false) => {
+  const updateHubs = (newHubs: HubConfig[], commitTo3D: boolean = false) => {
     handleUpdateConfig({
         layers: config.layers.map((layer, idx) => {
             if (idx === config.activeLayerIndex) {
@@ -981,9 +631,9 @@ const App: React.FC = () => {
             return layer;
         })
     }, commitTo3D);
-  }, [config.layers, config.activeLayerIndex, config.syncAllLayers, handleUpdateConfig]);
+  };
 
-  const updateAbstracts = useCallback((newAbstracts: AbstractConfig[], commitTo3D: boolean = false) => {
+  const updateAbstracts = (newAbstracts: AbstractConfig[], commitTo3D: boolean = false) => {
     handleUpdateConfig({
         layers: config.layers.map((layer, idx) => {
             if (idx === config.activeLayerIndex) {
@@ -995,36 +645,31 @@ const App: React.FC = () => {
             return layer;
         })
     }, commitTo3D);
-  }, [config.layers, config.activeLayerIndex, config.syncAllLayers, handleUpdateConfig]);
+  };
 
-  const undo = useCallback(() => {
+  const undo = () => {
     if (historyIndex > 0) {
         setHistoryIndex(i => i - 1);
         const prev = history[historyIndex - 1];
         setConfig(prev);
         setConfig3D(prev);
-        if (viewMode === '3d') setRendered3DIfChanged(prev);
+        if (viewMode === '3d') setRendered3DConfig(prev);
     }
-  }, [history, historyIndex, viewMode]);
+  };
 
-  const redo = useCallback(() => {
+  const redo = () => {
     if (historyIndex < history.length - 1) {
         setHistoryIndex(i => i + 1);
         const next = history[historyIndex + 1];
         setConfig(next);
         setConfig3D(next);
-        if (viewMode === '3d') setRendered3DIfChanged(next);
+        if (viewMode === '3d') setRendered3DConfig(next);
     }
-  }, [history, historyIndex, viewMode]);
+  };
 
-  const generateMesh = useCallback(async (onProgress: (p: number) => void, overrideQuality?: DesignQuality, overrideConfig?: SnowflakeConfig): Promise<THREE_ACTUAL.Group> => {
-    const config = overrideConfig || rendered3DConfig;
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-  
+  const generateMesh = useCallback(async (onProgress: (p: number) => void, overrideQuality?: DesignQuality): Promise<THREE_ACTUAL.Group> => {
     const qualityToUse = overrideQuality || rendered3DConfig.quality;
+    // ... logic same as before, omitted for brevity but preserved in output ...
     let qMult = 1;
     let curveSeg = 12;
     let bevelSegCap = 10;
@@ -1043,31 +688,28 @@ const App: React.FC = () => {
         bevelSegCap = 12;
     }
 
-    // `extrusionDepth` represents the overall material thickness INCLUDING any bevel.
-    // Compute bevel as a per-side value and clamp it so it never exceeds half
-    // the total thickness (to avoid negative core depth).
-    const bevelPerSide = rendered3DConfig.bevelEnabled ? Math.min(rendered3DConfig.bevelAmount, rendered3DConfig.extrusionDepth / 2) : 0;
-    const effectiveDepth = Math.max(0.001, rendered3DConfig.extrusionDepth);
+    const effectiveDepth = rendered3DConfig.bevelEnabled 
+        ? Math.max(0.001, rendered3DConfig.extrusionDepth - (rendered3DConfig.bevelAmount * 2)) 
+        : rendered3DConfig.extrusionDepth;
 
     const extrudeSettings = {
       depth: effectiveDepth,
       bevelEnabled: rendered3DConfig.bevelEnabled,
-      bevelThickness: bevelPerSide,
-      bevelSize: bevelPerSide, // Standard expansion
-      bevelSegments: rendered3DConfig.bevelEnabled ? (rendered3DConfig.bevelType === 'chamfer' ? 1 : Math.min(rendered3DConfig.bevelSegments, bevelSegCap)) : 0,
+      bevelThickness: rendered3DConfig.bevelAmount,
+      bevelSize: rendered3DConfig.bevelAmount,
+      bevelSegments: rendered3DConfig.bevelType === 'chamfer' ? 1 : Math.min(rendered3DConfig.bevelSegments, bevelSegCap),
       curveSegments: curveSeg,
     };
 
     const group = new THREE_ACTUAL.Group();
-    // Use all layers to generate geometry so instant toggling works
-    const layersToGenerate = rendered3DConfig.layers;
+    const enabledLayers = rendered3DConfig.layers.filter(l => l.enabled);
     
-    let totalOps = layersToGenerate.length; 
+    let totalOps = enabledLayers.length; 
     if (rendered3DConfig.slotEnabled) {
-        const numPlanes = layersToGenerate.length;
+        const numPlanes = enabledLayers.length;
         if (numPlanes === 2) totalOps += 2;
         else if (numPlanes === 3) totalOps += 7;
-        else totalOps += layersToGenerate.length;
+        else totalOps += enabledLayers.length;
     }
 
     let completedOps = 0;
@@ -1078,8 +720,8 @@ const App: React.FC = () => {
         await new Promise(r => setTimeout(r, 10)); 
     };
 
-    for (let lIdx = 0; lIdx < layersToGenerate.length; lIdx++) {
-      const layer = layersToGenerate[lIdx];
+    for (let lIdx = 0; lIdx < enabledLayers.length; lIdx++) {
+      const layer = enabledLayers[lIdx];
       const layerGeometries: THREE_ACTUAL.BufferGeometry[] = [];
       
       const processTextGroup = async (textGroup: TextGroupConfig) => {
@@ -1096,42 +738,25 @@ const App: React.FC = () => {
             let shapes: THREE_ACTUAL.Shape[] = [];
             let currentX = 0;
             glyphs.forEach((glyph, i) => {
-              try {
-                const offset = textGroup.charOffsets[i] || { x: 0, y: 0 };
-                const path = glyph.getPath(currentX + offset.x, offset.y, textGroup.fontSize);
-                const threePath = new THREE_ACTUAL.ShapePath();
-                path.commands.forEach(cmd => {
-                  if (cmd.type === 'M') threePath.moveTo(cmd.x, cmd.y);
-                  else if (cmd.type === 'L') threePath.lineTo(cmd.x, cmd.y);
-                  else if (cmd.type === 'Q') threePath.quadraticCurveTo(cmd.x1, cmd.y1, cmd.x, cmd.y);
-                  else if (cmd.type === 'C') threePath.bezierCurveTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x, cmd.y);
-                });
-                shapes.push(...threePath.toShapes(true));
-              } catch (error) {
-                console.warn(`Failed to process glyph ${i} for font ${fontName}:`, error);
-              }
+              const offset = textGroup.charOffsets[i] || { x: 0, y: 0 };
+              const path = glyph.getPath(currentX + offset.x, offset.y, textGroup.fontSize);
+              const threePath = new THREE_ACTUAL.ShapePath();
+              path.commands.forEach(cmd => {
+                if (cmd.type === 'M') threePath.moveTo(cmd.x, cmd.y);
+                else if (cmd.type === 'L') threePath.lineTo(cmd.x, cmd.y);
+                else if (cmd.type === 'Q') threePath.quadraticCurveTo(cmd.x1, cmd.y1, cmd.x, cmd.y);
+                else if (cmd.type === 'C') threePath.bezierCurveTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x, cmd.y);
+              });
+              shapes.push(...threePath.toShapes(true));
               currentX += (glyph.advanceWidth * scale) + textGroup.letterSpacing;
             });
 
-            // Apply global stroke weight scaling to make text bolder/thinner
-            const strokeScale = 1 + (rendered3DConfig.globalStrokeWeight / 5); // ±20% scaling per unit
-            if (strokeScale !== 1) {
-              shapes.forEach(shape => {
-                if (shape && typeof shape.scale === 'function') {
-                  shape.scale(strokeScale, strokeScale);
-                }
-              });
-            }
-
-            const textKey = makeTextKey(layer.id, textGroup, textGroup.fontSize, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight);
-            const groupGeo = getOrCreateGeometry(geometryCache.text, textKey, () => new THREE_ACTUAL.ExtrudeGeometry(shapes, extrudeSettings));
+            const groupGeo = new THREE_ACTUAL.ExtrudeGeometry(shapes, extrudeSettings);
             
-            // Underline Logic
             const uConf = textGroup.underline;
             let underlineShapes: THREE_ACTUAL.Shape[] = [];
 
             if (uConf && uConf.enabled) {
-                // ... (Keep existing underline logic exactly as is) ...
                 const t = uConf.thickness;
                 const halfT = t / 2;
                 const startX = textGroup.textX + uConf.startXOffset;
@@ -1240,40 +865,26 @@ const App: React.FC = () => {
                 }
             }
             
-            // Apply global stroke weight scaling to underlines
-            if (strokeScale !== 1) {
-              underlineShapes.forEach(shape => {
-                if (shape && typeof shape.scale === 'function') {
-                  shape.scale(strokeScale, strokeScale);
-                }
-              });
-            }
-            
             let underlineGeo = null;
             if (underlineShapes.length > 0) {
-                const underlineKey = makeUnderlineKey(layer.id, textGroup, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide);
-                underlineGeo = getOrCreateGeometry(geometryCache.text, underlineKey, () => new THREE_ACTUAL.ExtrudeGeometry(underlineShapes, extrudeSettings));
+                underlineGeo = new THREE_ACTUAL.ExtrudeGeometry(underlineShapes, extrudeSettings);
             }
 
             const angleStep = (Math.PI * 2) / textGroup.arms;
-            
-            // Center the extrusion on Z-axis
-            const centerZOffset = -extrudeSettings.depth / 2;
-
             for (let i = 0; i < textGroup.arms; i++) {
               const angle = i * angleStep + (textGroup.rotationOffset * Math.PI / 180);
               const inst = groupGeo.clone();
-              inst.translate(textGroup.textX, textGroup.mirrorOffset / 2, centerZOffset);
+              inst.translate(textGroup.textX, textGroup.mirrorOffset / 2, -extrudeSettings.depth / 2);
               inst.rotateX(Math.PI); inst.rotateZ(-angle);
               layerGeometries.push(inst);
               if (textGroup.mirrorEnabled) {
                 const mirrored = groupGeo.clone();
-                mirrored.translate(textGroup.textX, -textGroup.mirrorOffset / 2, centerZOffset);
+                mirrored.translate(textGroup.textX, -textGroup.mirrorOffset / 2, -extrudeSettings.depth / 2);
                 mirrored.rotateZ(-angle); layerGeometries.push(mirrored);
               }
               if (underlineGeo) {
                   const uInst = underlineGeo.clone();
-                  uInst.translate(0, 0, centerZOffset);
+                  uInst.translate(0, 0, -extrudeSettings.depth/2);
                   uInst.rotateX(Math.PI);
                   uInst.rotateZ(-angle);
                   layerGeometries.push(uInst);
@@ -1286,13 +897,11 @@ const App: React.FC = () => {
       };
 
       const processHubs = (hubs: HubConfig[]) => {
-         // ... (Keep existing hub logic but ensure centerZOffset is correct)
-         const centerZOffset = -extrudeSettings.depth / 2;
          hubs.filter(h => h.enabled).forEach(hub => {
-             // ... (Shape generation code - same as original) ...
              const shape = new THREE_ACTUAL.Shape();
+             // Safe Fallbacks
              const radius = !isNaN(hub.outerRadius) ? hub.outerRadius : 20;
-             const wallT = (!isNaN(hub.wallThickness) ? hub.wallThickness : 2) + rendered3DConfig.globalStrokeWeight;
+             const wallT = !isNaN(hub.wallThickness) ? hub.wallThickness : 2;
              const sRatio = !isNaN(hub.starRatio) ? hub.starRatio : 0.5;
              const amp = !isNaN(hub.oscillationAmplitude) ? hub.oscillationAmplitude : 5;
              
@@ -1328,32 +937,16 @@ const App: React.FC = () => {
                  shape.holes.push(hole);
              }
 
-             // Apply global stroke weight scaling to hub shape
-             const strokeScale = 1 + (rendered3DConfig.globalStrokeWeight / 10);
-             if (strokeScale !== 1) {
-               if (shape && typeof shape.scale === 'function') {
-                 shape.scale(strokeScale, strokeScale);
-               }
-             }
-
-             const hubKey = makeHubKey(layer.id, hub, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight);
-             const geo = getOrCreateGeometry(geometryCache.hubs, hubKey, () => new THREE_ACTUAL.ExtrudeGeometry(shape, extrudeSettings));
+             const geo = new THREE_ACTUAL.ExtrudeGeometry(shape, extrudeSettings);
              geo.rotateZ(hub.rotationOffset * Math.PI / 180);
-             geo.translate(0, 0, centerZOffset);
+             geo.translate(0, 0, -extrudeSettings.depth / 2);
              layerGeometries.push(geo);
          });
       };
 
       const processAbstracts = (abstracts: AbstractConfig[]) => {
-          // ... (Keep existing abstract logic but ensure centerZOffset is correct)
-          const centerZOffset = -extrudeSettings.depth / 2;
-          // ... (Abstract generation code - reuse logic) ...
           abstracts.filter(a => a.enabled).forEach(abs => {
-               const effectiveThickness = abs.thickness + rendered3DConfig.globalStrokeWeight;
-               // ... (Fractal and Shape logic - assume copied from previous context or reuse existing)
-               // For brevity, using the same robust logic structure as App.tsx
                if (abs.type === 'fractal') {
-                   // ... (Fractal generation)
                    const shapes: THREE_ACTUAL.Shape[] = [];
                    const rng = seededRandom(abs.randomSeed || 1234);
                    
@@ -1379,19 +972,23 @@ const App: React.FC = () => {
                    const effectiveMinBranch = (abs.minBranchLength || 5) * scaleFactor;
 
                    const generateBranch = (x: number, y: number, angleRad: number, length: number, width: number, depth: number) => {
-                       // ... (Recursive branch logic from original code)
                        if (isNaN(x) || isNaN(y) || isNaN(angleRad) || isNaN(length) || isNaN(width)) return;
                        if (depth <= 0 || length < (effectiveMinBranch || 0.1)) return;
                        
                        const endX = x + Math.cos(angleRad) * length;
                        const endY = y + Math.sin(angleRad) * length;
+                       
                        if (isNaN(endX) || isNaN(endY)) return;
+                       
                        const nextWidth = width * (abs.thicknessDecay || 0.8);
+                       
                        const shape = new THREE_ACTUAL.Shape();
                        const perpX = -Math.sin(angleRad);
                        const perpY = Math.cos(angleRad);
+                       
                        const halfW = width * 0.5;
                        const halfNW = nextWidth * 0.5;
+
                        const p1x = x + perpX * halfW;
                        const p1y = y + perpY * halfW;
                        const p2x = x - perpX * halfW;
@@ -1400,32 +997,53 @@ const App: React.FC = () => {
                        const p3y = endY - perpY * halfNW;
                        const p4x = endX + perpX * halfNW;
                        const p4y = endY + perpY * halfNW;
+                       
                        shape.moveTo(p1x, p1y);
                        shape.lineTo(p4x, p4y);
+                       
                        const isTip = (depth <= 1);
                        if (abs.roundedTips && isTip) {
                            shape.absarc(endX, endY, halfNW, angleRad - Math.PI/2, angleRad + Math.PI/2, false);
                        } else {
                            shape.lineTo(p3x, p3y);
                        }
+                       
                        shape.lineTo(p2x, p2y);
                        shape.closePath();
                        shapes.push(shape);
+                       
                        const rawBranchCount = abs.branchesPerNode || 2;
                        const baseCount = Math.floor(rawBranchCount);
                        const extraProb = rawBranchCount - baseCount;
+                       
                        const spread = (abs.branchAngle || 45) * Math.PI / 180;
                        const nextLenBase = length * (decay); 
                        const isAlt = abs.branchPattern === 'alternating';
                        const count = isAlt ? 1 : (baseCount + (rng() < extraProb ? 1 : 0));
+                       
                        for(let i=0; i<count; i++) {
                            let da = 0;
-                           if (abs.branchPattern === 'random') { da = (rng() - 0.5) * spread * 2; } 
-                           else if (isAlt) { const sign = (depth % 2 !== 0) ? 1 : -1; da = sign * spread; } 
-                           else { if (count > 1) da = -spread/2 + i * (spread/(count-1)); }
-                           if (abs.angleVariation) da += (rng() - 0.5) * (abs.angleVariation * Math.PI);
+                           if (abs.branchPattern === 'random') {
+                               da = (rng() - 0.5) * spread * 2; 
+                           } else if (isAlt) {
+                               const sign = (depth % 2 !== 0) ? 1 : -1;
+                               da = sign * spread; 
+                           } else {
+                               if (count === 1) da = 0;
+                               else {
+                                   const step = spread / (count - 1 || 1); 
+                                   da = -spread/2 + i * step;
+                                   if (count === 1) da = 0; 
+                               }
+                           }
+                           
+                           if (abs.angleVariation) {
+                               da += (rng() - 0.5) * (abs.angleVariation * Math.PI);
+                           }
+                           
                            let childLen = nextLenBase;
                            if (abs.lengthVariation) childLen *= (1 + (rng() - 0.5) * abs.lengthVariation);
+                           
                            generateBranch(endX, endY, angleRad + da, childLen, nextWidth, depth - 1);
                        }
                    };
@@ -1433,7 +1051,8 @@ const App: React.FC = () => {
                    let startX = abs.innerRadius;
                    let startY = 0;
                    let startDepth = abs.recursionDepth || 4;
-                   let currentWidth = effectiveThickness;
+                   let currentWidth = abs.thickness;
+                   
                    if (effectiveTrunk > 0) {
                        const trunkEnd = startX + effectiveTrunk;
                        const maxRSq = abs.outerRadius > 0 ? abs.outerRadius * abs.outerRadius : Infinity;
@@ -1448,12 +1067,20 @@ const App: React.FC = () => {
                        }
                        startX = trunkEnd;
                    }
+                   
                    const spread = (abs.branchAngle || 45) * Math.PI / 180;
                    const count = (abs.branchPattern === 'alternating') ? 1 : (abs.branchesPerNode || 2);
                    const initLen = effectiveInit; 
+                   
                    for(let i=0; i<count; i++) {
                        let da = 0;
-                       if (abs.branchPattern === 'random') { da = (rng() - 0.5) * spread; } else if (abs.branchPattern === 'alternating') { da = spread; } else { if (count > 1) da = -spread/2 + i * (spread/(count-1)); }
+                       if (abs.branchPattern === 'random') {
+                           da = (rng() - 0.5) * spread; 
+                       } else if (abs.branchPattern === 'alternating') {
+                           da = spread;
+                       } else {
+                           if (count > 1) da = -spread/2 + i * (spread/(count-1));
+                       }
                        if (abs.angleVariation) da += (rng() - 0.5) * (abs.angleVariation * Math.PI);
                        let len = initLen;
                        if (abs.lengthVariation) len *= (1 + (rng() - 0.5) * abs.lengthVariation);
@@ -1461,28 +1088,19 @@ const App: React.FC = () => {
                    }
 
                    if (shapes.length > 0) {
-                       // Apply global stroke weight scaling to fractal shapes
-                       const strokeScale = 1 + (rendered3DConfig.globalStrokeWeight / 10);
-                       if (strokeScale !== 1) {
-                         shapes.forEach(shape => {
-                           if (shape && typeof shape.scale === 'function') {
-                             shape.scale(strokeScale, strokeScale);
-                           }
-                         });
-                       }
-                       
                        const fractalGeo = new THREE_ACTUAL.ExtrudeGeometry(shapes, extrudeSettings);
                        const angleStep = (Math.PI * 2) / abs.arms;
+                       
                        for(let i=0; i<abs.arms; i++) {
                            const angle = i * angleStep + (abs.rotationOffset * Math.PI / 180);
                            const absInst = fractalGeo.clone();
-                           absInst.translate(0, abs.mirrorOffset/2, centerZOffset);
+                           absInst.translate(0, abs.mirrorOffset/2, -extrudeSettings.depth/2);
                            absInst.rotateZ(angle);
                            layerGeometries.push(absInst);
                            if (abs.mirrorEnabled) {
                                const mir = fractalGeo.clone();
                                mir.scale(1, -1, 1); 
-                               mir.translate(0, -abs.mirrorOffset/2, centerZOffset);
+                               mir.translate(0, -abs.mirrorOffset/2, -extrudeSettings.depth/2);
                                mir.rotateZ(angle);
                                layerGeometries.push(mir);
                            }
@@ -1491,7 +1109,7 @@ const App: React.FC = () => {
                    return;
                }
 
-               // Non-fractal
+               // Non-fractal shapes
                const shapePoints: THREE_ACTUAL.Vector2[] = [];
                const steps = Math.ceil(200 * qMult);
                for(let i=0; i<=steps; i++) {
@@ -1508,43 +1126,38 @@ const App: React.FC = () => {
                        shapePoints.push(new THREE_ACTUAL.Vector2(rCurrent, yVal));
                    }
                }
+
                const createAbstractShape = (pts: THREE_ACTUAL.Vector2[]) => {
                    if (pts.length < 2) return new THREE_ACTUAL.Shape();
                    const s = new THREE_ACTUAL.Shape();
-                   const halfThick = effectiveThickness / 2;
-                   pts.forEach((pt, i) => { if (i === 0) s.moveTo(pt.x, pt.y + halfThick); else s.lineTo(pt.x, pt.y + halfThick); });
-                   for(let i = pts.length-1; i >= 0; i--) { s.lineTo(pts[i].x, pts[i].y - halfThick); }
+                   const halfThick = abs.thickness / 2;
+                   pts.forEach((pt, i) => {
+                       if (i === 0) s.moveTo(pt.x, pt.y + halfThick);
+                       else s.lineTo(pt.x, pt.y + halfThick);
+                   });
+                   for(let i = pts.length-1; i >= 0; i--) {
+                       s.lineTo(pts[i].x, pts[i].y - halfThick);
+                   }
                    s.lineTo(pts[0].x, pts[0].y + halfThick);
                    return s;
                };
+
                const normalShape = createAbstractShape(shapePoints);
-               const abstractKey = makeAbstractKey(layer.id, abs, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight);
-               const normalGeo = getOrCreateGeometry(geometryCache.abstracts, abstractKey + '_normal', () => new THREE_ACTUAL.ExtrudeGeometry(normalShape, extrudeSettings));
+               const normalGeo = new THREE_ACTUAL.ExtrudeGeometry(normalShape, extrudeSettings);
                const mirroredPoints = shapePoints.map((pt) => new THREE_ACTUAL.Vector2(pt.x, -pt.y));
                const mirroredShape = createAbstractShape(mirroredPoints);
-               
-               // Apply global stroke weight scaling to abstract shapes
-               const strokeScale = 1 + (rendered3DConfig.globalStrokeWeight / 10);
-               if (strokeScale !== 1) {
-                 if (normalShape && typeof normalShape.scale === 'function') {
-                   normalShape.scale(strokeScale, strokeScale);
-                 }
-                 if (mirroredShape && typeof mirroredShape.scale === 'function') {
-                   mirroredShape.scale(strokeScale, strokeScale);
-                 }
-               }
-               
-               const mirroredGeo = getOrCreateGeometry(geometryCache.abstracts, abstractKey + '_mirrored', () => new THREE_ACTUAL.ExtrudeGeometry(mirroredShape, extrudeSettings));
+               const mirroredGeo = new THREE_ACTUAL.ExtrudeGeometry(mirroredShape, extrudeSettings);
+
                const angleStep = (Math.PI * 2) / abs.arms;
                for(let i=0; i<abs.arms; i++) {
                    const angle = i * angleStep + (abs.rotationOffset * Math.PI / 180);
                    const absInst = normalGeo.clone();
-                   absInst.translate(0, abs.mirrorOffset/2, centerZOffset);
+                   absInst.translate(0, abs.mirrorOffset/2, -extrudeSettings.depth/2);
                    absInst.rotateZ(angle);
                    layerGeometries.push(absInst);
                    if (abs.mirrorEnabled) {
                        const mir = mirroredGeo.clone();
-                       mir.translate(0, -abs.mirrorOffset/2, centerZOffset);
+                       mir.translate(0, -abs.mirrorOffset/2, -extrudeSettings.depth/2);
                        mir.rotateZ(angle);
                        layerGeometries.push(mir);
                    }
@@ -1560,73 +1173,32 @@ const App: React.FC = () => {
       await updateProgress();
 
       if (layerGeometries.length > 0) {
-        // Merge without boolean (just combine buffers)
         let layerMerged = BufferGeometryUtils.mergeGeometries(layerGeometries);
         if (layerMerged) {
-          // If slots are enabled, we must perform aggressive repair (merging vertices) 
-          // to ensure CSG operations (subtraction) work on manifold geometry.
-          // However, repairGeometry(..., true) destroys the sharp normals generated by ExtrudeGeometry
-          // when edge profile (bevel) is OFF.
-          // Therefore, if slots are disabled (just viewing), we SKIP the initial repair to keep
-          // the visual quality high (sharp caps, smooth walls).
-           // When producing the 3D view we should merge/repair vertices so overlapping
-           // geometry fuses correctly. This reduces visual overlaps and prevents
-           // floating/non-welded faces in the 3D preview and exports.
-           if (rendered3DConfig.slotEnabled || viewMode === '3d') {
-             layerMerged = repairGeometry(layerMerged, 0.0001, true) as THREE_ACTUAL.BufferGeometry;
-           }
-
+          layerMerged = repairGeometry(layerMerged, 0.0001, true) as THREE_ACTUAL.BufferGeometry;
           layerMerged.rotateX(layer.rotation3D.x * Math.PI / 180);
           layerMerged.rotateY(layer.rotation3D.y * Math.PI / 180);
-
+          
           if (rendered3DConfig.slotEnabled) {
-            // Try to use pre-computed slot cuts from cache
-            const cacheKey = hashSlotCut(
-              layer,
-              rendered3DConfig.slotLength,
-              rendered3DConfig.slotWidth,
-              rendered3DConfig.extrusionDepth,
-              rendered3DConfig.bevelEnabled,
-              bevelPerSide,
-              rendered3DConfig.layers,
-              rendered3DConfig.slotMode
-            );
-
-            const cachedCutGeo = slotCutCache.get(cacheKey);
-            if (cachedCutGeo) {
-              // Use cached geometry
-              layerMerged = cachedCutGeo.clone();
-            } else {
-              // Fallback to on-demand computation (shouldn't happen with pre-computation)
-              console.warn('Slot cuts not pre-computed for layer:', layer.id);
-              layerMerged = await applySlotCuts(
-                layerMerged,
-                layer,
+            layerMerged = await applySlotCuts(
+                layerMerged, 
+                layer, 
                 rendered3DConfig.slotLength,
                 rendered3DConfig.slotWidth,
-                rendered3DConfig.extrusionDepth,
-                rendered3DConfig.bevelEnabled,
-                bevelPerSide,
-                rendered3DConfig.layers,
-                async () => { await updateProgress(); },
-                rendered3DConfig.slotMode
-              );
-            }
-
-            // After cuts, we might want to repair again to fix n-gons or loose edges from boolean op
-            const postSlotRepair = repairGeometry(layerMerged, 0.0001, true);
+                rendered3DConfig.extrusionDepth, 
+                rendered3DConfig.bevelEnabled, 
+                rendered3DConfig.bevelAmount, 
+                rendered3DConfig.layers, 
+                csgEvaluator.current,
+                async () => { await updateProgress(); }
+            );
+            const postSlotRepair = repairGeometry(layerMerged, 0.0001, true); 
             if (postSlotRepair) layerMerged = postSlotRepair;
             if (lIdx === 0) layerMerged.rotateZ(Math.PI);
           }
           
-          // Final clean up logic:
-          // If slots are enabled, use the repaired (merged vertices) geometry.
-          // If slots are DISABLED, use the pristine geometry from mergeGeometries which preserves normals.
-          const finalGeo = rendered3DConfig.slotEnabled 
-             ? (repairGeometry(layerMerged, 0.0001, true) || layerMerged)
-             : layerMerged;
-
-          const mesh = new THREE_ACTUAL.Mesh(finalGeo);
+          const finalRepaired = repairGeometry(layerMerged, 0.0001, true); 
+          const mesh = new THREE_ACTUAL.Mesh(finalRepaired || layerMerged);
           mesh.userData.layerId = layer.id;
           mesh.name = layer.name;
           group.add(mesh);
@@ -1635,7 +1207,7 @@ const App: React.FC = () => {
     }
     onProgress(1);
     return group;
-  }, [rendered3DConfig, dynamicFonts, loadFont, viewMode]);
+  }, [rendered3DConfig, dynamicFonts, loadFont]);
 
   const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
@@ -1939,7 +1511,7 @@ const App: React.FC = () => {
         const loaded = JSON.parse(event.target?.result as string);
         setConfig(loaded);
         setConfig3D(loaded);
-        setRendered3DIfChanged(loaded);
+        setRendered3DConfig(loaded);
         setHistory([loaded]);
         setHistoryIndex(0);
         showNotification('Project loaded successfully!', 'success');
@@ -2021,7 +1593,7 @@ const App: React.FC = () => {
         
         setConfig(cleanConfig);
         setConfig3D(cleanConfig);
-        setRendered3DIfChanged(cleanConfig);
+        setRendered3DConfig(cleanConfig);
         
         configContext = cleanConfig;
     }
@@ -2167,7 +1739,7 @@ const App: React.FC = () => {
 
         setAiProgress(100);
         handleUpdateConfig(finalConfig, true);
-        setRendered3DIfChanged(finalConfig);
+        setRendered3DConfig(finalConfig);
         const modeLabel = mode === 'fractal' ? 'Fractal' : (mode === '3d' ? '3D' : '2D');
         showNotification(`Generated random ${modeLabel} design!`, "success");
     }
@@ -2185,43 +1757,11 @@ const App: React.FC = () => {
   }
 };
 
-  useKeyboardShortcuts(shortcuts, {
+  useKeyboardShortcuts({
     undo,
     redo,
-    toggleView: () => {
-      const newMode = viewMode === '2d' ? '3d' : '2d';
-      setViewMode(newMode);
-      // When switching to 3D view, immediately sync the current config to ensure changes are visible
-      if (newMode === '3d') {
-        // Clear any pending debounced updates to avoid conflicts
-        if (debounceTimer.current) {
-          clearTimeout(debounceTimer.current);
-          debounceTimer.current = null;
-        }
-        setRendered3DIfChanged(config);
-      }
-    },
-    forceRegenerate: () => {
-        clearGeometryCache();
-        setRendered3DIfChanged(config);
-        showNotification("Models Regenerated", "info", 1000);
-    },
-    exportCombinedSTL: () => handleExportSTL(),
-    exportBasePlaneSTL: () => handleExportLayerSTL(0),
-    exportCrossPlaneSTL: () => handleExportLayerSTL(1),
-    exportTiltPlaneSTL: () => handleExportLayerSTL(2),
-    saveProject: handleSaveProject,
-    loadProject: handleLoadProject,
-    switchToGlobalTab: () => setActiveTab('global'),
-    switchToTextTab: () => setActiveTab('text'),
-    switchToLetterCtrlTab: () => setActiveTab('Letter Ctrl'),
-    switchToHubsTab: () => setActiveTab('hubs'),
-    switchToAbstractTab: () => setActiveTab('abstract'),
-    switchToPlanesTab: () => setActiveTab('planes'),
-    forceUpdate3D: () => {
-        setRendered3DIfChanged(config);
-        showNotification("3D Model Updated", "info", 1000);
-    }
+    toggleView: () => setViewMode(v => v === '2d' ? '3d' : '2d'),
+    exportSTL: () => handleExportSTL()
   });
 
   return (
@@ -2235,9 +1775,6 @@ const App: React.FC = () => {
                             onProjectNameChange={(n) => handleUpdateConfig({ projectName: n })}
                             onSaveConfig={handleSaveProject}
                             onLoadConfig={handleLoadProject}
-                            shortcuts={shortcuts}
-                            onUpdateShortcuts={(s) => setShortcuts(s)}
-                            onResetShortcuts={() => setShortcuts(DEFAULT_SHORTCUTS)}
                         />
                     </div>
                 </div>
@@ -2264,20 +1801,17 @@ const App: React.FC = () => {
                         onFetchFont={handleFetchFont}
                         onFontUpload={handleFontUpload}
                         dynamicFonts={dynamicFonts}
-                        onAutoConfigureSlots={() => handleUpdateConfig({ layers: calculateOptimalSlots(config.layers, config.slotMode), slotEnabled: true }, true)}
+                        onAutoConfigureSlots={() => handleUpdateConfig({ layers: calculateOptimalSlots(config.layers), slotEnabled: true }, true)}
                         undo={undo}
                         redo={redo}
                         canUndo={canUndo}
                         canRedo={canRedo}
-                        shortcuts={shortcuts}
-                        activeTab={activeTab}
-                        onTabChange={setActiveTab}
                     />
                 </div>
 
                 {/* Preview Area */}
-                <div className="flex-1 relative bg-slate-950 overflow-hidden">
-                    <div className={`absolute inset-0 w-full h-full transition-opacity duration-300 ${viewMode === '2d' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
+                <div className="flex-1 relative bg-slate-950">
+                    {viewMode === '2d' ? (
                         <SnowflakePreview 
                             config={config} 
                             globalColor={config.color} 
@@ -2294,10 +1828,8 @@ const App: React.FC = () => {
                             canUndo={canUndo}
                             canRedo={canRedo}
                             calculatedDiameter={designDiameter} // PASS CALCULATED DIAMETER
-                            shortcuts={shortcuts}
                         />
-                    </div>
-                    <div className={`absolute inset-0 w-full h-full transition-opacity duration-300 ${viewMode === '3d' ? 'opacity-100 z-10' : 'opacity-0 z-0'}`}>
+                    ) : (
                         <Snowflake3D 
                             config={rendered3DConfig} 
                             generateMesh={generateMesh} 
@@ -2307,47 +1839,26 @@ const App: React.FC = () => {
                             canUndo={canUndo} 
                             canRedo={canRedo}
                             initialDiameter={designDiameter} // PASS INITIAL DIAMETER
-                            shortcuts={shortcuts}
-                            isVisible={viewMode === '3d'}
-                            detectFreeFloatingBodies={detectFreeFloatingBodies}
                         />
-                    </div>
+                    )}
                     
                     {/* View Toggle */}
-                    <div className="absolute top-4 right-4 z-50 flex flex-col gap-2">
-                        <div className="flex bg-slate-900/80 rounded-lg p-1 border border-white/10 shadow-lg backdrop-blur">
-                            <button 
-                                onClick={() => setViewMode('2d')} 
-                                className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${viewMode === '2d' ? 'bg-sky-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
-                            >
-                                2D
-                            </button>
-                            <button 
-                                onClick={() => {
-                                  setRendered3DIfChanged(config);
-                                  setViewMode('3d');
-                                }} 
-                                className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${viewMode === '3d' ? 'bg-sky-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
-                            >
-                                3D
-                            </button>
-                        </div>
-                        {/* Free Floating Check Button - only visible in 3D mode */}
-                        {viewMode === '3d' && (
-                            <div className="flex bg-slate-900/80 rounded-lg p-1 border border-white/10 shadow-lg backdrop-blur">
-                                <button
-                                    onClick={() => handleUpdateConfig({ freeFloatingCheck: !config.freeFloatingCheck }, true)}
-                                    className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${
-                                        config.freeFloatingCheck 
-                                            ? 'bg-red-600 text-white shadow-md' 
-                                            : 'text-slate-400 hover:text-white'
-                                    }`}
-                                    title={config.freeFloatingCheck ? "Disable free floating check" : "Check for free floating bodies"}
-                                >
-                                    ✓
-                                </button>
-                            </div>
-                        )}
+                    <div className="absolute top-4 right-4 z-50 flex bg-slate-900/80 rounded-lg p-1 border border-white/10 shadow-lg backdrop-blur">
+                        <button 
+                            onClick={() => setViewMode('2d')} 
+                            className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${viewMode === '2d' ? 'bg-sky-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
+                        >
+                            2D Preview
+                        </button>
+                        <button 
+                            onClick={() => {
+                                setRendered3DConfig(config);
+                                setViewMode('3d');
+                            }} 
+                            className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${viewMode === '3d' ? 'bg-sky-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
+                        >
+                            3D Model
+                        </button>
                     </div>
                 </div>
             </div>
