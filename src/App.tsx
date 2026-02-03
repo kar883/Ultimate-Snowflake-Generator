@@ -1,7 +1,7 @@
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { SnowflakeConfig, TextGroupConfig, HubConfig, CharOffset, LayerConfig, AbstractConfig, DesignQuality, UnderlineConfig, ShortcutConfig } from './types';
-import { CURSIVE_FONTS, FONT_TTF_URLS } from './constants';
+import { CURSIVE_FONTS, FONT_TTF_URLS, BOLD_FONT_URLS, BOLD_FONT_THRESHOLD } from './constants';
 import ControlPanel from './components/ControlPanel';
 import SnowflakePreview from './components/SnowflakePreview';
 import Snowflake3D from './components/Snowflake3D';
@@ -14,11 +14,313 @@ import JSZip from 'jszip';
 import { GoogleGenAI } from "@google/genai";
 // @ts-ignore
 import { postCSGJob } from './csgWorkerManager';
+import { CavalierPathOperations, Polyline } from './cavalierContours';
 import { makeCacheKey, getOrCreateSlotGeometries } from './slotGeometryCache';
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, makeSlotKey, getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, slotCutCache, hashSlotCut, makeUnderlineKey } from './geometryCache';
-import { CavalierPathOperations } from './cavalierContours';
 
 const MAX_HISTORY = 50;
+
+// ============================================================================
+// BOLDNESS HELPER FUNCTIONS COMMENTED OUT - Starting over
+// ============================================================================
+
+/**
+ * Convert SVG path with stroke to actual geometry for extrusion
+ * This creates the exact same visual result as the 2D SVG fill+stroke
+ */
+// function convertSvgPathToGeometry(
+//   pathData: string,
+//   strokeWidth: number,
+//   fontSize: number
+// ): THREE_ACTUAL.Shape[] {
+//   try {
+//     // For a true SVG-to-3D conversion, we would:
+//     // 1. Create an offscreen canvas
+//     // 2. Render the SVG path with fill+stroke
+//     // 3. Use canvas image data to trace the actual rendered pixels
+//     // 4. Convert traced pixels back to vector shapes
+//     
+//     // For now, we'll use the mathematical approach which is very close
+//     // The mathematical approach gives us ~95% accuracy with much better performance
+//     return []; // Placeholder for future canvas-based implementation
+//   } catch (error) {
+//     console.warn('Failed to convert SVG path to geometry:', error);
+//     return [];
+//   }
+// }
+
+/**
+ * Advanced: Render SVG to canvas and trace the result for perfect 2D/3D match
+ * This would give 100% accuracy but is more complex
+ */
+// function createCanvasTracedGeometry(
+//   shapes: THREE_ACTUAL.Shape[],
+//   strokeWidth: number,
+//   fontSize: number
+// ): THREE_ACTUAL.Shape[] {
+//   
+//   // This would:
+//   // 1. Create offscreen canvas
+//   // 2. Render each shape with SVG fill+stroke
+//   // 3. Use edge detection to find boundaries
+//   // 4. Convert pixel boundaries back to vector paths
+//   
+//   // For now, return the mathematical approach which is very accurate
+//   return createSvgMatchedGeometry(shapes, strokeWidth);
+// }
+
+/**
+ * Create geometry that matches SVG fill+stroke exactly
+ * This renders the text as SVG would, then converts to 3D
+ */
+// function createSvgMatchedGeometry(
+//   shapes: THREE_ACTUAL.Shape[],
+//   strokeWidth: number
+// ): THREE_ACTUAL.Shape[] {
+//   
+//   if (strokeWidth <= 0.1) {
+//     return shapes; // No stroke needed
+//   }
+//   
+//   const allShapes: THREE_ACTUAL.Shape[] = [];
+//   
+//   for (const baseShape of shapes) {
+//     // Add the base filled shape (SVG fill)
+//     allShapes.push(baseShape);
+//     
+//     // Create stroke geometry that matches SVG stroke exactly
+//     try {
+//       const extracted = baseShape.extractPoints(64); // Higher resolution for accuracy
+//       const outerPoints = extracted.shape;
+//       
+//       // SVG stroke expands outward by strokeWidth/2 on each side
+//       // So we offset by exactly strokeWidth/2 to match SVG behavior
+//       const offsetOuter = offsetClosedPath(outerPoints, strokeWidth / 2);
+//       
+//       if (offsetOuter && offsetOuter.length >= 3) {
+//         // Create stroke ring: outer expanded, inner is original
+//         const strokeShape = new THREE_ACTUAL.Shape(offsetOuter);
+//         
+//         // The original shape becomes the hole (this matches SVG fill+stroke behavior)
+//         const originalPath = new THREE_ACTUAL.Path(outerPoints);
+//         strokeShape.holes.push(originalPath);
+//         
+//         allShapes.push(strokeShape);
+//       }
+//     } catch (error) {
+//       console.warn('Failed to create SVG-matched stroke geometry:', error);
+//     }
+//   }
+//   
+//   return allShapes;
+// }
+
+/**
+ * Simple closed path offset - handles outer boundaries consistently
+ * This ensures all outer geometry gets the same offset treatment
+ */
+// function offsetClosedPath(
+//   points: THREE_ACTUAL.Vector2[],
+//   distance: number
+// ): THREE_ACTUAL.Vector2[] | null {
+//   
+//   if (points.length < 3) return null;
+//   
+//   const result: THREE_ACTUAL.Vector2[] = [];
+//   const n = points.length;
+//   
+//   // Process each point consistently for outer boundary offset
+//   for (let i = 0; i < n; i++) {
+//     const p0 = points[(i - 1 + n) % n];
+//     const p1 = points[i];
+//     const p2 = points[(i + 1) % n];
+//     
+//     // Calculate edge vectors
+//     const e1x = p1.x - p0.x;
+//     const e1y = p1.y - p0.y;
+//     const e2x = p2.x - p1.x;
+//     const e2y = p2.y - p1.y;
+//     
+//     // Get edge lengths
+//     const e1len = Math.sqrt(e1x * e1x + e1y * e1y) || 0.001;
+//     const e2len = Math.sqrt(e2x * e2x + e2y * e2y) || 0.001;
+//     
+//     // Calculate perpendicular normals (90° rotation)
+//     const n1x = -e1y / e1len;
+//     const n1y = e1x / e1len;
+//     const n2x = -e2y / e2len;
+//     const n2y = e2x / e2len;
+//     
+//     // Average the normals for smooth corners
+//     let avgNx = n1x + n2x;
+//     let avgNy = n1y + n2y;
+//     const avgLen = Math.sqrt(avgNx * avgNx + avgNy * avgNy) || 0.001;
+//     avgNx /= avgLen;
+//     avgNy /= avgLen;
+//     
+//     // Apply consistent offset distance
+//     result.push(new THREE_ACTUAL.Vector2(
+//       p1.x + avgNx * distance,
+//       p1.y + avgNy * distance
+//     ));
+//   }
+//   
+//   return result;
+// }
+
+// ============================================================================
+// BOLDNESS HELPER FUNCTIONS - Using Cavalier Contours for accurate path offsetting
+// ============================================================================
+
+/**
+ * Convert THREE.Shape to Polyline for Cavalier operations
+ */
+function shapeToPolyline(shape: THREE_ACTUAL.Shape): Polyline {
+  const points = shape.getPoints(64);
+  const vertices = points.map(p => ({
+    x: p.x,
+    y: p.y,
+    bulge: 0
+  }));
+  return { vertices, isClosed: true };
+}
+
+/**
+ * Convert THREE.Path to Polyline for Cavalier operations
+ */
+function pathToPolyline(path: THREE_ACTUAL.Path): Polyline {
+  const points = path.getPoints(64);
+  const vertices = points.map(p => ({
+    x: p.x,
+    y: p.y,
+    bulge: 0
+  }));
+  return { vertices, isClosed: false };
+}
+
+/**
+ * Convert Polyline back to THREE.Vector2 array
+ */
+function polylineToPoints(polyline: Polyline): THREE_ACTUAL.Vector2[] {
+  return CavalierPathOperations.polylineToVector2Array(polyline, 16);
+}
+
+/**
+ * Simple path offset by expanding shapes outward
+ * Uses a vertex-normal approach for reliable results
+ */
+function offsetShape(shape: THREE_ACTUAL.Shape, offset: number): THREE_ACTUAL.Shape {
+  const points = shape.getPoints(64);
+  if (points.length < 3) return shape;
+
+  const offsetPoints: THREE_ACTUAL.Vector2[] = [];
+
+  for (let i = 0; i < points.length; i++) {
+    const prev = points[(i - 1 + points.length) % points.length];
+    const curr = points[i];
+    const next = points[(i + 1) % points.length];
+
+    // Calculate edge vectors
+    const dx1 = curr.x - prev.x;
+    const dy1 = curr.y - prev.y;
+    const dx2 = next.x - curr.x;
+    const dy2 = next.y - curr.y;
+
+    // Normalize edge vectors
+    const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1) || 1;
+    const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2) || 1;
+
+    // Calculate normals (perpendicular to edge direction, pointing outward)
+    const nx1 = -dy1 / len1;
+    const ny1 = dx1 / len1;
+    const nx2 = -dy2 / len2;
+    const ny2 = dx2 / len2;
+
+    // Average the two normals for smooth corners
+    let avgNx = (nx1 + nx2) / 2;
+    let avgNy = (ny1 + ny2) / 2;
+
+    // Normalize the average normal
+    const avgLen = Math.sqrt(avgNx * avgNx + avgNy * avgNy) || 1;
+    avgNx /= avgLen;
+    avgNy /= avgLen;
+
+    // Apply offset
+    offsetPoints.push(new THREE_ACTUAL.Vector2(
+      curr.x + avgNx * offset,
+      curr.y + avgNy * offset
+    ));
+  }
+
+  // Create new shape from offset points
+  const newShape = new THREE_ACTUAL.Shape();
+  newShape.moveTo(offsetPoints[0].x, offsetPoints[0].y);
+  for (let i = 1; i < offsetPoints.length; i++) {
+    newShape.lineTo(offsetPoints[i].x, offsetPoints[i].y);
+  }
+  newShape.closePath();
+
+  return newShape;
+}
+
+/**
+ * Apply boldness to shapes using simple path offset
+ * This mimics SVG stroke behavior: expands outward by strokeWidth/2
+ */
+function applyBoldnessToShapes(
+  shapes: THREE_ACTUAL.Shape[],
+  strokeWidth: number
+): THREE_ACTUAL.Shape[] {
+  if (strokeWidth <= 0.1) return shapes;
+
+  // SVG stroke is centered on the path, so it extends strokeWidth/2 on each side
+  const offsetDistance = strokeWidth / 2;
+  const boldedShapes: THREE_ACTUAL.Shape[] = [];
+
+  console.log(`🔧 Boldness: Applying offset of ${offsetDistance} for stroke width ${strokeWidth}`);
+
+  for (const baseShape of shapes) {
+    // Offset the main shape outward
+    const expandedShape = offsetShape(baseShape, offsetDistance);
+
+    // Handle holes - offset them inward (negative offset)
+    for (const hole of baseShape.holes) {
+      // Convert Path to Shape for offsetting, then back to Path
+      const holeShape = new THREE_ACTUAL.Shape();
+      const holePoints = hole.getPoints(32);
+      if (holePoints.length > 0) {
+        holeShape.moveTo(holePoints[0].x, holePoints[0].y);
+        for (let i = 1; i < holePoints.length; i++) {
+          holeShape.lineTo(holePoints[i].x, holePoints[i].y);
+        }
+        holeShape.closePath();
+
+        // Offset hole inward (negative distance)
+        const offsetHoleShape = offsetShape(holeShape, -offsetDistance);
+        const offsetHolePoints = offsetHoleShape.getPoints(32);
+
+        if (offsetHolePoints.length >= 3) {
+          const expandedHole = new THREE_ACTUAL.Path();
+          expandedHole.moveTo(offsetHolePoints[0].x, offsetHolePoints[0].y);
+          for (let i = 1; i < offsetHolePoints.length; i++) {
+            expandedHole.lineTo(offsetHolePoints[i].x, offsetHolePoints[i].y);
+          }
+          expandedHole.closePath();
+          expandedShape.holes.push(expandedHole);
+        }
+      }
+    }
+
+    boldedShapes.push(expandedShape);
+  }
+
+  console.log(`🎨 Boldness applied: ${shapes.length} shapes → ${boldedShapes.length} bolded shapes (stroke: ${strokeWidth}, offset: ${offsetDistance})`);
+  return boldedShapes.length > 0 ? boldedShapes : shapes;
+}
+
+// ============================================================================
+// END BOLDNESS FUNCTIONS
+// ============================================================================
 
 const DEFAULT_SHORTCUTS: ShortcutConfig = {
     undo: { key: 'z', ctrlKey: true },
@@ -1085,12 +1387,31 @@ const App: React.FC = () => {
       
       const processTextGroup = async (textGroup: TextGroupConfig) => {
         if (!textGroup.enabled) return;
-        
+
         const fontName = textGroup.fontFamily.replace(/'/g, '').split(',')[0].trim();
         const url = dynamicFonts[fontName] || FONT_TTF_URLS[fontName];
-        
+
         try {
-          const font = await loadFont(fontName, url);
+          let font = await loadFont(fontName, url);
+
+          // BOLD FONT VARIANT FALLBACK (E part of B+E)
+          // If high stroke weight and bold variant available, try loading it
+          const totalStrokeWeight = (rendered3DConfig.globalStrokeWeight || 0) + (textGroup.thickness || 0);
+          const boldUrl = BOLD_FONT_URLS[fontName];
+
+          if (totalStrokeWeight >= BOLD_FONT_THRESHOLD && boldUrl) {
+            try {
+              console.log(`🎯 Attempting bold font variant for ${fontName}`);
+              const boldFont = await loadFont(`${fontName}-Bold`, boldUrl);
+              if (boldFont) {
+                font = boldFont;
+                console.log(`✅ Using bold font variant for ${fontName}`);
+              }
+            } catch (boldError) {
+              console.warn(`⚠️ Bold font variant failed for ${fontName}, using regular with path offsetting`);
+            }
+          }
+
           if (font) {
             const scale = textGroup.fontSize / font.unitsPerEm;
             const glyphs = font.stringToGlyphs(textGroup.text);
@@ -1114,68 +1435,46 @@ const App: React.FC = () => {
               currentX += (glyph.advanceWidth * scale) + textGroup.letterSpacing;
             });
 
-            // ============================================================================
-            // FIX: Apply boldness offset using Cavalier Contours algorithm
-            // This creates the exact visual match between 2D stroke and 3D geometry
-            // ============================================================================
-            const totalStrokeWeight = (rendered3DConfig.globalStrokeWeight || 0) + (textGroup.thickness || 0);
-            
-            // Only apply offset if boldness is significant enough to be visible
-            // This prevents unnecessary processing for small values
-            if (totalStrokeWeight > 0.3) { // Increased threshold from 0.1 to 0.3
-              const offsetShapes: THREE_ACTUAL.Shape[] = [];
-              
-              // Process shapes in smaller batches to prevent freezing
-              const batchSize = 3; // Process 3 shapes at a time
-              for (let i = 0; i < shapes.length; i += batchSize) {
-                const batch = shapes.slice(i, i + batchSize);
-                
-                for (const shape of batch) {
-                  try {
-                    // Use fewer points for better performance
-                    const points = shape.getPoints(20); // Reduced from 50 for performance
-                    
-                    // Convert to polyline format for Cavalier processing
-                    const polyline = CavalierPathOperations.vector2ArrayToPolyline(points, true);
-                    
-                    // Apply parallel offset - SVG stroke expands equally on both sides,
-                    // so we use half the stroke weight as the offset distance
-                    const offsetDistance = totalStrokeWeight / 2;
-                    const offsetPolylines = CavalierPathOperations.parallelOffset([polyline], offsetDistance);
-                    
-                    // Convert the offset polylines back to THREE.Shape objects
-                    for (const offsetPline of offsetPolylines) {
-                      const offsetPoints = CavalierPathOperations.polylineToVector2Array(offsetPline, 15); // Reduced from 30 for performance
-                      
-                      if (offsetPoints.length > 2) {
-                        const offsetShape = new THREE_ACTUAL.Shape(offsetPoints);
-                        offsetShapes.push(offsetShape);
-                      }
-                    }
-                  } catch (error) {
-                    console.warn('Failed to offset shape, using original:', error);
-                    // Fallback: use the original shape if offset fails
-                    offsetShapes.push(shape);
-                  }
-                }
-                
-                // Yield control back to the browser periodically to prevent freezing
-                if (i + batchSize < shapes.length) {
-                  await new Promise(resolve => setTimeout(resolve, 0));
-                }
-              }
-              
-              // Replace the original shapes with the offset (bold) shapes
-              if (offsetShapes.length > 0) {
-                shapes = offsetShapes;
-              }
-            }
-            // ============================================================================
-            // END FIX
-            // ============================================================================
+            // ==================================================================
+            // BOLDNESS PROCESSING - Using bevel expansion for valid geometry
+            // ==================================================================
+            // Calculate boldness bevel amount (strokeWidth/2 mimics SVG stroke centered on path)
+            const boldnessBevel = totalStrokeWeight > 0.1 ? totalStrokeWeight / 2 : 0;
+            const shouldApplyBoldness = totalStrokeWeight > 0.1 && !(totalStrokeWeight >= BOLD_FONT_THRESHOLD && boldUrl);
 
+            console.log('🎨 Boldness check:', {
+              totalStrokeWeight,
+              BOLD_FONT_THRESHOLD,
+              boldUrl: boldUrl || 'none',
+              shouldApplyBoldness,
+              boldnessBevel,
+              shapeCount: shapes.length
+            });
+
+            // Create extrude settings with boldness bevel added to regular bevel
+            const textExtrudeSettings = {
+              ...extrudeSettings,
+              bevelEnabled: true, // Always enable when boldness is applied
+              bevelThickness: bevelPerSide + boldnessBevel,
+              bevelSize: bevelPerSide + boldnessBevel,
+              bevelSegments: Math.max(2, bevelSegCap), // Ensure enough segments for smoothness
+            };
+
+            if (shouldApplyBoldness) {
+              console.log('🎨 Applying boldness via bevel expansion:', {
+                globalStrokeWeight: rendered3DConfig.globalStrokeWeight,
+                textThickness: textGroup.thickness,
+                total: totalStrokeWeight,
+                boldnessBevel,
+                finalBevelSize: textExtrudeSettings.bevelSize
+              });
+            }
+            // ==================================================================
+
+            // Create base geometry once (before arm duplication)
+            // PERFORMANCE: This creates fill+stroke geometry ONCE per text group, then duplicates for arms
             const textKey = makeTextKey(layer.id, textGroup, textGroup.fontSize, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight);
-            const groupGeo = getOrCreateGeometry(geometryCache.text, textKey, () => new THREE_ACTUAL.ExtrudeGeometry(shapes, extrudeSettings));
+            const baseGroupGeo = getOrCreateGeometry(geometryCache.text, textKey, () => new THREE_ACTUAL.ExtrudeGeometry(shapes, textExtrudeSettings));
             
             // Underline Logic
             const uConf = textGroup.underline;
@@ -1291,74 +1590,92 @@ const App: React.FC = () => {
                 }
             }
             
-            // Apply the same offset to underlines if needed
-            if (underlineShapes.length > 0 && totalStrokeWeight > 0.3) { // Match the increased threshold
-              const offsetUnderlineShapes: THREE_ACTUAL.Shape[] = [];
-              
-              // Process underlines in batches too
-              const batchSize = 2;
-              for (let i = 0; i < underlineShapes.length; i += batchSize) {
-                const batch = underlineShapes.slice(i, i + batchSize);
-                
-                for (const shape of batch) {
-                  try {
-                    const points = shape.getPoints(15); // Reduced for performance
-                    const polyline = CavalierPathOperations.vector2ArrayToPolyline(points, true);
-                    const offsetPolylines = CavalierPathOperations.parallelOffset([polyline], totalStrokeWeight / 2);
-                    
-                    for (const offsetPline of offsetPolylines) {
-                      const offsetPoints = CavalierPathOperations.polylineToVector2Array(offsetPline, 10); // Reduced for performance
-                      if (offsetPoints.length > 2) {
-                        const offsetShape = new THREE_ACTUAL.Shape(offsetPoints);
-                        offsetUnderlineShapes.push(offsetShape);
-                      }
-                    }
-                  } catch (error) {
-                    console.warn('Failed to offset underline, using original:', error);
-                    offsetUnderlineShapes.push(shape);
-                  }
-                }
-                
-                // Yield control for underlines too
-                if (i + batchSize < underlineShapes.length) {
-                  await new Promise(resolve => setTimeout(resolve, 0));
-                }
-              }
-              
-              if (offsetUnderlineShapes.length > 0) {
-                underlineShapes = offsetUnderlineShapes;
-              }
-            }
-            
             let underlineGeo = null;
             if (underlineShapes.length > 0) {
                 const underlineKey = makeUnderlineKey(layer.id, textGroup, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide);
                 underlineGeo = getOrCreateGeometry(geometryCache.text, underlineKey, () => new THREE_ACTUAL.ExtrudeGeometry(underlineShapes, extrudeSettings));
             }
 
+            // ==================================================================
+            // OPTIMIZED ARM GENERATION: Create one arm, clone and rotate for others
+            // ==================================================================
             const angleStep = (Math.PI * 2) / textGroup.arms;
-            
-            // Center the extrusion on Z-axis
             const centerZOffset = -extrudeSettings.depth / 2;
+            const baseRotation = textGroup.rotationOffset * Math.PI / 180;
 
+            // Pre-transform the base geometry for ONE arm (position 0)
+            // This combines the text positioning and initial rotation
+            const armGeo = baseGroupGeo.clone();
+            armGeo.translate(textGroup.textX, textGroup.mirrorOffset / 2, centerZOffset);
+            armGeo.rotateX(Math.PI);
+            armGeo.rotateZ(-baseRotation); // Apply base rotation
+
+            // Generate all arms by cloning and rotating the pre-transformed geometry
             for (let i = 0; i < textGroup.arms; i++) {
-              const angle = i * angleStep + (textGroup.rotationOffset * Math.PI / 180);
-              const inst = groupGeo.clone();
-              inst.translate(textGroup.textX, textGroup.mirrorOffset / 2, centerZOffset);
-              inst.rotateX(Math.PI); inst.rotateZ(-angle);
+              const armAngle = i * angleStep;
+
+              // Clone the pre-transformed arm geometry
+              const inst = armGeo.clone();
+
+              // Apply additional rotation for this arm
+              if (i > 0) {
+                inst.rotateZ(-armAngle);
+              }
+
               layerGeometries.push(inst);
+
+              // Add mirrored version if enabled
+              // Mirroring in 2D: scale(1, -1) - flip Y axis
               if (textGroup.mirrorEnabled) {
-                const mirrored = groupGeo.clone();
-                mirrored.translate(textGroup.textX, -textGroup.mirrorOffset / 2, centerZOffset);
-                mirrored.rotateZ(-angle); layerGeometries.push(mirrored);
+                const mirrored = armGeo.clone();
+                // Apply Y-flip (scale 1, -1, 1) to mirror across X axis
+                // Then translate to mirror position
+                mirrored.scale(1, -1, 1);
+                mirrored.translate(0, -textGroup.mirrorOffset, 0);
+
+                if (i > 0) {
+                  mirrored.rotateZ(-armAngle);
+                }
+
+                layerGeometries.push(mirrored);
               }
-              if (underlineGeo) {
-                  const uInst = underlineGeo.clone();
-                  uInst.translate(0, 0, centerZOffset);
-                  uInst.rotateX(Math.PI);
-                  uInst.rotateZ(-angle);
-                  layerGeometries.push(uInst);
+            }
+
+            // Clean up the temporary armGeo
+            armGeo.dispose();
+
+            // Underline logic - same optimization pattern
+            if (underlineGeo) {
+              const underlineArmGeo = underlineGeo.clone();
+              underlineArmGeo.translate(0, 0, centerZOffset);
+              underlineArmGeo.rotateX(Math.PI);
+              underlineArmGeo.rotateZ(-baseRotation);
+
+              for (let i = 0; i < textGroup.arms; i++) {
+                const armAngle = i * angleStep;
+                const uInst = underlineArmGeo.clone();
+
+                if (i > 0) {
+                  uInst.rotateZ(-armAngle);
+                }
+
+                // Add mirrored underline if enabled
+                if (textGroup.mirrorEnabled) {
+                  const uMirrored = underlineArmGeo.clone();
+                  uMirrored.scale(1, -1, 1);
+                  uMirrored.translate(0, -textGroup.mirrorOffset, 0);
+
+                  if (i > 0) {
+                    uMirrored.rotateZ(-armAngle);
+                  }
+
+                  layerGeometries.push(uMirrored);
+                }
+
+                layerGeometries.push(uInst);
               }
+
+              underlineArmGeo.dispose();
             }
           }
         } catch (error) {

@@ -42,3 +42,12 @@ export const FONT_TTF_URLS: Record<string, string> = {
 };
 
 export const MM_TO_PX = 3.7795275591;
+
+// Bold font variants - fonts that support weight variations
+// Dancing Script is a variable font [wght] axis from 400-700
+export const BOLD_FONT_URLS: Record<string, string> = {
+  'Dancing Script': 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/dancingscript/DancingScript%5Bwght%5D.ttf',
+};
+
+// Minimum stroke weight to trigger bold font variant fallback
+export const BOLD_FONT_THRESHOLD = 2.0;
