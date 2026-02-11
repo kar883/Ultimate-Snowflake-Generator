@@ -24,8 +24,13 @@ export const slotCutCache = new Map<string, THREE.BufferGeometry>();
 // Simple hash function for config objects
 export function hashConfig(config: any): string {
   // Create a deterministic string representation of the config
+  // CRITICAL FIX: Exclude 'enabled' property from layers to prevent cache invalidation
+  // when just toggling layer visibility
   const relevantConfig = {
-    layers: config.layers,
+    layers: config.layers.map((layer: any) => {
+      const { enabled, ...layerWithoutEnabled } = layer;
+      return layerWithoutEnabled;
+    }),
     extrusionDepth: config.extrusionDepth,
     bevelEnabled: config.bevelEnabled,
     bevelType: config.bevelType,
@@ -38,11 +43,19 @@ export function hashConfig(config: any): string {
     syncAllLayers: config.syncAllLayers,
     globalStrokeWeight: config.globalStrokeWeight
   };
-  return JSON.stringify(relevantConfig);
+  // Use a stable stringify that sorts object keys so identical configs
+  // always produce the same hash regardless of property order.
+  const stableStringify = (obj: any): string => {
+    if (obj === null || typeof obj !== 'object') return JSON.stringify(obj);
+    if (Array.isArray(obj)) return '[' + obj.map(stableStringify).join(',') + ']';
+    const keys = Object.keys(obj).sort();
+    return '{' + keys.map(k => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',') + '}';
+  };
+  return stableStringify(relevantConfig);
 }
 
 // Hash function for slot-cut specific parameters
-export function hashSlotCut(layer: any, slotLength: number, slotWidth: number, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, allLayers: any[]): string {
+export function hashSlotCut(layer: any, slotLength: number, slotWidth: number, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, allLayers: any[], slotMode?: '2-plane' | '3-plane'): string {
   const relevantData = {
     layerId: layer.id,
     layerConfig: layer,
@@ -51,16 +64,17 @@ export function hashSlotCut(layer: any, slotLength: number, slotWidth: number, e
     extrusionDepth,
     bevelEnabled,
     bevelAmount,
-    allLayers: allLayers.map(l => ({ id: l.id, enabled: l.enabled, rotation3D: l.rotation3D, slotType: l.slotType }))
+    slotMode,
+    allLayers: Array.isArray(allLayers) ? allLayers.map(l => ({ id: l.id, enabled: l.enabled, rotation3D: l.rotation3D, slotType: l.slotType })) : []
   };
   return JSON.stringify(relevantData);
 }
 
 // Helper to generate cache key for text geometries
-export function makeTextKey(layerId: string, textGroup: any, fontSize: number, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, globalStrokeWeight: number, textStrokeWeight: number): string {
+export function makeTextKey(layerId: string, textGroup: any, fontSize: number, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, globalStrokeWeight: number): string {
   const underline = textGroup.underline;
   const underlineStr = underline ? `${underline.enabled}_${underline.thickness}_${underline.startXOffset}_${underline.length}_${underline.yOffset}_${underline.capType}_${underline.capWidth}` : 'none';
-  return `${layerId}::text::${textGroup.text}::${textGroup.fontFamily}::${fontSize}::${extrusionDepth}::${bevelEnabled}::${bevelAmount}::${textGroup.arms}::${textGroup.mirrorEnabled}::${textGroup.mirrorOffset}::${textGroup.textX}::${textGroup.letterSpacing}::${underlineStr}::${globalStrokeWeight}::${textStrokeWeight}`;
+  return `${layerId}::text::${textGroup.text}::${textGroup.fontFamily}::${fontSize}::${extrusionDepth}::${bevelEnabled}::${bevelAmount}::${textGroup.arms}::${textGroup.mirrorEnabled}::${textGroup.mirrorOffset}::${textGroup.textX}::${textGroup.letterSpacing}::${textGroup.thickness}::${underlineStr}::${globalStrokeWeight}`;
 }
 
 // Helper to generate cache key for underline geometries

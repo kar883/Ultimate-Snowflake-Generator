@@ -144,7 +144,7 @@ const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose, config
                         ].map(lang => (
                             <button 
                                 key={lang.code} 
-                                onClick={() => onLanguageChange && onLanguageChange(lang.code)} 
+                                onClick={() => onLanguageChange(lang.code)} 
                                 className={`py-1.5 text-[10px] font-black uppercase rounded transition-all ${language === lang.code ? 'bg-sky-500 text-white' : 'text-slate-500 hover:text-slate-300'}`}
                             >
                                 {t(lang.name)}
@@ -153,7 +153,7 @@ const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose, config
                     </div>
                 </div>
                 {language !== 'en' && (
-                    <button onClick={() => onLanguageChange && onLanguageChange('en')} className="text-[10px] text-slate-500 hover:text-rose-400 transition-colors ml-3">{t('reset')}</button>
+                    <button onClick={() => onLanguageChange('en')} className="text-[10px] text-slate-500 hover:text-rose-400 transition-colors ml-3">{t('reset')}</button>
                 )}
             </div>
         </div>

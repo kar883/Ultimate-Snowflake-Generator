@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import ShortcutsModal from './ShortcutsModal';
 import { ShortcutConfig } from '../types';
+import { useTranslation } from '../translations';
 
 interface HeaderProps {
   projectName?: string;
@@ -13,9 +14,10 @@ interface HeaderProps {
   shortcuts?: ShortcutConfig;
   onUpdateShortcuts?: (config: ShortcutConfig) => void;
   onResetShortcuts?: () => void;
-  // Language and tooltips settings
+  // Language props
   language?: string;
   onLanguageChange?: (lang: string) => void;
+  // Tooltips props
   showTooltips?: boolean;
   onTooltipsChange?: (show: boolean) => void;
 }
@@ -35,6 +37,7 @@ const Header: React.FC<HeaderProps> = ({
   showTooltips,
   onTooltipsChange
 }) => {
+  const { t } = useTranslation(language || 'en');
   const [localName, setLocalName] = useState(projectName);
   const [showSettings, setShowSettings] = useState(false);
 
@@ -106,7 +109,7 @@ const Header: React.FC<HeaderProps> = ({
             className="h-full bg-slate-900 border border-white/10 rounded-lg px-3 text-xs font-bold text-right text-white placeholder-slate-600 focus:border-sky-500 focus:ring-1 focus:ring-sky-500 outline-none w-full transition-all"
             />
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[9px] font-black text-slate-600 uppercase pointer-events-none">
-            Project
+            {t('Save My Project').split(' ')[0]}
             </span>
           </div>
 
@@ -125,13 +128,13 @@ const Header: React.FC<HeaderProps> = ({
             onClick={onSaveConfig} 
             className="h-9 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-[10px] font-black uppercase tracking-wider border border-white/5 transition-all"
           >
-            Save
+            {t('Save')}
           </button>
           <button 
             onClick={onLoadConfig} 
             className="h-9 px-4 bg-slate-800 hover:bg-slate-700 text-sky-400 hover:text-sky-300 rounded-lg text-[10px] font-black uppercase tracking-wider border border-white/5 transition-all"
           >
-            Load
+            {t('Load')}
           </button>
         </div>
       </div>

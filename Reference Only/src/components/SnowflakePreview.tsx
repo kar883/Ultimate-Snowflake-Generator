@@ -5,6 +5,7 @@ import { FONT_TTF_URLS } from '../constants';
 import opentype from 'opentype.js';
 import { InfoTooltip } from './Tooltip';
 import { modelCache2D, hashConfig } from '../geometryCache';
+import { useTranslation } from '../translations';
 
 interface SnowflakePreviewProps {
   config: SnowflakeConfig; 
@@ -36,13 +37,26 @@ const seededRandom = (seed: number) => {
 const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({ 
   config, globalColor, globalBevel, globalBevelAmount, slotEnabled, slotLength, slotWidth, svgRef, dynamicFonts, undo, redo, canUndo, canRedo, calculatedDiameter, shortcuts
 }) => {
+  const { t } = useTranslation(config.language || 'en');
   const [fonts, setFonts] = useState<Record<string, opentype.Font>>({});
   const [viewTransform, setViewTransform] = useState({ x: 0, y: 0, scale: 1.8 });
   const [containerSize, setContainerSize] = useState({ width: 800, height: 800 });
   const [cachedSvgContent, setCachedSvgContent] = useState<string | null>(null);
   const [isGeneratingSvg, setIsGeneratingSvg] = useState(false);
   
-  const modelDiameter = calculatedDiameter || 200;
+  const modelDiameter = useMemo(() => {
+    const calculated = Math.round((calculatedDiameter || 200) * 10) / 10; // Round to 1 decimal place
+    
+    // Use diameter mode to determine final diameter
+    if (config.diameterMode === 'fixed-size') {
+      // Use the configured outer radius from the active layer
+      const activeLayer = config.layers[config.activeLayerIndex];
+      const configuredDiameter = activeLayer.outerRadius * 2;
+      return Math.min(calculated, configuredDiameter);
+    }
+    
+    return calculated;
+  }, [calculatedDiameter, config.diameterMode, config.layers, config.activeLayerIndex]);
 
   const isDragging = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
@@ -52,8 +66,9 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   const enabledLayers = useMemo(() => config.layers.filter(l => l.enabled), [config.layers]);
 
   const layerSpacing = useMemo(() => {
-      const slotRequirement = slotEnabled ? (slotLength + (modelDiameter / 2) + 150) : 0;
-      const diameterRequirement = modelDiameter + 100;
+      const safeModelDiameter = isNaN(modelDiameter) || modelDiameter === null || modelDiameter === undefined ? 200 : modelDiameter;
+      const slotRequirement = slotEnabled ? (slotLength + (safeModelDiameter / 2) + 150) : 0;
+      const diameterRequirement = safeModelDiameter + 100;
       return Math.max(400, diameterRequirement, slotRequirement);
   }, [modelDiameter, slotEnabled, slotLength]);
 
@@ -62,9 +77,10 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
     
     const count = enabledLayers.length;
     const effectiveCount = Math.max(1, count);
+    const safeModelDiameter = isNaN(modelDiameter) || modelDiameter === null || modelDiameter === undefined ? 200 : modelDiameter;
 
-    const totalWidth = (Math.max(0, effectiveCount - 1) * layerSpacing) + Math.max(300, modelDiameter);
-    const totalHeight = Math.max(350, modelDiameter + 100); 
+    const totalWidth = (Math.max(0, effectiveCount - 1) * layerSpacing) + Math.max(300, safeModelDiameter);
+    const totalHeight = Math.max(350, safeModelDiameter + 100); 
     
     const fitScaleX = (containerSize.width * 0.9) / totalWidth;
     const fitScaleY = (containerSize.height * 0.9) / totalHeight;
@@ -187,17 +203,19 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
             glyphs.forEach((glyph, i) => {
                 const offset = group.charOffsets[i] || { x: 0, y: 0 };
                 const path = glyph.getPath(currentX + offset.x, offset.y, group.fontSize);
-                d += path.toPathData(2) + " ";
+                d += path.toPathData(Math.max(4, config.quality === 'high' ? 8 : config.quality === 'med' ? 6 : 4)) + " ";
                 currentX += (glyph.advanceWidth * scale) + group.letterSpacing;
             });
             const angleStep = 360 / group.arms;
             const instances = [];
             for (let i = 0; i < group.arms; i++) {
-                const angle = i * angleStep + group.rotationOffset;
-                // Calculate total stroke weight (global + text group specific) to match 3D rendering
-                const strokeWidth = (config.globalStrokeWeight || 0) + (group.thickness || 0);
-                instances.push(<g key={`arm-${i}`} transform={`rotate(${angle}) translate(${group.textX}, ${group.mirrorOffset / 2})`}><path d={d} fill={color} stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" /></g>);
-                if (group.mirrorEnabled) { instances.push(<g key={`arm-mirror-${i}`} transform={`rotate(${angle}) translate(${group.textX}, ${-group.mirrorOffset / 2}) scale(1, -1)`}><path d={d} fill={color} stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" /></g>); }
+              const safeRotationOffset = isNaN(group.rotationOffset) || group.rotationOffset === null || group.rotationOffset === undefined ? 0 : group.rotationOffset;
+              const angle = i * angleStep + safeRotationOffset;
+              const strokeWidth = (config.globalStrokeWeight || 0) + (group.thickness || 0);
+              const safeTextX = isNaN(group.textX) || group.textX === null || group.textX === undefined ? 0 : group.textX;
+              const safeMirrorOffset = isNaN(group.mirrorOffset) || group.mirrorOffset === null || group.mirrorOffset === undefined ? 0 : group.mirrorOffset;
+              instances.push(<g key={`arm-${i}`} transform={`rotate(${angle}) translate(${safeTextX}, ${safeMirrorOffset / 2})`}><path d={d} fill={color} stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" /></g>);
+              if (group.mirrorEnabled) { instances.push(<g key={`arm-mirror-${i}`} transform={`rotate(${angle}) translate(${safeTextX}, ${-safeMirrorOffset / 2}) scale(1, -1)`}><path d={d} fill={color} stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" /></g>); }
             }
             textPaths = <g>{instances}</g>;
         }
@@ -233,7 +251,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
             }
             holeD += "Z"; d += " " + holeD;
         }
-        return <g key={`hub-${idx}`} transform={`rotate(${hub.rotationOffset})`}><path d={d} fill={color} fillRule="evenodd" stroke={color} strokeWidth={config.globalStrokeWeight} /></g>;
+        return <g key={`hub-${idx}`} transform={`rotate(${hub.rotationOffset || 0})`}><path d={d} fill={color} fillRule="evenodd" stroke={color} strokeWidth={config.globalStrokeWeight} /></g>;
     });
   };
 
@@ -315,12 +333,10 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
                   generateBranch(startX, startY, da, len, currentWidth, startDepth);
               }
               const angleStep = 360 / abs.arms; const arms = [];
-              // Calculate total stroke weight (global + abstract thickness) to match 3D rendering
-              const strokeWidth = (config.globalStrokeWeight || 0) + (abs.thickness || 0);
               for(let i=0; i<abs.arms; i++) {
                   const angle = i * angleStep + abs.rotationOffset;
-                  arms.push(<g key={`fract-arm-${i}`} transform={`rotate(${angle}) translate(0, ${abs.mirrorOffset/2})`}>{polygons.map((d, idx) => (<path key={idx} d={d} fill={color} stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" />))}</g>);
-                  if (abs.mirrorEnabled) { arms.push(<g key={`fract-arm-mirror-${i}`} transform={`rotate(${angle}) translate(0, ${-abs.mirrorOffset/2}) scale(1, -1)`}>{polygons.map((d, idx) => (<path key={idx} d={d} fill={color} stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" />))}</g>); }
+                  arms.push(<g key={`fract-arm-${i}`} transform={`rotate(${angle}) translate(0, ${abs.mirrorOffset/2})`}>{polygons.map((d, idx) => (<path key={idx} d={d} fill={color} stroke={color} strokeWidth={config.globalStrokeWeight} strokeLinejoin="round" />))}</g>);
+                  if (abs.mirrorEnabled) { arms.push(<g key={`fract-arm-mirror-${i}`} transform={`rotate(${angle}) translate(0, ${-abs.mirrorOffset/2}) scale(1, -1)`}>{polygons.map((d, idx) => (<path key={idx} d={d} fill={color} stroke={color} strokeWidth={config.globalStrokeWeight} strokeLinejoin="round" />))}</g>); }
               }
               return <g key={`abs-${idx}`}>{arms}</g>;
           }
@@ -337,12 +353,10 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
           for(let i=points.length-1; i>=0; i--) lineD += `L ${points[i].x} ${points[i].y - abs.thickness/2} `;
           lineD += "Z";
           const angleStep = 360 / abs.arms; const arms = [];
-          // Calculate total stroke weight (global + abstract thickness) to match 3D rendering
-          const strokeWidth = (config.globalStrokeWeight || 0) + (abs.thickness || 0);
           for(let i=0; i<abs.arms; i++) {
-              const angle = i * angleStep + abs.rotationOffset;
-              arms.push(<g key={`abs-arm-${i}`} transform={`rotate(${angle}) translate(0, ${abs.mirrorOffset/2})`}><path d={lineD} fill={color} stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" /></g>);
-              if (abs.mirrorEnabled) { arms.push(<g key={`abs-arm-mirror-${i}`} transform={`rotate(${angle}) translate(0, ${-abs.mirrorOffset/2}) scale(1, -1)`}><path d={lineD} fill={color} stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" /></g>); }
+              const angle = i * angleStep + (abs.rotationOffset || 0);
+              arms.push(<g key={`abs-arm-${i}`} transform={`rotate(${angle}) translate(0, ${abs.mirrorOffset/2})`}><path d={lineD} fill={color} stroke={color} strokeWidth={config.globalStrokeWeight} /></g>);
+              if (abs.mirrorEnabled) { arms.push(<g key={`abs-arm-mirror-${i}`} transform={`rotate(${angle}) translate(0, ${-abs.mirrorOffset/2}) scale(1, -1)`}><path d={lineD} fill={color} stroke={color} strokeWidth={config.globalStrokeWeight} /></g>); }
           }
           return <g key={`abs-${idx}`}>{arms}</g>;
       });
@@ -350,12 +364,18 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
 
   const renderSlotPreview = (layer: LayerConfig, layerIndex: number, enabledLayers: LayerConfig[], slotLength: number, slotWidth: number) => {
     if (!slotEnabled || layer.slotType === 'none') return null;
-    const rotationOffset = layer.primary.rotationOffset;
+    const rotationOffset = layer.primary?.rotationOffset || 0;
     const numPlanes = enabledLayers.length;
     const adjLength = slotLength + (layer.slotLengthAdjustment || 0);
     const adjWidth = slotWidth + (layer.slotWidthOffset || 0);
     const visualExtension = (modelDiameter / 2) + 20; 
     const drawLength = Math.max(adjLength, visualExtension);
+    
+    // Validate inputs to prevent NaN
+    if (!isFinite(rotationOffset) || !isFinite(adjLength) || !isFinite(adjWidth)) {
+      console.warn('Invalid slot preview parameters:', { rotationOffset, adjLength, adjWidth });
+      return null;
+    }
     if (numPlanes === 2) {
       const angle = rotationOffset; const angleRad = angle * Math.PI / 180;
       const x2 = Math.cos(angleRad) * drawLength; const y2 = Math.sin(angleRad) * drawLength;
@@ -394,7 +414,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
     >
       <div className="absolute top-4 left-4 z-10 pointer-events-none">
           <div className="bg-slate-900/80 backdrop-blur px-3 py-2 rounded-lg border border-white/10 shadow-lg">
-             <span className="text-[10px] font-black uppercase text-slate-500 block mb-0.5">Diameter</span>
+             <span className="text-[10px] font-black uppercase text-slate-500 block mb-0.5">{t('Diameter')}</span>
              <span className="text-xl font-bold text-white leading-none">{modelDiameter.toFixed(1)} <span className="text-sm text-sky-500">mm</span></span>
           </div>
       </div>
@@ -405,13 +425,14 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
         <rect width="100%" height="100%" fill="url(#grid)" />
         <g transform={`translate(${centerX + viewTransform.x}, ${centerY + viewTransform.y}) scale(${viewTransform.scale})`}>
           {enabledLayers.map((layer, index) => {
-            const offsetX = (index - (enabledLayers.length - 1) / 2) * layerSpacing;
+            const safeLayerSpacing = isNaN(layerSpacing) || layerSpacing === null || layerSpacing === undefined ? 400 : layerSpacing;
+            const offsetX = (index - (enabledLayers.length - 1) / 2) * safeLayerSpacing;
             const layerColor = globalColor;
             const zRotation = (slotEnabled && index === 0) ? 180 : 0;
             return (
               <g key={layer.id} transform={`translate(${offsetX}, 0)`}>
-                <circle cx="0" cy="0" r="95" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="1" strokeDasharray="5,5" className="group"><title>Reference Radius (95mm)&#10;This dotted line shows the standard size for a snowflake arm.</title></circle>
-                <text x="0" y="-115" textAnchor="middle" fill="#94a3b8" fontSize="16" fontWeight="bold" style={{ textTransform: 'uppercase', letterSpacing: '0.1em' }}>{layer.name}</text>
+                <circle cx="0" cy="0" r="95" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="1" strokeDasharray="5,5" className="group"><title>{t('Reference Radius')} (95mm)&#10;This dotted line shows the standard size for a snowflake arm.</title></circle>
+                <text x="0" y="-115" textAnchor="middle" fill="#94a3b8" fontSize="16" fontWeight="bold" style={{ textTransform: 'uppercase', letterSpacing: '0.1em' }}>{t(layer.name)}</text>
                 <g transform={`scale(1, -1) rotate(${zRotation})`}>
                   <circle cx="0" cy="0" r="2" fill="#ef4444" />
                   {renderHubs(layer.hubs, layerColor)}
@@ -426,10 +447,10 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
         </g>
       </svg>
       <div className="absolute bottom-8 right-8 z-20">
-         <InfoTooltip label="Reset View" placement="left" description="Reset the 2D view to fit the content.">
-             <button onClick={handleResetView} className="p-6 bg-slate-900/80 hover:bg-sky-500 text-white rounded-[2rem] border border-white/10 shadow-2xl backdrop-blur-xl transition-all active:scale-90 group">
+         <InfoTooltip label={t('Reset View')} placement="left" description={t('Reset View_desc')}>
+            <button onClick={handleResetView} className="p-6 bg-slate-900/80 hover:bg-sky-500 text-white rounded-[2rem] border border-white/10 shadow-2xl backdrop-blur-xl transition-all active:scale-90 group">
                 <svg className="w-6 h-6 group-hover:scale-110 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>
-             </button>
+            </button>
          </InfoTooltip>
       </div>
       <div className="absolute bottom-4 left-4 flex gap-2 items-center flex-col-reverse items-start">

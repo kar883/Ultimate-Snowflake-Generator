@@ -4,7 +4,6 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 import { SnowflakeConfig, ShortcutConfig } from '../types';
 import { InfoTooltip } from './Tooltip';
-import { modelCache3D, hashConfig } from '../geometryCache';
 
 interface Snowflake3DProps {
   config: SnowflakeConfig;
@@ -144,10 +143,10 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, 
 
   // Sync Layer States
   useEffect(() => {
+    // Reconcile layer states when config layers changes
     setLayerStates(prev => {
         const next = { ...prev };
         config.layers.forEach(l => {
-            // Initialize if missing. Default to visible.
             if (!next[l.id]) {
                 next[l.id] = { visible: true, transparent: false };
             }
@@ -156,41 +155,20 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, 
     });
   }, [config.layers]);
 
-  // Generate Mesh with Caching
+  // Generate Mesh
   useEffect(() => {
     let active = true;
-    const configHash = hashConfig(config);
-
     const load = async () => {
         if (!sceneRef.current) return;
-
-        // Check cache first
-        let group = modelCache3D.get(configHash);
-        let needsGeneration = !group;
-
-        if (needsGeneration) {
-            setLoading(true);
-        }
+        setLoading(true);
 
         try {
-            if (needsGeneration) {
-                // Generate mesh in background
-                group = await generateMesh(() => {
-                    // Progress callback - could be used for loading indicator
-                });
-
-                if (!active) return;
-
-                // Cache the generated mesh
-                modelCache3D.set(configHash, group.clone());
-            } else {
-                // Use cached mesh - clone it for this instance
-                group = group.clone();
-            }
-
+            const group = await generateMesh(() => {
+                // No-op for immediate update requests if sync generation is fast
+            });
+            
             if (!active) return;
-
-            // Clean up previous mesh
+            
             if (meshGroupRef.current) {
                 sceneRef.current.remove(meshGroupRef.current);
                 meshGroupRef.current.traverse(c => {
@@ -219,7 +197,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, 
                     c.material = mat.clone(); // Clone material to allow individual transparency
                     c.castShadow = true;
                     c.receiveShadow = true;
-
+                    
                     if (c.geometry) {
                         const pos = c.geometry.attributes.position;
                         if (pos) {
@@ -248,7 +226,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, 
 
             sceneRef.current.add(group);
             meshGroupRef.current = group;
-
+            
             // Trigger layer state application
             applyLayerStates();
 
@@ -260,13 +238,10 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, 
         } catch (e) {
             console.error(e);
         } finally {
-            if (active && needsGeneration) setLoading(false);
+            if (active) setLoading(false);
         }
     };
-
-    // Start loading immediately (will be instant if cached)
     load();
-
     return () => { active = false; };
   }, [config, generateMesh, color]);
 
@@ -275,16 +250,9 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({ config, generateMesh, color, 
       meshGroupRef.current.children.forEach(c => {
           if (c instanceof THREE.Mesh) {
               const id = c.userData.layerId;
-              
-              // Resolve global visibility from config
-              const layerConf = config.layers.find(l => l.id === id);
-              // CRITICAL FIX: If layer is disabled in main config, hide mesh regardless of local state
-              const isGloballyEnabled = layerConf ? layerConf.enabled : true;
-
               const state = layerStates[id];
               if (state && c.material instanceof THREE.MeshStandardMaterial) {
-                  // Mesh is visible only if locally visible AND globally enabled
-                  c.visible = state.visible && isGloballyEnabled;
+                  c.visible = state.visible;
                   c.material.transparent = state.transparent;
                   c.material.opacity = state.transparent ? 0.05 : 1.0; // Reduced to 0.05 for minimal visibility
                   c.material.depthWrite = !state.transparent;

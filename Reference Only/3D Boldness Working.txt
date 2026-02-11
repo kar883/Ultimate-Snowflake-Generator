@@ -1,0 +1,83 @@
+Here is all the code related to 3D text boldness:
+
+1. Import Statement (line ~4)
+typescript
+import { BOLD_FONT_URLS, BOLD_FONT_THRESHOLD } from './constants';
+2. Constants in constants.ts (lines 46-53)
+typescript
+// Bold font variants - fonts that support weight variations
+// Dancing Script is a variable font [wght] axis from 400-700
+export const BOLD_FONT_URLS: Record<string, string> = {
+  'Dancing Script': 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/dancingscript/DancingScript%5Bwght%5D.ttf',
+};
+ 
+// Minimum stroke weight to trigger bold font variant fallback
+export const BOLD_FONT_THRESHOLD = 2.0;
+3. Boldness Processing in processTextGroup (lines 1397-1471)
+typescript
+// BOLD FONT VARIANT FALLBACK (E part of B+E)
+// If high stroke weight and bold variant available, try loading it
+const totalStrokeWeight = (rendered3DConfig.globalStrokeWeight || 0) + (textGroup.thickness || 0);
+const boldUrl = BOLD_FONT_URLS[fontName];
+ 
+if (totalStrokeWeight >= BOLD_FONT_THRESHOLD && boldUrl) {
+  try {
+    console.log(`🎯 Attempting bold font variant for ${fontName}`);
+    const boldFont = await loadFont(`${fontName}-Bold`, boldUrl);
+    if (boldFont) {
+      font = boldFont;
+      console.log(`✅ Using bold font variant for ${fontName}`);
+    }
+  } catch (boldError) {
+    console.warn(`⚠️ Bold font variant failed for ${fontName}, using regular with path offsetting`);
+  }
+}
+ 
+// ... (shape generation code) ...
+ 
+// ==================================================================
+// BOLDNESS PROCESSING - Using bevel expansion for valid geometry
+// ==================================================================
+// Calculate boldness bevel amount (strokeWidth/2 mimics SVG stroke centered on path)
+const boldnessBevel = totalStrokeWeight > 0.1 ? totalStrokeWeight / 2 : 0;
+const shouldApplyBoldness = totalStrokeWeight > 0.1 && !(totalStrokeWeight >= BOLD_FONT_THRESHOLD && boldUrl);
+ 
+console.log('🎨 Boldness check:', {
+  totalStrokeWeight,
+  BOLD_FONT_THRESHOLD,
+  boldUrl: boldUrl || 'none',
+  shouldApplyBoldness,
+  boldnessBevel,
+  shapeCount: shapes.length
+});
+ 
+// Create extrude settings with boldness bevel added to regular bevel
+const textExtrudeSettings = {
+  ...extrudeSettings,
+  bevelEnabled: true, // Always enable when boldness is applied
+  bevelThickness: bevelPerSide + boldnessBevel,
+  bevelSize: bevelPerSide + boldnessBevel,
+  bevelSegments: Math.max(2, bevelSegCap), // Ensure enough segments for smoothness
+};
+ 
+if (shouldApplyBoldness) {
+  console.log('🎨 Applying boldness via bevel expansion:', {
+    globalStrokeWeight: rendered3DConfig.globalStrokeWeight,
+    textThickness: textGroup.thickness,
+    total: totalStrokeWeight,
+    boldnessBevel,
+    finalBevelSize: textExtrudeSettings.bevelSize
+  });
+}
+// ==================================================================
+4. Geometry Creation with Boldness Settings (lines 1474-1477)
+typescript
+// Create base geometry once (before arm duplication)
+// PERFORMANCE: This creates fill+stroke geometry ONCE per text group, then duplicates for arms
+const textKey = makeTextKey(layer.id, textGroup, textGroup.fontSize, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight);
+const baseGroupGeo = getOrCreateGeometry(geometryCache.text, textKey, () => new THREE_ACTUAL.ExtrudeGeometry(shapes, textExtrudeSettings));
+Key Design:
+
+Bold Font Variant (B): If totalStrokeWeight >= 2.0 and a bold font URL exists, load the bold font variant instead of the regular one
+Bevel Expansion (E): Add strokeWidth/2 to the bevel size, which expands the geometry outward to match SVG stroke appearance
+The two approaches combine: try bold font first, fall back to bevel expansion if bold font unavailable

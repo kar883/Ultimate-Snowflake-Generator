@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { SnowflakeConfig, TextGroupConfig, HubConfig, CharOffset, LayerConfig, AbstractConfig, DesignQuality, UnderlineConfig, ShortcutConfig } from './types';
-import { CURSIVE_FONTS, FONT_TTF_URLS, BOLD_FONT_URLS, BOLD_FONT_THRESHOLD } from './constants';
+import { CURSIVE_FONTS, FONT_TTF_URLS } from './constants';
 import ControlPanel from './components/ControlPanel';
 import SnowflakePreview from './components/SnowflakePreview';
 import Snowflake3D from './components/Snowflake3D';
@@ -11,11 +11,9 @@ import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUti
 import opentype from 'opentype.js';
 import JSZip from 'jszip';
 import { GoogleGenAI } from "@google/genai";
+
 // @ts-ignore
-import { postCSGJob } from './csgWorkerManager';
-import { CavalierPathOperations, Polyline } from './cavalierContours';
-import { makeCacheKey, getOrCreateSlotGeometries } from './slotGeometryCache';
-import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, makeSlotKey, getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, slotCutCache, hashSlotCut, makeUnderlineKey } from './geometryCache';
+import { Brush, Evaluator, SUBTRACTION, ADDITION } from 'three-bvh-csg';
 
 const MAX_HISTORY = 50;
 
@@ -23,7 +21,6 @@ const DEFAULT_SHORTCUTS: ShortcutConfig = {
     undo: { key: 'z', ctrlKey: true },
     redo: { key: 'z', ctrlKey: true, shiftKey: true },
     toggleView: { key: '1', ctrlKey: true },
-    forceRegenerate: { key: 'r', ctrlKey: true },
     exportCombinedSTL: { key: 'e', ctrlKey: true },
     saveProject: { key: 's', ctrlKey: true },
     loadProject: { key: 'l', ctrlKey: true },
@@ -101,266 +98,6 @@ const useThreeJSCleanup = () => {
   
   return { trackGeometry, trackMesh, cleanup };
 };
-
-// ============================================================================
-// 2D BOLDNESS FUNCTIONS USING CAVALIER CONTOURS
-// ============================================================================
-
-/**
- * Convert Polyline back to THREE.Vector2 array
- */
-function polylineToPoints(polyline: Polyline): THREE_ACTUAL.Vector2[] {
-  return CavalierPathOperations.polylineToVector2Array(polyline, 16);
-}
-
-/**
- * Simple path offset by expanding shapes outward
- * Uses a vertex-normal approach for reliable results
- */
-function offsetShape(shape: THREE_ACTUAL.Shape, offset: number): THREE_ACTUAL.Shape {
-  // Simple approach: scale the shape outward to simulate boldness
-  // This is much faster than complex path offsetting
-  const points = shape.getPoints(16); // Use fewer points for performance
-  if (points.length < 3) {
-    return shape;
-  }
-
-  // Calculate center point
-  let centerX = 0, centerY = 0;
-  for (const point of points) {
-    centerX += point.x;
-    centerY += point.y;
-  }
-  centerX /= points.length;
-  centerY /= points.length;
-
-  // Scale outward from center to simulate offset
-  const scale = 1 + (offset / 10); // Adjust scaling factor as needed
-  const scaledPoints = points.map(p => ({
-    x: centerX + (p.x - centerX) * scale,
-    y: centerY + (p.y - centerY) * scale
-  }));
-  
-  const offsetShape = new THREE_ACTUAL.Shape();
-  offsetShape.moveTo(scaledPoints[0].x, scaledPoints[0].y);
-  for (let i = 1; i < scaledPoints.length; i++) {
-    offsetShape.lineTo(scaledPoints[i].x, scaledPoints[i].y);
-  }
-  offsetShape.closePath();
-  
-  return offsetShape;
-}
-
-/**
- * Apply boldness to shapes using simple path offset
- * This mimics SVG stroke behavior: expands outward by strokeWidth/2
- */
-function applyBoldnessToShapes(
-  shapes: THREE_ACTUAL.Shape[],
-  strokeWidth: number
-): THREE_ACTUAL.Shape[] {
-  if (strokeWidth <= 0.1) {
-    return shapes;
-  }
-
-  // PROPER BOLDNESS - Preserves Holes and Handles Self-Intersections
-  const expandedShapes: THREE_ACTUAL.Shape[] = [];
-  
-  for (const shape of shapes) {
-    try {
-      // Extract the main contour and holes separately
-      const extractedPoints = shape.extractPoints(48);
-      
-      // Offset the outer shape OUTWARD
-      const outerPoints = extractedPoints.shape;
-      const expandedOuter = offsetPathWithValidation(outerPoints, strokeWidth / 2, false);
-      
-      // Offset the holes INWARD (so they get smaller, preserving the loop)
-      const contractedHoles: THREE_ACTUAL.Vector2[][] = [];
-      if (extractedPoints.holes && extractedPoints.holes.length > 0) {
-        for (const hole of extractedPoints.holes) {
-          // Negative offset to shrink the hole
-          const contractedHole = offsetPathWithValidation(hole, -strokeWidth / 2, true);
-          if (contractedHole && contractedHole.length > 2) {
-            contractedHoles.push(contractedHole);
-          }
-        }
-      }
-      
-      // Create new shape with expanded outer and contracted holes
-      if (expandedOuter && expandedOuter.length > 2) {
-        const newShape = new THREE_ACTUAL.Shape(expandedOuter);
-        
-        // Add holes back
-        for (const holePoints of contractedHoles) {
-          const holePath = new THREE_ACTUAL.Path(holePoints);
-          newShape.holes.push(holePath);
-        }
-        
-        expandedShapes.push(newShape);
-      }
-    } catch (error) {
-      console.warn('Failed to expand shape with holes, using original:', error);
-      expandedShapes.push(shape);
-    }
-  }
-  
-  if (expandedShapes.length > 0) {
-    console.log(`✅ Applied ${strokeWidth}px boldness to ${expandedShapes.length} shapes`);
-    return expandedShapes;
-  }
-  
-  return shapes;
-}
-
-/**
- * Helper function to offset a path with validation and cleanup
- * Returns null if offset creates invalid geometry
- */
-function offsetPathWithValidation(
-  points: THREE_ACTUAL.Vector2[], 
-  offsetDist: number,
-  isHole: boolean
-): THREE_ACTUAL.Vector2[] | null {
-  
-  if (points.length < 3) return null;
-  
-  const offsetPoints: THREE_ACTUAL.Vector2[] = [];
-  const len = points.length;
-  
-  for (let i = 0; i < len; i++) {
-    const curr = points[i];
-    const prev = points[(i - 1 + len) % len];
-    const next = points[(i + 1) % len];
-    
-    // Calculate tangents
-    const dx1 = curr.x - prev.x;
-    const dy1 = curr.y - prev.y;
-    const dx2 = next.x - curr.x;
-    const dy2 = next.y - curr.y;
-    
-    const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1) || 1;
-    const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2) || 1;
-    
-    // Perpendicular vectors
-    const n1x = -dy1 / len1;
-    const n1y = dx1 / len1;
-    const n2x = -dy2 / len2;
-    const n2y = dx2 / len2;
-    
-    // Average normal
-    let avgNx = (n1x + n2x) / 2;
-    let avgNy = (n1y + n2y) / 2;
-    
-    const avgLen = Math.sqrt(avgNx * avgNx + avgNy * avgNy);
-    
-    // Detect degenerate cases
-    if (avgLen < 0.001) {
-      // Sharp corner or cusp - use perpendicular to incoming edge
-      avgNx = n1x;
-      avgNy = n1y;
-    } else {
-      avgNx /= avgLen;
-      avgNy /= avgLen;
-    }
-    
-    // Calculate the angle between consecutive edges
-    const dot = (dx1 * dx2 + dy1 * dy2) / (len1 * len2);
-    const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
-    
-    // Apply miter limit for sharp corners
-    let actualOffset = offsetDist;
-    if (angle < Math.PI / 6) { // Less than 30 degrees
-      // Limit miter extension on sharp corners
-      const miterLimit = 2.0;
-      const miterLength = Math.abs(offsetDist / Math.sin(angle / 2));
-      if (miterLength > Math.abs(offsetDist) * miterLimit) {
-        actualOffset = offsetDist * miterLimit * Math.sin(angle / 2);
-      }
-    }
-    
-    offsetPoints.push(new THREE_ACTUAL.Vector2(
-      curr.x + avgNx * actualOffset,
-      curr.y + avgNy * actualOffset
-    ));
-  }
-  
-  // Validate the result - check if area is positive (for outer) or negative (for holes)
-  const area = calculateSignedArea(offsetPoints);
-  
-  // If hole is contracting too much and becomes invalid, return null
-  if (isHole && Math.abs(area) < 1.0) {
-    return null; // Hole collapsed
-  }
-  
-  // Ensure correct winding order
-  if (!isHole && area < 0) {
-    offsetPoints.reverse();
-  } else if (isHole && area > 0) {
-    offsetPoints.reverse();
-  }
-  
-  return offsetPoints;
-}
-
-/**
- * Calculate signed area of a polygon (for winding order detection)
- */
-function calculateSignedArea(points: THREE_ACTUAL.Vector2[]): number {
-  let area = 0;
-  for (let i = 0; i < points.length; i++) {
-    const j = (i + 1) % points.length;
-    area += points[i].x * points[j].y;
-    area -= points[j].x * points[i].y;
-  }
-  return area / 2;
-}
-
-/**
- * Simple closed path offset - works for outer boundaries
- */
-function offsetClosedPath(
-  points: THREE_ACTUAL.Vector2[],
-  distance: number
-): THREE_ACTUAL.Vector2[] | null {
-  
-  if (points.length < 3) return null;
-  
-  const result: THREE_ACTUAL.Vector2[] = [];
-  const n = points.length;
-  
-  for (let i = 0; i < n; i++) {
-    const p0 = points[(i - 1 + n) % n];
-    const p1 = points[i];
-    const p2 = points[(i + 1) % n];
-    
-    const e1x = p1.x - p0.x;
-    const e1y = p1.y - p0.y;
-    const e2x = p2.x - p1.x;
-    const e2y = p2.y - p1.y;
-    
-    const e1len = Math.sqrt(e1x * e1x + e1y * e1y) || 0.001;
-    const e2len = Math.sqrt(e2x * e2x + e2y * e2y) || 0.001;
-    
-    const n1x = -e1y / e1len;
-    const n1y = e1x / e1len;
-    const n2x = -e2y / e2len;
-    const n2y = e2x / e2len;
-    
-    let bisX = n1x + n2x;
-    let bisY = n1y + n2y;
-    const bisLen = Math.sqrt(bisX * bisX + bisY * bisY) || 0.001;
-    bisX /= bisLen;
-    bisY /= bisLen;
-    
-    result.push(new THREE_ACTUAL.Vector2(
-      p1.x + bisX * distance,
-      p1.y + bisY * distance
-    ));
-  }
-  
-  return result;
-}
 
 const useErrorHandler = () => {
   const [error, setError] = useState<{message: string, details?: any} | null>(null);
@@ -587,16 +324,9 @@ const createSlotGeometries = (layer: LayerConfig, baseSlotLength: number, baseSl
   const slotLength = baseSlotLength + adjLength;
   const rotationOffset = layer.primary.rotationOffset;
   
-  // `extrusionDepth` is the TOTAL material thickness (including bevel).
-  // The `bevelAmount` passed here is the per-side bevel thickness.
   const materialThickness = extrusionDepth;
-  const bevelPerSide = bevelEnabled ? bevelAmount : 0;
-  // Remaining core thickness after bevels on both sides (not used for cut depth,
-  // but useful to reason about geometry if needed).
-  const coreThickness = Math.max(0.001, materialThickness - (bevelPerSide * 2));
-  const cutThickness = baseSlotWidth + adjWidth;
-  // Ensure cuts fully pass through the total material thickness (with small margin).
-  const cutDepth = materialThickness + 8.0;
+  const cutThickness = baseSlotWidth + adjWidth; 
+  const cutDepth = materialThickness + 8.0; 
   
   const SLOT_EXTENSION = 200; 
 
@@ -656,113 +386,55 @@ const createSlotGeometries = (layer: LayerConfig, baseSlotLength: number, baseSl
   return slots;
 };
 
-const applySlotCuts = async (layerGeo: THREE_ACTUAL.BufferGeometry, layer: LayerConfig, slotLength: number, slotWidth: number, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, allLayers: LayerConfig[], onProgress?: () => Promise<void>): Promise<THREE_ACTUAL.BufferGeometry> => {
-  const cacheKey = makeCacheKey(layer.id || 'layer', slotLength, slotWidth, extrusionDepth, bevelEnabled, bevelAmount);
-  const slotGeometries = getOrCreateSlotGeometries(cacheKey, () => createSlotGeometries(layer, slotLength, slotWidth, extrusionDepth, bevelEnabled, bevelAmount, allLayers));
+const applySlotCuts = async (layerGeo: THREE_ACTUAL.BufferGeometry, layer: LayerConfig, slotLength: number, slotWidth: number, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, allLayers: LayerConfig[], evaluator: Evaluator, onProgress?: () => Promise<void>): Promise<THREE_ACTUAL.BufferGeometry> => {
+  const slotGeometries = createSlotGeometries(layer, slotLength, slotWidth, extrusionDepth, bevelEnabled, bevelAmount, allLayers);
   if (slotGeometries.length === 0) return layerGeo;
-  // Serialize Base early so filtered worker calls can reference it.
-  const baseData = {
-      position: layerGeo.attributes.position.array,
-      normal: layerGeo.attributes.normal?.array,
-      index: layerGeo.index?.array
-  };
 
-  // Fast AABB filter: rotate slot blades into the same orientation as the
-  // provided `layerGeo` and skip any blades whose bounding box doesn't
-  // intersect the layer's bounding box. This avoids expensive CSG work
-  // when blades don't affect the plane. We keep original `slotGeometries`
-  // intact for disposal and worker serialization, but only send the
-  // intersecting subset to the worker.
-  try {
-    if (!layerGeo.boundingBox) layerGeo.computeBoundingBox();
-    const layerBB = layerGeo.boundingBox ? layerGeo.boundingBox.clone() : null;
-    if (layerBB) {
-      const rotX = layer.rotation3D?.x ? layer.rotation3D.x * Math.PI / 180 : 0;
-      const rotY = layer.rotation3D?.y ? layer.rotation3D.y * Math.PI / 180 : 0;
-      const rotZ = layer.rotation3D?.z ? layer.rotation3D.z * Math.PI / 180 : 0;
-      const rotMat = new THREE_ACTUAL.Matrix4();
-      rotMat.makeRotationX(rotX).multiply(new THREE_ACTUAL.Matrix4().makeRotationY(rotY)).multiply(new THREE_ACTUAL.Matrix4().makeRotationZ(rotZ));
+  // Speed optimization: Combine all slot blades into a single cutting tool via CSG Union first.
+  let toolBrush: Brush | null = null;
 
-      const keptSlots: THREE_ACTUAL.BufferGeometry[] = [];
-      for (const g of slotGeometries) {
-        try {
-          const clone = g.clone();
-          clone.applyMatrix4(rotMat);
-          clone.computeBoundingBox();
-          const gbb = clone.boundingBox;
-          // small padding to be safe
-          if (gbb && layerBB.expandByScalar) {
-            const padded = gbb.clone().expandByScalar(0.5);
-            if (layerBB.intersectsBox(padded)) keptSlots.push(g);
-          } else if (gbb && layerBB.intersectsBox(gbb)) {
-            keptSlots.push(g);
-          }
-          clone.dispose?.();
-        } catch (e) {
-          // If anything goes wrong, be conservative and keep the slot
-          keptSlots.push(g);
+  for (let i = 0; i < slotGeometries.length; i++) {
+    const slotGeo = slotGeometries[i];
+    
+    // Rotate to match layer orientation
+    slotGeo.rotateX(layer.rotation3D.x * Math.PI / 180);
+    slotGeo.rotateY(layer.rotation3D.y * Math.PI / 180);
+    
+    const brush = new Brush(slotGeo);
+    brush.updateMatrixWorld();
+
+    if (!toolBrush) {
+        toolBrush = brush;
+    } else {
+        const nextTool = evaluator.evaluate(toolBrush, brush, ADDITION);
+        
+        // If the previous toolBrush was a generated intermediate (not an original slot geometry), dispose it
+        if (!slotGeometries.includes(toolBrush.geometry as THREE_ACTUAL.BufferGeometry)) {
+            toolBrush.geometry.dispose();
         }
-      }
-
-      if (keptSlots.length === 0) {
-        // Nothing intersects — dispose slot geometries and return original mesh
-        slotGeometries.forEach(s => s.dispose());
-        return layerGeo;
-      }
-
-      // Replace slotsData to only include keptSlots
-      const slotsData = keptSlots.map(g => ({
-        position: g.attributes.position.array,
-        normal: g.attributes.normal?.array,
-        index: g.index?.array
-      }));
-
-      // Worker Communication (filtered) via manager
-      return postCSGJob(baseData, slotsData, layer.rotation3D)
-        .then((e: any) => {
-          const { position, normal, index } = e;
-          const resultGeo = new THREE_ACTUAL.BufferGeometry();
-          resultGeo.setAttribute('position', new THREE_ACTUAL.BufferAttribute(position, 3));
-          if (normal) resultGeo.setAttribute('normal', new THREE_ACTUAL.BufferAttribute(normal, 3));
-          if (index) resultGeo.setIndex(new THREE_ACTUAL.BufferAttribute(index, 1));
-          // Dispose original slots (we kept references in slotGeometries)
-          slotGeometries.forEach(g => g.dispose());
-          return resultGeo;
-        })
-        .catch((err: any) => {
-          console.error('CSG Worker Error', err);
-          slotGeometries.forEach(g => g.dispose());
-          return layerGeo;
-        });
+        toolBrush = nextTool;
     }
-  } catch (e) {
-    console.warn('Slot AABB filtering failed, proceeding with full CSG', e);
   }
 
-    // Fallback: serialize all slots (reuse `baseData` declared earlier)
-    const allSlotsData = slotGeometries.map(g => ({
-      position: g.attributes.position.array,
-      normal: g.attributes.normal?.array,
-      index: g.index?.array
-    }));
+  if (!toolBrush) return layerGeo;
 
-    // If we fell through (no layerBB or error), fall back to original worker call
-    return postCSGJob(baseData, allSlotsData, layer.rotation3D)
-      .then((e: any) => {
-        const { position, normal, index } = e;
-        const resultGeo = new THREE_ACTUAL.BufferGeometry();
-        resultGeo.setAttribute('position', new THREE_ACTUAL.BufferAttribute(position, 3));
-        if (normal) resultGeo.setAttribute('normal', new THREE_ACTUAL.BufferAttribute(normal, 3));
-        if (index) resultGeo.setIndex(new THREE_ACTUAL.BufferAttribute(index, 1));
-        // Dispose original slots
-        slotGeometries.forEach(g => g.dispose());
-        return resultGeo;
-      })
-      .catch((err: any) => {
-        console.error('CSG Worker Error', err);
-        slotGeometries.forEach(g => g.dispose());
-        return layerGeo; // Fallback to original
-      });
+  const layerBrush = new Brush(layerGeo);
+  layerBrush.updateMatrixWorld();
+  toolBrush.updateMatrixWorld();
+
+  const result = evaluator.evaluate(layerBrush, toolBrush, SUBTRACTION);
+
+  // Dispose the final tool if it's generated
+  if (!slotGeometries.includes(toolBrush.geometry as THREE_ACTUAL.BufferGeometry)) {
+      toolBrush.geometry.dispose();
+  }
+  // Dispose all original slot geometries
+  slotGeometries.forEach(g => g.dispose());
+
+  if (onProgress) await onProgress();
+  
+  // Return geometry (will be repaired by caller if needed, typically in generateMesh)
+  return result.geometry;
 };
 
 const createDefaultTextGroup = (text: string, rotation: number, fontSize: number, textX: number): TextGroupConfig => ({
@@ -835,24 +507,12 @@ const App: React.FC = () => {
     slotLength: 95, 
     slotWidth: 4.0, 
     quality: 'low',
-    syncAllLayers: true, // Default ON
-    globalStrokeWeight: 0
+    syncAllLayers: true // Default ON
   };
 
   const [config, setConfig] = useState<SnowflakeConfig>(initialState);
   const [config3D, setConfig3D] = useState<SnowflakeConfig>(initialState); 
   const [rendered3DConfig, setRendered3DConfig] = useState<SnowflakeConfig>(initialState); 
-  // Guarded setter: only update rendered3DConfig when it actually differs
-  const setRendered3DIfChanged = useCallback((next: SnowflakeConfig) => {
-    setRendered3DConfig(prev => {
-      try {
-        if (JSON.stringify(prev) === JSON.stringify(next)) return prev;
-      } catch (e) {
-        // Fallback: if stringify fails, fall through and set
-      }
-      return next;
-    });
-  }, []);
   const [designDiameter, setDesignDiameter] = useState(0); 
   const [activeTab, setActiveTab] = useState<'global' | 'text' | 'Letter Ctrl' | 'hubs' | 'abstract' | 'planes'>('text');
   const [shortcuts, setShortcuts] = useState<ShortcutConfig>(DEFAULT_SHORTCUTS);
@@ -870,14 +530,19 @@ const App: React.FC = () => {
   
   const svgRef = useRef<SVGSVGElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const csgEvaluator = useRef(null); // No longer needed on main thread for cutting
-  const debounceTimer = useRef<NodeJS.Timeout | null>(null);
+  const csgEvaluator = useRef(new Evaluator());
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { loadFont } = useFontCache();
   const { cleanup } = useThreeJSCleanup();
   const { handleError } = useErrorHandler();
   const { exportWithProgress } = useExportManager();
   const { notifications, showNotification } = useUserFeedback();
+
+  useEffect(() => {
+    csgEvaluator.current.attributes = ['position', 'normal'];
+    csgEvaluator.current.useGroups = false;
+  }, []);
 
   // Diameter Calculation Logic
   useEffect(() => {
@@ -962,12 +627,6 @@ const App: React.FC = () => {
   }, [config, dynamicFonts, loadFont]);
 
   const handleUpdateConfig = useCallback((updates: Partial<SnowflakeConfig>, commitTo3D: boolean = false) => {
-    // Clear geometry cache if boldness settings change
-    if ('globalStrokeWeight' in updates && updates.globalStrokeWeight !== config.globalStrokeWeight) {
-      clearGeometryCache();
-      console.log(' Global boldness changed, clearing geometry cache');
-    }
-    
     setConfig(prev => {
       const next = { ...prev, ...updates };
       
@@ -986,14 +645,14 @@ const App: React.FC = () => {
         setHistoryIndex(i => Math.min(i + 1, MAX_HISTORY - 1));
         
         // Immediate update for 3D view (whether visible or not, it keeps it in sync)
-        setRendered3DIfChanged(next);
+        setRendered3DConfig(next);
       } else {
         // Debounce update for 3D view
         // If in 3D mode: fast debounce (300ms) for responsiveness
         // If in 2D mode: slow debounce (1000ms) to avoid lagging the UI with background generation
         const delay = viewMode === '3d' ? 300 : 1000;
         debounceTimer.current = setTimeout(() => {
-          setRendered3DIfChanged(next);
+            setRendered3DConfig(next);
         }, delay);
       }
       return next;
@@ -1005,85 +664,6 @@ const App: React.FC = () => {
           if (debounceTimer.current) clearTimeout(debounceTimer.current);
       }
   }, []);
-
-  // Pre-compute slot cuts in background when slot settings change
-  useEffect(() => {
-    if (!rendered3DConfig.slotEnabled) return;
-
-    const preComputeSlotCuts = async () => {
-      // Calculate bevel per side (same logic as in generateMesh)
-      const bevelPerSide = rendered3DConfig.bevelEnabled ? Math.min(rendered3DConfig.bevelAmount, rendered3DConfig.extrusionDepth / 2) : 0;
-      // Create a temporary config with slots disabled to generate base geometry
-      const baseConfig = { ...rendered3DConfig, slotEnabled: false };
-
-      for (const layer of rendered3DConfig.layers.filter(l => l.enabled)) {
-        if (!layer.slotType || layer.slotType === 'none') continue;
-
-        const cacheKey = hashSlotCut(
-          layer,
-          rendered3DConfig.slotLength,
-          rendered3DConfig.slotWidth,
-          rendered3DConfig.extrusionDepth,
-          rendered3DConfig.bevelEnabled,
-          bevelPerSide,
-          rendered3DConfig.layers
-        );
-
-        // Skip if already cached
-        if (slotCutCache.has(cacheKey)) continue;
-
-        try {
-          // Generate base mesh for this layer only (with slots disabled)
-          const tempGroup = await generateMesh(() => {}, 'low', baseConfig);
-          const layerMesh = tempGroup.children.find(child => child.userData.layerId === layer.id) as THREE_ACTUAL.Mesh;
-
-          if (layerMesh) {
-            // Apply slot cuts to the base geometry
-            const cutGeo = await applySlotCuts(
-              layerMesh.geometry.clone(),
-              layer,
-              rendered3DConfig.slotLength,
-              rendered3DConfig.slotWidth,
-              rendered3DConfig.extrusionDepth,
-              rendered3DConfig.bevelEnabled,
-              bevelPerSide,
-              rendered3DConfig.layers
-            );
-
-            // Store in cache
-            slotCutCache.set(cacheKey, cutGeo);
-          }
-
-          // Clean up temporary group
-          tempGroup.traverse((child) => {
-            if (child instanceof THREE_ACTUAL.Mesh) {
-              child.geometry.dispose();
-              if (Array.isArray(child.material)) {
-                child.material.forEach(m => m.dispose());
-              } else {
-                child.material.dispose();
-              }
-            }
-          });
-
-        } catch (error) {
-          console.warn('Failed to pre-compute slot cuts for layer:', layer.id, error);
-        }
-      }
-    };
-
-    // Debounce the pre-computation to avoid excessive work
-    const timeoutId = setTimeout(preComputeSlotCuts, 200);
-    return () => clearTimeout(timeoutId);
-  }, [
-    rendered3DConfig.slotEnabled,
-    rendered3DConfig.slotLength,
-    rendered3DConfig.slotWidth,
-    rendered3DConfig.extrusionDepth,
-    rendered3DConfig.bevelEnabled,
-    rendered3DConfig.bevelAmount,
-    rendered3DConfig.layers
-  ]);
 
   const updateGroup = useCallback((group: 'primary' | 'secondary', updates: Partial<TextGroupConfig>, commitTo3D: boolean = false) => {
     handleUpdateConfig({
@@ -1144,7 +724,7 @@ const App: React.FC = () => {
         const prev = history[historyIndex - 1];
         setConfig(prev);
         setConfig3D(prev);
-        if (viewMode === '3d') setRendered3DIfChanged(prev);
+        if (viewMode === '3d') setRendered3DConfig(prev);
     }
   }, [history, historyIndex, viewMode]);
 
@@ -1154,300 +734,11 @@ const App: React.FC = () => {
         const next = history[historyIndex + 1];
         setConfig(next);
         setConfig3D(next);
-        if (viewMode === '3d') setRendered3DIfChanged(next);
+        if (viewMode === '3d') setRendered3DConfig(next);
     }
   }, [history, historyIndex, viewMode]);
 
-  const generateMesh = useCallback(async (onProgress: (p: number) => void, overrideQuality?: DesignQuality, overrideConfig?: SnowflakeConfig): Promise<THREE_ACTUAL.Group> => {
-    const config = overrideConfig || rendered3DConfig;
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
+  const generateMesh = useCallback(async (onProgress: (p: number) => void, overrideQuality?: DesignQuality): Promise<THREE_ACTUAL.Group> => {
     const qualityToUse = overrideQuality || rendered3DConfig.quality;
     let qMult = 1;
     let curveSeg = 12;
@@ -1467,17 +758,18 @@ const App: React.FC = () => {
         bevelSegCap = 12;
     }
 
-    // `extrusionDepth` represents the overall material thickness INCLUDING any bevel.
-    // Compute bevel as a per-side value and clamp it so it never exceeds half
-    // the total thickness (to avoid negative core depth).
-    const bevelPerSide = rendered3DConfig.bevelEnabled ? Math.min(rendered3DConfig.bevelAmount, rendered3DConfig.extrusionDepth / 2) : 0;
-    const effectiveDepth = Math.max(0.001, rendered3DConfig.extrusionDepth);
+    // Calculate effective depth. 
+    // If bevel is enabled, the ExtrudeGeometry adds bevelThickness to the front and back.
+    // To maintain the total 'extrusionDepth', we reduce the core depth.
+    // If bevel is disabled, core depth = extrusionDepth.
+    const bevelThickness = rendered3DConfig.bevelEnabled ? rendered3DConfig.bevelAmount : 0;
+    const effectiveDepth = Math.max(0.001, rendered3DConfig.extrusionDepth - (bevelThickness * 2));
 
     const extrudeSettings = {
       depth: effectiveDepth,
       bevelEnabled: rendered3DConfig.bevelEnabled,
-      bevelThickness: bevelPerSide,
-      bevelSize: bevelPerSide, // Standard expansion
+      bevelThickness: bevelThickness,
+      bevelSize: bevelThickness, // Standard expansion
       bevelSegments: rendered3DConfig.bevelEnabled ? (rendered3DConfig.bevelType === 'chamfer' ? 1 : Math.min(rendered3DConfig.bevelSegments, bevelSegCap)) : 0,
       curveSegments: curveSeg,
     };
@@ -1507,104 +799,37 @@ const App: React.FC = () => {
       const layerGeometries: THREE_ACTUAL.BufferGeometry[] = [];
       
       const processTextGroup = async (textGroup: TextGroupConfig) => {
-  if (!textGroup.enabled) return;
-  
-  const fontName = textGroup.fontFamily.replace(/'/g, '').split(',')[0].trim();
-  const url = dynamicFonts[fontName] || FONT_TTF_URLS[fontName];
-  
-  try {
-    const font = await loadFont(fontName, url);
-    if (font) {
-      const scale = textGroup.fontSize / font.unitsPerEm;
-      const glyphs = font.stringToGlyphs(textGroup.text);
-      
-      // BOLD FONT VARIANT FALLBACK (E part of B+E)
-      // If high stroke weight and bold variant available, try loading it
-      const totalStrokeWeight = (rendered3DConfig.globalStrokeWeight || 0) + (textGroup.thickness || 0);
-      const boldUrl = BOLD_FONT_URLS[fontName];
-      let finalFont = font;
-      
-      if (totalStrokeWeight >= BOLD_FONT_THRESHOLD && boldUrl) {
+        if (!textGroup.enabled) return;
+        
+        const fontName = textGroup.fontFamily.replace(/'/g, '').split(',')[0].trim();
+        const url = dynamicFonts[fontName] || FONT_TTF_URLS[fontName];
+        
         try {
-          console.log(`🎯 Attempting bold font variant for ${fontName}`);
-          const boldFont = await loadFont(`${fontName}-Bold`, boldUrl);
-          if (boldFont) {
-            finalFont = boldFont;
-            console.log(`✅ Using bold font variant for ${fontName}`);
-          }
-        } catch (boldError) {
-          console.warn(`⚠️ Bold font variant failed for ${fontName}, using regular with path offsetting`);
-        }
-      }
-      let textShapes: THREE_ACTUAL.Shape[] = [];
-      let nonTextShapes: THREE_ACTUAL.Shape[] = [];
-      let currentX = 0;
-      
-      glyphs.forEach((glyph, i) => {
-        try {
-          const offset = textGroup.charOffsets[i] || { x: 0, y: 0 };
-          const path = glyph.getPath(currentX + offset.x, offset.y, textGroup.fontSize);
-          const threePath = new THREE_ACTUAL.ShapePath();
-          path.commands.forEach(cmd => {
-            if (cmd.type === 'M') threePath.moveTo(cmd.x, cmd.y);
-            else if (cmd.type === 'L') threePath.lineTo(cmd.x, cmd.y);
-            else if (cmd.type === 'Q') threePath.quadraticCurveTo(cmd.x1, cmd.y1, cmd.x, cmd.y);
-            else if (cmd.type === 'C') threePath.bezierCurveTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x, cmd.y);
-          });
-          const glyphShapes = threePath.toShapes(true);
-          textShapes.push(...glyphShapes);
-        } catch (error) {
-          console.warn(`Failed to process glyph ${i} for font ${fontName}:`, error);
-        }
-        currentX += (glyph.advanceWidth * scale) + textGroup.letterSpacing;
-      });
-      
-      // Combine all shapes for processing
-      const shapes = [...textShapes, ...nonTextShapes];
-      
-      // ==================================================================
-      // BOLDNESS PROCESSING - Using bevel expansion for valid geometry
-      // ==================================================================
-      // Calculate boldness bevel amount (strokeWidth/2 mimics SVG stroke centered on path)
-      const boldnessBevel = totalStrokeWeight > 0.1 ? totalStrokeWeight / 2 : 0;
-      const shouldApplyBoldness = totalStrokeWeight > 0.1 && !(totalStrokeWeight >= BOLD_FONT_THRESHOLD && boldUrl);
-      
-      console.log('🎨 Boldness check:', {
-        totalStrokeWeight,
-        BOLD_FONT_THRESHOLD,
-        boldUrl: boldUrl || 'none',
-        shouldApplyBoldness,
-        boldnessBevel,
-        shapeCount: shapes.length
-      });
-      
-      // Create extrude settings with boldness bevel added to regular bevel
-      const textExtrudeSettings = {
-        ...extrudeSettings,
-        bevelEnabled: true, // Always enable when boldness is applied
-        bevelThickness: bevelPerSide + boldnessBevel,
-        bevelSize: bevelPerSide + boldnessBevel,
-        bevelSegments: Math.max(2, bevelSegCap), // Ensure enough segments for smoothness
-      };
-      
-      if (shouldApplyBoldness) {
-        console.log('🎨 Applying boldness via bevel expansion:', {
-          globalStrokeWeight: rendered3DConfig.globalStrokeWeight,
-          textThickness: textGroup.thickness,
-          total: totalStrokeWeight,
-          boldnessBevel,
-          finalBevelSize: textExtrudeSettings.bevelSize
-        });
-      }
-      // ==================================================================
+          const font = await loadFont(fontName, url);
+          if (font) {
+            const scale = textGroup.fontSize / font.unitsPerEm;
+            const glyphs = font.stringToGlyphs(textGroup.text);
+            let shapes: THREE_ACTUAL.Shape[] = [];
+            let currentX = 0;
+            glyphs.forEach((glyph, i) => {
+              const offset = textGroup.charOffsets[i] || { x: 0, y: 0 };
+              const path = glyph.getPath(currentX + offset.x, offset.y, textGroup.fontSize);
+              const threePath = new THREE_ACTUAL.ShapePath();
+              path.commands.forEach(cmd => {
+                if (cmd.type === 'M') threePath.moveTo(cmd.x, cmd.y);
+                else if (cmd.type === 'L') threePath.lineTo(cmd.x, cmd.y);
+                else if (cmd.type === 'Q') threePath.quadraticCurveTo(cmd.x1, cmd.y1, cmd.x, cmd.y);
+                else if (cmd.type === 'C') threePath.bezierCurveTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x, cmd.y);
+              });
+              shapes.push(...threePath.toShapes(true));
+              currentX += (glyph.advanceWidth * scale) + textGroup.letterSpacing;
+            });
 
-      const textKey = makeTextKey(layer.id, textGroup, textGroup.fontSize, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight, textGroup.thickness);
-      const groupGeo = getOrCreateGeometry(geometryCache.text, textKey, () => new THREE_ACTUAL.ExtrudeGeometry(shapes, textExtrudeSettings));
+            const groupGeo = new THREE_ACTUAL.ExtrudeGeometry(shapes, extrudeSettings);
             
             // Underline Logic
             const uConf = textGroup.underline;
             let underlineShapes: THREE_ACTUAL.Shape[] = [];
-            let underlineGeo = null;
 
             if (uConf && uConf.enabled) {
                 // ... (Keep existing underline logic exactly as is) ...
@@ -1716,96 +941,9 @@ const App: React.FC = () => {
                 }
             }
             
-            // Apply boldness to underlines using the same stroke expansion as text
-            const underlineGlobalBoldness = rendered3DConfig.globalStrokeWeight || 0;
-            const underlineTextBoldness = uConf.thickness || 0;
-            const totalUnderlineBoldness = underlineGlobalBoldness + underlineTextBoldness;
-            
-            if (totalUnderlineBoldness > 0.1) {
-              const expandedUnderlineShapes: THREE_ACTUAL.Shape[] = [];
-              
-              for (const shape of underlineShapes) {
-                try {
-                  // Get points with higher resolution for smoother expansion
-                  const points = shape.getPoints(Math.max(32, Math.ceil(totalUnderlineBoldness * 4)));
-                  if (points.length < 3) {
-                    expandedUnderlineShapes.push(shape);
-                    continue;
-                  }
-                  
-                  // Expand the shape outward by strokeWidth/2 to match SVG stroke rendering
-                  const expandedPoints: THREE_ACTUAL.Vector2[] = [];
-                  const halfStroke = totalUnderlineBoldness / 2;
-                  
-                  for (let i = 0; i < points.length; i++) {
-                    const p = points[i];
-                    const prevP = points[(i - 1 + points.length) % points.length];
-                    const nextP = points[(i + 1) % points.length];
-                    
-                    // Calculate normals from adjacent segments
-                    const dx1 = p.x - prevP.x;
-                    const dy1 = p.y - prevP.y;
-                    const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
-                    
-                    const dx2 = nextP.x - p.x;
-                    const dy2 = nextP.y - p.y;
-                    const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
-                    
-                    if (len1 < 0.0001 || len2 < 0.0001) {
-                      expandedPoints.push(p);
-                      continue;
-                    }
-                    
-                    // Perpendicular normals (rotated 90 degrees)
-                    const nx1 = -dy1 / len1;
-                    const ny1 = dx1 / len1;
-                    const nx2 = -dy2 / len2;
-                    const ny2 = dx2 / len2;
-                    
-                    // Average normal for this vertex
-                    const nx = (nx1 + nx2) / 2;
-                    const ny = (ny1 + ny2) / 2;
-                    const nlen = Math.sqrt(nx * nx + ny * ny);
-                    
-                    if (nlen < 0.0001) {
-                      expandedPoints.push(p);
-                      continue;
-                    }
-                    
-                    // Normalize and scale by half stroke width
-                    const offsetX = (nx / nlen) * halfStroke;
-                    const offsetY = (ny / nlen) * halfStroke;
-                    
-                    expandedPoints.push(new THREE_ACTUAL.Vector2(p.x + offsetX, p.y + offsetY));
-                  }
-                  
-                  // Create new shape from expanded points
-                  if (expandedPoints.length >= 3) {
-                    const expandedShape = new THREE_ACTUAL.Shape();
-                    expandedShape.moveTo(expandedPoints[0].x, expandedPoints[0].y);
-                    for (let i = 1; i < expandedPoints.length; i++) {
-                      expandedShape.lineTo(expandedPoints[i].x, expandedPoints[i].y);
-                    }
-                    expandedShape.closePath();
-                    expandedUnderlineShapes.push(expandedShape);
-                  } else {
-                    expandedUnderlineShapes.push(shape);
-                  }
-                } catch (error) {
-                  console.warn('Failed to expand underline shape, using original:', error);
-                  expandedUnderlineShapes.push(shape);
-                }
-              }
-              
-              if (expandedUnderlineShapes.length > 0) {
-                underlineShapes = expandedUnderlineShapes;
-                console.log(`✅ Applied ${totalUnderlineBoldness}px boldness to ${expandedUnderlineShapes.length} underline shapes`);
-              }
-            }
-            
+            let underlineGeo = null;
             if (underlineShapes.length > 0) {
-                const underlineKey = makeUnderlineKey(layer.id, textGroup, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide);
-                underlineGeo = getOrCreateGeometry(geometryCache.text, underlineKey, () => new THREE_ACTUAL.ExtrudeGeometry(underlineShapes, extrudeSettings));
+                underlineGeo = new THREE_ACTUAL.ExtrudeGeometry(underlineShapes, extrudeSettings);
             }
 
             const angleStep = (Math.PI * 2) / textGroup.arms;
@@ -1822,8 +960,7 @@ const App: React.FC = () => {
               if (textGroup.mirrorEnabled) {
                 const mirrored = groupGeo.clone();
                 mirrored.translate(textGroup.textX, -textGroup.mirrorOffset / 2, centerZOffset);
-                mirrored.rotateZ(-angle); 
-                layerGeometries.push(mirrored);
+                mirrored.rotateZ(-angle); layerGeometries.push(mirrored);
               }
               if (underlineGeo) {
                   const uInst = underlineGeo.clone();
@@ -1846,7 +983,7 @@ const App: React.FC = () => {
              // ... (Shape generation code - same as original) ...
              const shape = new THREE_ACTUAL.Shape();
              const radius = !isNaN(hub.outerRadius) ? hub.outerRadius : 20;
-             const wallT = (!isNaN(hub.wallThickness) ? hub.wallThickness : 2) + rendered3DConfig.globalStrokeWeight;
+             const wallT = !isNaN(hub.wallThickness) ? hub.wallThickness : 2;
              const sRatio = !isNaN(hub.starRatio) ? hub.starRatio : 0.5;
              const amp = !isNaN(hub.oscillationAmplitude) ? hub.oscillationAmplitude : 5;
              
@@ -1882,20 +1019,7 @@ const App: React.FC = () => {
                  shape.holes.push(hole);
              }
 
-             // Apply boldness to hub shapes using same approach as text
-             const hubStrokeWeight = (rendered3DConfig.globalStrokeWeight || 0);
-             if (hubStrokeWeight > 0.1) {
-               const boldedShapes = applyBoldnessToShapes([shape], hubStrokeWeight);
-               if (boldedShapes.length > 0) {
-                 // Replace the original shape with the bolded version
-                 const tempGeo = new THREE_ACTUAL.ExtrudeGeometry(boldedShapes, extrudeSettings);
-                 // Note: Shape doesn't have dispose method, cleanup handled by garbage collection
-                 return tempGeo;
-               }
-             }
-
-             const hubKey = makeHubKey(layer.id, hub, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight);
-             const geo = getOrCreateGeometry(geometryCache.hubs, hubKey, () => new THREE_ACTUAL.ExtrudeGeometry(shape, extrudeSettings));
+             const geo = new THREE_ACTUAL.ExtrudeGeometry(shape, extrudeSettings);
              geo.rotateZ(hub.rotationOffset * Math.PI / 180);
              geo.translate(0, 0, centerZOffset);
              layerGeometries.push(geo);
@@ -1907,7 +1031,6 @@ const App: React.FC = () => {
           const centerZOffset = -extrudeSettings.depth / 2;
           // ... (Abstract generation code - reuse logic) ...
           abstracts.filter(a => a.enabled).forEach(abs => {
-               const effectiveThickness = abs.thickness + rendered3DConfig.globalStrokeWeight;
                // ... (Fractal and Shape logic - assume copied from previous context or reuse existing)
                // For brevity, using the same robust logic structure as App.tsx
                if (abs.type === 'fractal') {
@@ -1991,7 +1114,7 @@ const App: React.FC = () => {
                    let startX = abs.innerRadius;
                    let startY = 0;
                    let startDepth = abs.recursionDepth || 4;
-                   let currentWidth = effectiveThickness;
+                   let currentWidth = abs.thickness;
                    if (effectiveTrunk > 0) {
                        const trunkEnd = startX + effectiveTrunk;
                        const maxRSq = abs.outerRadius > 0 ? abs.outerRadius * abs.outerRadius : Infinity;
@@ -2019,14 +1142,7 @@ const App: React.FC = () => {
                    }
 
                    if (shapes.length > 0) {
-                       // Apply boldness to fractal shapes using same approach as text
-                       const fractalStrokeWeight = (rendered3DConfig.globalStrokeWeight || 0);
-                       let boldedShapes = shapes;
-                       if (fractalStrokeWeight > 0.1) {
-                         boldedShapes = applyBoldnessToShapes(shapes, fractalStrokeWeight);
-                       }
-                       
-                       const fractalGeo = new THREE_ACTUAL.ExtrudeGeometry(boldedShapes, extrudeSettings);
+                       const fractalGeo = new THREE_ACTUAL.ExtrudeGeometry(shapes, extrudeSettings);
                        const angleStep = (Math.PI * 2) / abs.arms;
                        for(let i=0; i<abs.arms; i++) {
                            const angle = i * angleStep + (abs.rotationOffset * Math.PI / 180);
@@ -2066,40 +1182,17 @@ const App: React.FC = () => {
                const createAbstractShape = (pts: THREE_ACTUAL.Vector2[]) => {
                    if (pts.length < 2) return new THREE_ACTUAL.Shape();
                    const s = new THREE_ACTUAL.Shape();
-                   const halfThick = effectiveThickness / 2;
+                   const halfThick = abs.thickness / 2;
                    pts.forEach((pt, i) => { if (i === 0) s.moveTo(pt.x, pt.y + halfThick); else s.lineTo(pt.x, pt.y + halfThick); });
                    for(let i = pts.length-1; i >= 0; i--) { s.lineTo(pts[i].x, pts[i].y - halfThick); }
                    s.lineTo(pts[0].x, pts[0].y + halfThick);
                    return s;
                };
                const normalShape = createAbstractShape(shapePoints);
-               const abstractKey = makeAbstractKey(layer.id, abs, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight);
-               const normalGeo = getOrCreateGeometry(geometryCache.abstracts, abstractKey + '_normal', () => new THREE_ACTUAL.ExtrudeGeometry(finalNormalShape as any, extrudeSettings));
+               const normalGeo = new THREE_ACTUAL.ExtrudeGeometry(normalShape, extrudeSettings);
                const mirroredPoints = shapePoints.map((pt) => new THREE_ACTUAL.Vector2(pt.x, -pt.y));
                const mirroredShape = createAbstractShape(mirroredPoints);
-               
-               // Apply boldness to abstract shapes using same approach as text
-               const abstractStrokeWeight = (rendered3DConfig.globalStrokeWeight || 0);
-               let finalNormalShape: THREE_ACTUAL.Shape | THREE_ACTUAL.ExtrudeGeometry = normalShape;
-               let finalMirroredShape: THREE_ACTUAL.Shape | THREE_ACTUAL.ExtrudeGeometry = mirroredShape;
-               
-               if (abstractStrokeWeight > 0.1) {
-                 const boldedNormalShapes = applyBoldnessToShapes([normalShape], abstractStrokeWeight);
-                 if (boldedNormalShapes.length > 0) {
-                   const tempGeo = new THREE_ACTUAL.ExtrudeGeometry(boldedNormalShapes, extrudeSettings);
-                   finalNormalShape = tempGeo; // Replace with bolded version
-                 }
-                 
-                 if (mirroredShape) {
-                   const boldedMirroredShapes = applyBoldnessToShapes([mirroredShape], abstractStrokeWeight);
-                   if (boldedMirroredShapes.length > 0) {
-                     const tempGeo = new THREE_ACTUAL.ExtrudeGeometry(boldedMirroredShapes as any, extrudeSettings);
-                     finalMirroredShape = tempGeo; // Replace with bolded version
-                   }
-                 }
-               }
-               
-               const mirroredGeo = getOrCreateGeometry(geometryCache.abstracts, abstractKey + '_mirrored', () => new THREE_ACTUAL.ExtrudeGeometry(finalMirroredShape as any, extrudeSettings));
+               const mirroredGeo = new THREE_ACTUAL.ExtrudeGeometry(mirroredShape, extrudeSettings);
                const angleStep = (Math.PI * 2) / abs.arms;
                for(let i=0; i<abs.arms; i++) {
                    const angle = i * angleStep + (abs.rotationOffset * Math.PI / 180);
@@ -2134,50 +1227,28 @@ const App: React.FC = () => {
           // when edge profile (bevel) is OFF.
           // Therefore, if slots are disabled (just viewing), we SKIP the initial repair to keep
           // the visual quality high (sharp caps, smooth walls).
-           // When producing the 3D view we should merge/repair vertices so overlapping
-           // geometry fuses correctly. This reduces visual overlaps and prevents
-           // floating/non-welded faces in the 3D preview and exports.
-           if (rendered3DConfig.slotEnabled || viewMode === '3d') {
+          if (rendered3DConfig.slotEnabled) {
              layerMerged = repairGeometry(layerMerged, 0.0001, true) as THREE_ACTUAL.BufferGeometry;
-           }
+          }
 
           layerMerged.rotateX(layer.rotation3D.x * Math.PI / 180);
           layerMerged.rotateY(layer.rotation3D.y * Math.PI / 180);
-
+          
           if (rendered3DConfig.slotEnabled) {
-            // Try to use pre-computed slot cuts from cache
-            const cacheKey = hashSlotCut(
-              layer,
-              rendered3DConfig.slotLength,
-              rendered3DConfig.slotWidth,
-              rendered3DConfig.extrusionDepth,
-              rendered3DConfig.bevelEnabled,
-              bevelPerSide,
-              rendered3DConfig.layers
-            );
-
-            const cachedCutGeo = slotCutCache.get(cacheKey);
-            if (cachedCutGeo) {
-              // Use cached geometry
-              layerMerged = cachedCutGeo.clone();
-            } else {
-              // Fallback to on-demand computation (shouldn't happen with pre-computation)
-              console.warn('Slot cuts not pre-computed for layer:', layer.id);
-              layerMerged = await applySlotCuts(
-                layerMerged,
-                layer,
+            layerMerged = await applySlotCuts(
+                layerMerged, 
+                layer, 
                 rendered3DConfig.slotLength,
                 rendered3DConfig.slotWidth,
-                rendered3DConfig.extrusionDepth,
-                rendered3DConfig.bevelEnabled,
-                bevelPerSide,
-                rendered3DConfig.layers,
+                rendered3DConfig.extrusionDepth, 
+                rendered3DConfig.bevelEnabled, 
+                bevelThickness, 
+                rendered3DConfig.layers, 
+                csgEvaluator.current,
                 async () => { await updateProgress(); }
-              );
-            }
-
+            );
             // After cuts, we might want to repair again to fix n-gons or loose edges from boolean op
-            const postSlotRepair = repairGeometry(layerMerged, 0.0001, true);
+            const postSlotRepair = repairGeometry(layerMerged, 0.0001, true); 
             if (postSlotRepair) layerMerged = postSlotRepair;
             if (lIdx === 0) layerMerged.rotateZ(Math.PI);
           }
@@ -2185,6 +1256,8 @@ const App: React.FC = () => {
           // Final clean up logic:
           // If slots are enabled, use the repaired (merged vertices) geometry.
           // If slots are DISABLED, use the pristine geometry from mergeGeometries which preserves normals.
+          // Note: repairGeometry(..., false) would just remove degenerate triangles but recalc normals on disjoint faces,
+          // resulting in faceted look. So we skip repair entirely if visual fidelity is key and no CSG needed.
           const finalGeo = rendered3DConfig.slotEnabled 
              ? (repairGeometry(layerMerged, 0.0001, true) || layerMerged)
              : layerMerged;
@@ -2198,7 +1271,7 @@ const App: React.FC = () => {
     }
     onProgress(1);
     return group;
-  }, [rendered3DConfig, dynamicFonts, loadFont, viewMode]);
+  }, [rendered3DConfig, dynamicFonts, loadFont]);
 
   const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
@@ -2502,7 +1575,7 @@ const App: React.FC = () => {
         const loaded = JSON.parse(event.target?.result as string);
         setConfig(loaded);
         setConfig3D(loaded);
-        setRendered3DIfChanged(loaded);
+        setRendered3DConfig(loaded);
         setHistory([loaded]);
         setHistoryIndex(0);
         showNotification('Project loaded successfully!', 'success');
@@ -2584,7 +1657,7 @@ const App: React.FC = () => {
         
         setConfig(cleanConfig);
         setConfig3D(cleanConfig);
-        setRendered3DIfChanged(cleanConfig);
+        setRendered3DConfig(cleanConfig);
         
         configContext = cleanConfig;
     }
@@ -2730,7 +1803,7 @@ const App: React.FC = () => {
 
         setAiProgress(100);
         handleUpdateConfig(finalConfig, true);
-        setRendered3DIfChanged(finalConfig);
+        setRendered3DConfig(finalConfig);
         const modeLabel = mode === 'fractal' ? 'Fractal' : (mode === '3d' ? '3D' : '2D');
         showNotification(`Generated random ${modeLabel} design!`, "success");
     }
@@ -2751,24 +1824,7 @@ const App: React.FC = () => {
   useKeyboardShortcuts(shortcuts, {
     undo,
     redo,
-    toggleView: () => {
-      const newMode = viewMode === '2d' ? '3d' : '2d';
-      setViewMode(newMode);
-      // When switching to 3D view, immediately sync the current config to ensure changes are visible
-      if (newMode === '3d') {
-        // Clear any pending debounced updates to avoid conflicts
-        if (debounceTimer.current) {
-          clearTimeout(debounceTimer.current);
-          debounceTimer.current = null;
-        }
-        setRendered3DIfChanged(config);
-      }
-    },
-    forceRegenerate: () => {
-        clearGeometryCache();
-        setRendered3DIfChanged(config);
-        showNotification("Models Regenerated", "info", 1000);
-    },
+    toggleView: () => setViewMode(v => v === '2d' ? '3d' : '2d'),
     exportCombinedSTL: () => handleExportSTL(),
     exportBasePlaneSTL: () => handleExportLayerSTL(0),
     exportCrossPlaneSTL: () => handleExportLayerSTL(1),
@@ -2782,7 +1838,7 @@ const App: React.FC = () => {
     switchToAbstractTab: () => setActiveTab('abstract'),
     switchToPlanesTab: () => setActiveTab('planes'),
     forceUpdate3D: () => {
-        setRendered3DIfChanged(config);
+        setRendered3DConfig(config);
         showNotification("3D Model Updated", "info", 1000);
     }
   });
@@ -2885,8 +1941,8 @@ const App: React.FC = () => {
                         </button>
                         <button 
                             onClick={() => {
-                              setRendered3DIfChanged(config);
-                              setViewMode('3d');
+                                setRendered3DConfig(config);
+                                setViewMode('3d');
                             }} 
                             className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${viewMode === '3d' ? 'bg-sky-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
                         >

@@ -79,7 +79,7 @@ export interface LayerConfig {
   id: string;
   name: string;
   enabled: boolean;
-  rotation3D: { x: number; y: number };
+  rotation3D: { x: number; y: number; z: number };
   primary: TextGroupConfig;
   secondary: TextGroupConfig;
   secondaryEnabled: boolean;
@@ -103,11 +103,15 @@ export interface SnowflakeConfig {
   bevelAmount: number;
   bevelSegments: number;
   slotEnabled: boolean;
+  slotMode: '2-plane' | '3-plane';
   slotLength: number;
   slotWidth: number;
   quality: DesignQuality;
   syncAllLayers: boolean;
   globalStrokeWeight: number;
+  freeFloatingCheck: boolean;
+  diameterMode: 'auto-fit' | 'fixed-size';
+  language: 'en' | 'es' | 'fr' | 'de' | 'zh' | 'ja';
 }
 
 export interface FontOption {

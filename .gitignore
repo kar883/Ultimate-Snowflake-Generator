@@ -10,7 +10,6 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
-dist-electron
 *.local
 
 # Editor directories and files
@@ -23,17 +22,3 @@ dist-electron
 *.njsproj
 *.sln
 *.sw?
-
-# Build outputs
-out/
-build/
-release/
-
-# Environment files
-.env
-.env.local
-.env.*.local
-
-# Temporary files
-*.tmp
-*.temp

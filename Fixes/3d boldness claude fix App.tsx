@@ -1517,27 +1517,7 @@ const App: React.FC = () => {
     if (font) {
       const scale = textGroup.fontSize / font.unitsPerEm;
       const glyphs = font.stringToGlyphs(textGroup.text);
-      
-      // BOLD FONT VARIANT FALLBACK (E part of B+E)
-      // If high stroke weight and bold variant available, try loading it
-      const totalStrokeWeight = (rendered3DConfig.globalStrokeWeight || 0) + (textGroup.thickness || 0);
-      const boldUrl = BOLD_FONT_URLS[fontName];
-      let finalFont = font;
-      
-      if (totalStrokeWeight >= BOLD_FONT_THRESHOLD && boldUrl) {
-        try {
-          console.log(`🎯 Attempting bold font variant for ${fontName}`);
-          const boldFont = await loadFont(`${fontName}-Bold`, boldUrl);
-          if (boldFont) {
-            finalFont = boldFont;
-            console.log(`✅ Using bold font variant for ${fontName}`);
-          }
-        } catch (boldError) {
-          console.warn(`⚠️ Bold font variant failed for ${fontName}, using regular with path offsetting`);
-        }
-      }
-      let textShapes: THREE_ACTUAL.Shape[] = [];
-      let nonTextShapes: THREE_ACTUAL.Shape[] = [];
+      let shapes: THREE_ACTUAL.Shape[] = [];
       let currentX = 0;
       
       glyphs.forEach((glyph, i) => {
@@ -1551,55 +1531,81 @@ const App: React.FC = () => {
             else if (cmd.type === 'Q') threePath.quadraticCurveTo(cmd.x1, cmd.y1, cmd.x, cmd.y);
             else if (cmd.type === 'C') threePath.bezierCurveTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x, cmd.y);
           });
-          const glyphShapes = threePath.toShapes(true);
-          textShapes.push(...glyphShapes);
+          shapes.push(...threePath.toShapes(true));
         } catch (error) {
           console.warn(`Failed to process glyph ${i} for font ${fontName}:`, error);
         }
         currentX += (glyph.advanceWidth * scale) + textGroup.letterSpacing;
       });
-      
-      // Combine all shapes for processing
-      const shapes = [...textShapes, ...nonTextShapes];
-      
-      // ==================================================================
-      // BOLDNESS PROCESSING - Using bevel expansion for valid geometry
-      // ==================================================================
-      // Calculate boldness bevel amount (strokeWidth/2 mimics SVG stroke centered on path)
-      const boldnessBevel = totalStrokeWeight > 0.1 ? totalStrokeWeight / 2 : 0;
-      const shouldApplyBoldness = totalStrokeWeight > 0.1 && !(totalStrokeWeight >= BOLD_FONT_THRESHOLD && boldUrl);
-      
-      console.log('🎨 Boldness check:', {
-        totalStrokeWeight,
-        BOLD_FONT_THRESHOLD,
-        boldUrl: boldUrl || 'none',
-        shouldApplyBoldness,
-        boldnessBevel,
-        shapeCount: shapes.length
-      });
-      
-      // Create extrude settings with boldness bevel added to regular bevel
-      const textExtrudeSettings = {
-        ...extrudeSettings,
-        bevelEnabled: true, // Always enable when boldness is applied
-        bevelThickness: bevelPerSide + boldnessBevel,
-        bevelSize: bevelPerSide + boldnessBevel,
-        bevelSegments: Math.max(2, bevelSegCap), // Ensure enough segments for smoothness
-      };
-      
-      if (shouldApplyBoldness) {
-        console.log('🎨 Applying boldness via bevel expansion:', {
-          globalStrokeWeight: rendered3DConfig.globalStrokeWeight,
-          textThickness: textGroup.thickness,
-          total: totalStrokeWeight,
-          boldnessBevel,
-          finalBevelSize: textExtrudeSettings.bevelSize
-        });
-      }
-      // ==================================================================
 
-      const textKey = makeTextKey(layer.id, textGroup, textGroup.fontSize, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight, textGroup.thickness);
-      const groupGeo = getOrCreateGeometry(geometryCache.text, textKey, () => new THREE_ACTUAL.ExtrudeGeometry(shapes, textExtrudeSettings));
+            // ============================================================================
+      // TEXT BOLDNESS - Simplified approach
+      // Since 3D geometry is extruded from the base shape, we need to match
+      // the 2D appearance. Instead of complex path offsetting, we'll use a
+      // simple uniform scaling that preserves shape quality.
+      // ============================================================================
+      const totalStrokeWeight = (rendered3DConfig.globalStrokeWeight || 0) + (textGroup.thickness || 0);
+      
+      if (totalStrokeWeight > 0.1) {
+        const boldShapes: THREE_ACTUAL.Shape[] = [];
+        
+        // Use a scaling factor that approximately matches stroke width
+        // Each 1px of stroke adds roughly 0.5px to each side
+        const scaleFactor = 1 + (totalStrokeWeight * 0.05); // Tuned multiplier
+        
+        for (const shape of shapes) {
+          try {
+            const points = shape.getPoints(16);
+            if (points.length < 3) {
+              boldShapes.push(shape);
+              continue;
+            }
+            
+            // Calculate bounding box center for this shape
+            let minX = Infinity, minY = Infinity;
+            let maxX = -Infinity, maxY = -Infinity;
+            
+            for (const p of points) {
+              minX = Math.min(minX, p.x);
+              maxX = Math.max(maxX, p.x);
+              minY = Math.min(minY, p.y);
+              maxY = Math.max(maxY, p.y);
+            }
+            
+            const centerX = (minX + maxX) / 2;
+            const centerY = (minY + maxY) / 2;
+            
+            // Scale from bounding box center
+            const boldShape = new THREE_ACTUAL.Shape();
+            const scaledPoints = points.map(p => ({
+              x: centerX + (p.x - centerX) * scaleFactor,
+              y: centerY + (p.y - centerY) * scaleFactor
+            }));
+            
+            boldShape.moveTo(scaledPoints[0].x, scaledPoints[0].y);
+            for (let i = 1; i < scaledPoints.length; i++) {
+              boldShape.lineTo(scaledPoints[i].x, scaledPoints[i].y);
+            }
+            boldShape.closePath();
+            
+            boldShapes.push(boldShape);
+          } catch (error) {
+            console.warn('Failed to apply boldness, using original:', error);
+            boldShapes.push(shape);
+          }
+        }
+        
+        if (boldShapes.length > 0) {
+          shapes = boldShapes;
+          console.log(`✅ Applied ${totalStrokeWeight}px boldness to ${boldShapes.length} shapes`);
+        }
+      }
+      // ============================================================================
+      // END TEXT BOLDNESS
+      // ============================================================================
+
+      const textKey = makeTextKey(layer.id, textGroup, textGroup.fontSize, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight);
+      const groupGeo = getOrCreateGeometry(geometryCache.text, textKey, () => new THREE_ACTUAL.ExtrudeGeometry(shapes, extrudeSettings));
             
             // Underline Logic
             const uConf = textGroup.underline;
@@ -1716,91 +1722,13 @@ const App: React.FC = () => {
                 }
             }
             
-            // Apply boldness to underlines using the same stroke expansion as text
+            // Apply boldness to underlines using separate global and text boldness
             const underlineGlobalBoldness = rendered3DConfig.globalStrokeWeight || 0;
             const underlineTextBoldness = uConf.thickness || 0;
             const totalUnderlineBoldness = underlineGlobalBoldness + underlineTextBoldness;
             
             if (totalUnderlineBoldness > 0.1) {
-              const expandedUnderlineShapes: THREE_ACTUAL.Shape[] = [];
-              
-              for (const shape of underlineShapes) {
-                try {
-                  // Get points with higher resolution for smoother expansion
-                  const points = shape.getPoints(Math.max(32, Math.ceil(totalUnderlineBoldness * 4)));
-                  if (points.length < 3) {
-                    expandedUnderlineShapes.push(shape);
-                    continue;
-                  }
-                  
-                  // Expand the shape outward by strokeWidth/2 to match SVG stroke rendering
-                  const expandedPoints: THREE_ACTUAL.Vector2[] = [];
-                  const halfStroke = totalUnderlineBoldness / 2;
-                  
-                  for (let i = 0; i < points.length; i++) {
-                    const p = points[i];
-                    const prevP = points[(i - 1 + points.length) % points.length];
-                    const nextP = points[(i + 1) % points.length];
-                    
-                    // Calculate normals from adjacent segments
-                    const dx1 = p.x - prevP.x;
-                    const dy1 = p.y - prevP.y;
-                    const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
-                    
-                    const dx2 = nextP.x - p.x;
-                    const dy2 = nextP.y - p.y;
-                    const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
-                    
-                    if (len1 < 0.0001 || len2 < 0.0001) {
-                      expandedPoints.push(p);
-                      continue;
-                    }
-                    
-                    // Perpendicular normals (rotated 90 degrees)
-                    const nx1 = -dy1 / len1;
-                    const ny1 = dx1 / len1;
-                    const nx2 = -dy2 / len2;
-                    const ny2 = dx2 / len2;
-                    
-                    // Average normal for this vertex
-                    const nx = (nx1 + nx2) / 2;
-                    const ny = (ny1 + ny2) / 2;
-                    const nlen = Math.sqrt(nx * nx + ny * ny);
-                    
-                    if (nlen < 0.0001) {
-                      expandedPoints.push(p);
-                      continue;
-                    }
-                    
-                    // Normalize and scale by half stroke width
-                    const offsetX = (nx / nlen) * halfStroke;
-                    const offsetY = (ny / nlen) * halfStroke;
-                    
-                    expandedPoints.push(new THREE_ACTUAL.Vector2(p.x + offsetX, p.y + offsetY));
-                  }
-                  
-                  // Create new shape from expanded points
-                  if (expandedPoints.length >= 3) {
-                    const expandedShape = new THREE_ACTUAL.Shape();
-                    expandedShape.moveTo(expandedPoints[0].x, expandedPoints[0].y);
-                    for (let i = 1; i < expandedPoints.length; i++) {
-                      expandedShape.lineTo(expandedPoints[i].x, expandedPoints[i].y);
-                    }
-                    expandedShape.closePath();
-                    expandedUnderlineShapes.push(expandedShape);
-                  } else {
-                    expandedUnderlineShapes.push(shape);
-                  }
-                } catch (error) {
-                  console.warn('Failed to expand underline shape, using original:', error);
-                  expandedUnderlineShapes.push(shape);
-                }
-              }
-              
-              if (expandedUnderlineShapes.length > 0) {
-                underlineShapes = expandedUnderlineShapes;
-                console.log(`✅ Applied ${totalUnderlineBoldness}px boldness to ${expandedUnderlineShapes.length} underline shapes`);
-              }
+              underlineShapes = applyBoldnessToShapes(underlineShapes, totalUnderlineBoldness);
             }
             
             if (underlineShapes.length > 0) {

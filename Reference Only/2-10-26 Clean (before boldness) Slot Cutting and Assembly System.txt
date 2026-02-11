@@ -1,0 +1,167 @@
+Slot Cutting and Assembly System
+1. Slot Geometry Creation (createSlotGeometries)
+Location: src/App.tsx lines 318-397
+
+Slot Configuration Parameters:
+Slot Types: 'none' | 'half-back' | 'half-front' | 'third-back' | 'third-middle' | 'third-front' | 'custom'
+Base Dimensions: slotLength, slotWidth, extrusionDepth
+Adjustments: slotLengthAdjustment, slotWidthOffset
+Cut Depth: materialThickness + 8.0 (ensures full penetration)
+Slot Extension: 200 units for overlap
+Plane-Specific Slot Patterns:
+2-Plane Assembly:
+typescript
+// Single vertical blade through center
+slots.push(createVerticalBlade(slotLength + SLOT_EXTENSION, 0));
+3-Plane Assembly:
+typescript
+// Layer 0 (Base): Two angled cuts at 120° and 240°
+slots.push(createBlade(slotLength + SLOT_EXTENSION, 0, cutThickness, cutDepth, 120, -rotationOffset));
+slots.push(createBlade(slotLength + SLOT_EXTENSION, 0, cutThickness, cutDepth, 240, -rotationOffset));
+ 
+// Layer 1 (Middle): Horizontal + one angled cut
+slots.push(createBlade(slotLength + SLOT_EXTENSION, 0, cutDepth, cutThickness, 330, -rotationOffset));
+const xOffsetShort = slotLength * 0.75; 
+const shortLength = (slotLength * 0.25) + SLOT_EXTENSION;
+slots.push(createBlade(shortLength, xOffsetShort, cutThickness, cutDepth, 60, -rotationOffset + 180));
+ 
+// Layer 2 (Top): Two angled + extended horizontal
+slots.push(createBlade(slotLength + SLOT_EXTENSION, 0, cutThickness, cutDepth, 240, -rotationOffset));
+slots.push(createBlade(slotLength + SLOT_EXTENSION, 0, cutThickness, cutDepth, 120, -rotationOffset));
+const extLen = slotLength * 0.75;
+const extOff = -extLen;
+slots.push(createBlade(extLen, extOff, cutDepth, cutThickness, 30, -rotationOffset));
+2. Slot Cutting Process (applySlotCuts)
+Location: src/App.tsx lines 399-506
+
+CSG (Constructive Solid Geometry) Pipeline:
+Step 1: Caching System
+typescript
+const cacheKey = makeCacheKey(layer.id, slotLength, slotWidth, extrusionDepth, bevelEnabled, bevelAmount);
+const slotGeometries = getOrCreateSlotGeometries(cacheKey, () => createSlotGeometries(...));
+Step 2: AABB Filtering (Performance Optimization)
+typescript
+// Rotate slot blades to match layer orientation
+// Skip blades that don't intersect the layer's bounding box
+// This avoids expensive CSG operations for non-intersecting geometry
+if (layerBB.intersectsBox(padded)) {
+  keptSlots.push(g);
+}
+Step 3: Worker-Based CSG Operations
+typescript
+// Serialize geometries for worker
+const baseData = {
+  position: layerGeo.attributes.position.array,
+  normal: layerGeo.attributes.normal?.array,
+  index: layerGeo.index?.array
+};
+ 
+const slotsData = keptSlots.map(g => ({
+  position: g.attributes.position.array,
+  normal: g.attributes.normal?.array,
+  index: g.index?.array
+}));
+ 
+// Send to CSG worker for subtraction
+return postCSGJob(baseData, slotsData, layer.rotation3D);
+3. CSG Worker Implementation (csg.worker.ts)
+Location: src/csg.worker.ts lines 1-102
+
+Worker Process:
+typescript
+// Create brushes for CSG operations
+const baseBrush = new Brush(baseGeo);
+const toolBrush = new Brush(slotGeo);
+ 
+// Accumulate all slot geometries with ADDITION
+for (const slotData of slots) {
+  const brush = new Brush(slotGeo);
+  toolBrush = evaluator.evaluate(toolBrush, brush, ADDITION);
+}
+ 
+// Final subtraction from base geometry
+const result = evaluator.evaluate(baseBrush, toolBrush, SUBTRACTION);
+4. Geometry Repair System (geometryRepair.ts)
+Location: src/geometryRepair.ts lines 298-357
+
+8-Step Repair Pipeline:
+typescript
+export function repairSlotCutGeometry(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
+  let repaired = geometry;
+  
+  // Step 1: Remove degenerate triangles
+  repaired = removeDegenerateTriangles(repaired, 0.0001);
+  
+  // Step 2: Fix non-manifold edges (KEY for slot artifacts)
+  repaired = fixNonManifoldEdges(repaired);
+  
+  // Step 3: Aggressive vertex merging (handles near-duplicates from CSG)
+  repaired = BufferGeometryUtils.mergeVertices(repaired, 0.005);
+  
+  // Step 4: Collapse short edges (removes extra vertices along slot cuts)
+  repaired = collapseShortEdges(repaired, 0.02);
+  
+  // Step 5: Remove isolated vertices
+  repaired = removeIsolatedVertices(repaired);
+  
+  // Step 6: Medium tolerance merge cleanup
+  repaired = BufferGeometryUtils.mergeVertices(repaired, 0.002);
+  
+  // Step 7: Final degenerate removal
+  repaired = removeDegenerateTriangles(repaired, 0.0001);
+  
+  // Step 8: Final tight merge
+  repaired = BufferGeometryUtils.mergeVertices(repaired, 0.0005);
+  
+  // Recompute normals and bounding box
+  repaired.computeVertexNormals();
+  repaired.computeBoundingBox();
+  
+  return repaired;
+}
+5. Memory Management and Cleanup
+Slot Geometry Cache (slotGeometryCache.ts):
+typescript
+export function clearSlotCache() {
+  for (const geos of CACHE.values()) {
+    geos.forEach(g => g.dispose());
+  }
+  CACHE.clear();
+}
+Main Geometry Cache (geometryCache.ts):
+typescript
+export function clearGeometryCache() {
+  // Clear all caches including slot cut cache
+  for (const geo of slotCutCache.values()) {
+    geo.dispose();
+  }
+  slotCutCache.clear();
+}
+Worker Cleanup (csg.worker.ts):
+typescript
+// Clean up intermediate geometries to prevent memory leaks
+try {
+  if (toolBrush.geometry && toolBrush.geometry !== brush.geometry) {
+    toolBrush.geometry.dispose();
+  }
+} catch {}
+try { 
+  if (brush.geometry) brush.geometry.dispose(); 
+} catch {}
+6. Assembly Process Flow
+Generate Base Geometry: Create snowflake planes without slots
+Create Slot Blades: Generate cutting geometries based on plane count and layer position
+Cache Slot Geometries: Store for reuse across operations
+Filter Intersections: Use AABB to skip non-intersecting slots (performance)
+CSG Subtraction: Use worker thread to subtract slots from base geometry
+Repair Geometry: Fix CSG artifacts through multi-step repair process
+Cache Results: Store final cut geometries for future use
+Assembly: Planes physically interlock through the cut slots
+7. Key Features
+Performance Optimized: AABB filtering prevents unnecessary CSG operations
+Memory Efficient: Comprehensive caching and disposal system
+Robust Repair: Multi-stage geometry repair handles CSG artifacts
+Worker-Based: CSG operations run in separate thread to prevent UI blocking
+Configurable: Supports various slot types and custom adjustments
+Quality-Aware: Adapts curve segments and bevel detail based on quality settings
+This system creates precise interlocking slots that allow physical assembly of the snowflake layers while maintaining geometric integrity and performance.

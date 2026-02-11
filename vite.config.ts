@@ -14,13 +14,6 @@ export default defineConfig({
       // Enable Permissions Policy for local-fonts (no quotes around self)
       'Permissions-Policy': 'local-fonts=(self)'
     },
-    
-    // Exclude problematic directories from scanning
-    fs: {
-      // Only allow access to specific directories
-      allow: ['..', 'public', 'src'],
-      deny: ['cavalier_contours', 'dist-electron']
-    }
   },
   
   preview: {
@@ -35,14 +28,9 @@ export default defineConfig({
       output: {
         manualChunks: {
           'three': ['three'],
-          'three-examples': ['three/examples/jsm/exporters/STLExporter', 'three/examples/jsm/utils/BufferGeometryUtils'],
           'opentype': ['opentype.js'],
-          'ai': ['@google/genai'],
-          'zip': ['jszip'],
         },
       },
     },
-    // Increase chunk size warning limit to reduce noise
-    chunkSizeWarningLimit: 1000,
   },
 });
