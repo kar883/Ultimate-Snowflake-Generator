@@ -575,7 +575,7 @@ const seededRandom = (seed: number) => {
   };
 };
 
-const createSlotGeometries = (layer: LayerConfig, baseSlotLength: number, baseSlotWidth: number, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, allLayers: LayerConfig[]): THREE_ACTUAL.BufferGeometry[] => {
+const createSlotGeometries = (layer: LayerConfig, baseSlotLength: number, baseSlotWidth: number, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, allLayers: LayerConfig[], globalStrokeWeight: number = 0): THREE_ACTUAL.BufferGeometry[] => {
   if (!layer.slotType || layer.slotType === 'none') return [];
   const slots: THREE_ACTUAL.BufferGeometry[] = [];
   const enabledLayers = allLayers.filter(l => l.enabled);
@@ -587,6 +587,24 @@ const createSlotGeometries = (layer: LayerConfig, baseSlotLength: number, baseSl
   const slotLength = baseSlotLength + adjLength;
   const rotationOffset = layer.primary.rotationOffset;
   
+  // Calculate text boldness compensation
+  const textBoldness = layer.primary.thickness || 0;
+  const totalBoldness = globalStrokeWeight + textBoldness;
+  
+  // Adjust cut thickness to compensate for text boldness
+  // This ensures slots are wide enough to accommodate bold text
+  // Using 0.2mm clearance for proper 3D printing press-fit
+  const boldnessCompensation = totalBoldness + 0.2;
+  
+  console.log(`🔧 Slot boldness compensation for layer ${layer.id}:`, {
+    globalStrokeWeight,
+    textBoldness,
+    totalBoldness,
+    boldnessCompensation,
+    baseCutThickness: baseSlotWidth + adjWidth,
+    finalCutThickness: baseSlotWidth + adjWidth + boldnessCompensation
+  });
+  
   // `extrusionDepth` is the TOTAL material thickness (including bevel).
   // The `bevelAmount` passed here is the per-side bevel thickness.
   const materialThickness = extrusionDepth;
@@ -594,7 +612,7 @@ const createSlotGeometries = (layer: LayerConfig, baseSlotLength: number, baseSl
   // Remaining core thickness after bevels on both sides (not used for cut depth,
   // but useful to reason about geometry if needed).
   const coreThickness = Math.max(0.001, materialThickness - (bevelPerSide * 2));
-  const cutThickness = baseSlotWidth + adjWidth;
+  const cutThickness = baseSlotWidth + adjWidth + boldnessCompensation;
   // Ensure cuts fully pass through the total material thickness (with small margin).
   const cutDepth = materialThickness + 8.0;
   
@@ -656,9 +674,9 @@ const createSlotGeometries = (layer: LayerConfig, baseSlotLength: number, baseSl
   return slots;
 };
 
-const applySlotCuts = async (layerGeo: THREE_ACTUAL.BufferGeometry, layer: LayerConfig, slotLength: number, slotWidth: number, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, allLayers: LayerConfig[], onProgress?: () => Promise<void>): Promise<THREE_ACTUAL.BufferGeometry> => {
-  const cacheKey = makeCacheKey(layer.id || 'layer', slotLength, slotWidth, extrusionDepth, bevelEnabled, bevelAmount);
-  const slotGeometries = getOrCreateSlotGeometries(cacheKey, () => createSlotGeometries(layer, slotLength, slotWidth, extrusionDepth, bevelEnabled, bevelAmount, allLayers));
+const applySlotCuts = async (layerGeo: THREE_ACTUAL.BufferGeometry, layer: LayerConfig, slotLength: number, slotWidth: number, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, allLayers: LayerConfig[], globalStrokeWeight: number = 0, onProgress?: () => Promise<void>): Promise<THREE_ACTUAL.BufferGeometry> => {
+  const cacheKey = makeCacheKey(layer.id || 'layer', slotLength, slotWidth, extrusionDepth, bevelEnabled, bevelAmount, globalStrokeWeight);
+  const slotGeometries = getOrCreateSlotGeometries(cacheKey, () => createSlotGeometries(layer, slotLength, slotWidth, extrusionDepth, bevelEnabled, bevelAmount, allLayers, globalStrokeWeight));
   if (slotGeometries.length === 0) return layerGeo;
   // Serialize Base early so filtered worker calls can reference it.
   const baseData = {
@@ -1047,7 +1065,8 @@ const App: React.FC = () => {
               rendered3DConfig.extrusionDepth,
               rendered3DConfig.bevelEnabled,
               bevelPerSide,
-              rendered3DConfig.layers
+              rendered3DConfig.layers,
+              rendered3DConfig.globalStrokeWeight
             );
 
             // Store in cache
@@ -2172,6 +2191,7 @@ const App: React.FC = () => {
                 rendered3DConfig.bevelEnabled,
                 bevelPerSide,
                 rendered3DConfig.layers,
+                rendered3DConfig.globalStrokeWeight,
                 async () => { await updateProgress(); }
               );
             }

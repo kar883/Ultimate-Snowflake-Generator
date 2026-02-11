@@ -9,8 +9,8 @@ const STATS = {
   totalMissTime: 0
 };
 
-export function makeCacheKey(layerId: string, slotLength: number, slotWidth: number, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number) {
-  return `${layerId}::len=${slotLength.toFixed(3)}::w=${slotWidth.toFixed(3)}::d=${extrusionDepth.toFixed(3)}::bevel=${bevelEnabled ? '1' : '0'}::b=${bevelAmount.toFixed(3)}`;
+export function makeCacheKey(layerId: string, slotLength: number, slotWidth: number, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, globalStrokeWeight: number = 0) {
+  return `${layerId}::len=${slotLength.toFixed(3)}::w=${slotWidth.toFixed(3)}::d=${extrusionDepth.toFixed(3)}::bevel=${bevelEnabled ? '1' : '0'}::b=${bevelAmount.toFixed(3)}::bold=${globalStrokeWeight.toFixed(3)}`;
 }
 
 export function getOrCreateSlotGeometries(key: string, creator: () => THREE.BufferGeometry[]) {
