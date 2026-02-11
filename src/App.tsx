@@ -15,7 +15,9 @@ import { GoogleGenAI } from "@google/genai";
 import { postCSGJob } from './csgWorkerManager';
 import { CavalierPathOperations, Polyline } from './cavalierContours';
 import { makeCacheKey, getOrCreateSlotGeometries } from './slotGeometryCache';
-import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, makeSlotKey, getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, slotCutCache, hashSlotCut, makeUnderlineKey } from './geometryCache';
+import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, makeSlotKey, getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, slotCutCache, makeUnderlineKey } from './geometryCache';
+import { conservativeSlotCutRepair, analyzeManifoldEdges } from './conservativeSlotRepair';
+import { hashLayerContent, makeSlotCutCacheKey, improvedSlotCutCache } from './improvedSlotCache';
 
 const MAX_HISTORY = 50;
 
@@ -591,18 +593,27 @@ const createSlotGeometries = (layer: LayerConfig, baseSlotLength: number, baseSl
   const textBoldness = layer.primary.thickness || 0;
   const totalBoldness = globalStrokeWeight + textBoldness;
   
-  // Adjust cut thickness to compensate for text boldness
-  // This ensures slots are wide enough to accommodate bold text
-  // Using 0.2mm clearance for proper 3D printing press-fit
-  const boldnessCompensation = totalBoldness + 0.2;
+  // Calculate material thickness compensation for proper 3D printing tolerance
+  // Standard tolerance is 0.2mm for press-fit, but we need to scale it with material thickness
+  // Thicker materials need more tolerance due to potential warping and printing variations
+  const baseTolerance = 0.2; // Base tolerance in mm
+  const materialToleranceFactor = Math.max(1.0, extrusionDepth / 5.0); // Scale factor based on material thickness
+  const materialTolerance = baseTolerance * materialToleranceFactor;
   
-  console.log(`🔧 Slot boldness compensation for layer ${layer.id}:`, {
+  // Total compensation includes both boldness and material thickness tolerance
+  const totalCompensation = totalBoldness + materialTolerance;
+  
+  console.log(`🔧 Slot compensation for layer ${layer.id}:`, {
+    extrusionDepth,
+    materialToleranceFactor,
+    materialTolerance,
     globalStrokeWeight,
     textBoldness,
     totalBoldness,
-    boldnessCompensation,
+    baseTolerance,
+    totalCompensation,
     baseCutThickness: baseSlotWidth + adjWidth,
-    finalCutThickness: baseSlotWidth + adjWidth + boldnessCompensation
+    finalCutThickness: baseSlotWidth + adjWidth + totalCompensation
   });
   
   // `extrusionDepth` is the TOTAL material thickness (including bevel).
@@ -612,7 +623,7 @@ const createSlotGeometries = (layer: LayerConfig, baseSlotLength: number, baseSl
   // Remaining core thickness after bevels on both sides (not used for cut depth,
   // but useful to reason about geometry if needed).
   const coreThickness = Math.max(0.001, materialThickness - (bevelPerSide * 2));
-  const cutThickness = baseSlotWidth + adjWidth + boldnessCompensation;
+  const cutThickness = baseSlotWidth + adjWidth + totalCompensation;
   // Ensure cuts fully pass through the total material thickness (with small margin).
   const cutDepth = materialThickness + 8.0;
   
@@ -1024,86 +1035,7 @@ const App: React.FC = () => {
       }
   }, []);
 
-  // Pre-compute slot cuts in background when slot settings change
-  useEffect(() => {
-    if (!rendered3DConfig.slotEnabled) return;
-
-    const preComputeSlotCuts = async () => {
-      // Calculate bevel per side (same logic as in generateMesh)
-      const bevelPerSide = rendered3DConfig.bevelEnabled ? Math.min(rendered3DConfig.bevelAmount, rendered3DConfig.extrusionDepth / 2) : 0;
-      // Create a temporary config with slots disabled to generate base geometry
-      const baseConfig = { ...rendered3DConfig, slotEnabled: false };
-
-      for (const layer of rendered3DConfig.layers.filter(l => l.enabled)) {
-        if (!layer.slotType || layer.slotType === 'none') continue;
-
-        const cacheKey = hashSlotCut(
-          layer,
-          rendered3DConfig.slotLength,
-          rendered3DConfig.slotWidth,
-          rendered3DConfig.extrusionDepth,
-          rendered3DConfig.bevelEnabled,
-          bevelPerSide,
-          rendered3DConfig.layers
-        );
-
-        // Skip if already cached
-        if (slotCutCache.has(cacheKey)) continue;
-
-        try {
-          // Generate base mesh for this layer only (with slots disabled)
-          const tempGroup = await generateMesh(() => {}, 'low', baseConfig);
-          const layerMesh = tempGroup.children.find(child => child.userData.layerId === layer.id) as THREE_ACTUAL.Mesh;
-
-          if (layerMesh) {
-            // Apply slot cuts to the base geometry
-            const cutGeo = await applySlotCuts(
-              layerMesh.geometry.clone(),
-              layer,
-              rendered3DConfig.slotLength,
-              rendered3DConfig.slotWidth,
-              rendered3DConfig.extrusionDepth,
-              rendered3DConfig.bevelEnabled,
-              bevelPerSide,
-              rendered3DConfig.layers,
-              rendered3DConfig.globalStrokeWeight
-            );
-
-            // Store in cache
-            slotCutCache.set(cacheKey, cutGeo);
-          }
-
-          // Clean up temporary group
-          tempGroup.traverse((child) => {
-            if (child instanceof THREE_ACTUAL.Mesh) {
-              child.geometry.dispose();
-              if (Array.isArray(child.material)) {
-                child.material.forEach(m => m.dispose());
-              } else {
-                child.material.dispose();
-              }
-            }
-          });
-
-        } catch (error) {
-          console.warn('Failed to pre-compute slot cuts for layer:', layer.id, error);
-        }
-      }
-    };
-
-    // Debounce the pre-computation to avoid excessive work
-    const timeoutId = setTimeout(preComputeSlotCuts, 200);
-    return () => clearTimeout(timeoutId);
-  }, [
-    rendered3DConfig.slotEnabled,
-    rendered3DConfig.slotLength,
-    rendered3DConfig.slotWidth,
-    rendered3DConfig.extrusionDepth,
-    rendered3DConfig.bevelEnabled,
-    rendered3DConfig.bevelAmount,
-    rendered3DConfig.layers
-  ]);
-
+  
   const updateGroup = useCallback((group: 'primary' | 'secondary', updates: Partial<TextGroupConfig>, commitTo3D: boolean = false) => {
     handleUpdateConfig({
       layers: config.layers.map((layer, idx) => {
@@ -1179,290 +1111,6 @@ const App: React.FC = () => {
 
   const generateMesh = useCallback(async (onProgress: (p: number) => void, overrideQuality?: DesignQuality, overrideConfig?: SnowflakeConfig): Promise<THREE_ACTUAL.Group> => {
     const config = overrideConfig || rendered3DConfig;
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
-    // Clear geometry cache if quality changes (different curve/bevel segments)
-    if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
-      clearGeometryCache();
-    }
     // Clear geometry cache if quality changes (different curve/bevel segments)
     if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
       clearGeometryCache();
@@ -1587,15 +1235,6 @@ const App: React.FC = () => {
       // Calculate boldness bevel amount (strokeWidth/2 mimics SVG stroke centered on path)
       const boldnessBevel = totalStrokeWeight > 0.1 ? totalStrokeWeight / 2 : 0;
       const shouldApplyBoldness = totalStrokeWeight > 0.1 && !(totalStrokeWeight >= BOLD_FONT_THRESHOLD && boldUrl);
-      
-      console.log('🎨 Boldness check:', {
-        totalStrokeWeight,
-        BOLD_FONT_THRESHOLD,
-        boldUrl: boldUrl || 'none',
-        shouldApplyBoldness,
-        boldnessBevel,
-        shapeCount: shapes.length
-      });
       
       // Create extrude settings with boldness bevel added to regular bevel
       const textExtrudeSettings = {
@@ -2165,14 +1804,14 @@ const App: React.FC = () => {
 
           if (rendered3DConfig.slotEnabled) {
             // Try to use pre-computed slot cuts from cache
-            const cacheKey = hashSlotCut(
-              layer,
+            const cacheKey = makeCacheKey(
+              layer.id || 'layer',
               rendered3DConfig.slotLength,
               rendered3DConfig.slotWidth,
               rendered3DConfig.extrusionDepth,
               rendered3DConfig.bevelEnabled,
               bevelPerSide,
-              rendered3DConfig.layers
+              rendered3DConfig.globalStrokeWeight
             );
 
             const cachedCutGeo = slotCutCache.get(cacheKey);
@@ -2196,17 +1835,32 @@ const App: React.FC = () => {
               );
             }
 
-            // After cuts, we might want to repair again to fix n-gons or loose edges from boolean op
-            const postSlotRepair = repairGeometry(layerMerged, 0.0001, true);
-            if (postSlotRepair) layerMerged = postSlotRepair;
+            // After cuts, apply conservative repair to fix non-manifold edges
+            const postSlotRepair = conservativeSlotCutRepair(layerMerged);
+            layerMerged = postSlotRepair;
+            
+            // Optional: Detailed diagnostics for debugging
+            const analysis = analyzeManifoldEdges(layerMerged);
+            console.log(`📊 Manifold Analysis for layer ${layer.id}:`);
+            console.log(`  Total edges: ${analysis.totalEdges}`);
+            console.log(`  Manifold edges (2 faces): ${analysis.manifoldEdges}`);
+            console.log(`  Boundary edges (1 face): ${analysis.boundaryEdges}`);
+            console.log(`  Non-manifold edges (>2 faces): ${analysis.nonManifoldEdges}`);
+            console.log(`  Is fully manifold: ${analysis.isManifold}`);
+            
+            // If still has non-manifold edges, apply second pass
+            if (analysis.nonManifoldEdges > 0) {
+              console.log(`⚠️ Second pass needed for ${analysis.nonManifoldEdges} non-manifold edges`);
+              layerMerged = conservativeSlotCutRepair(layerMerged);
+            }
             if (lIdx === 0) layerMerged.rotateZ(Math.PI);
           }
           
           // Final clean up logic:
-          // If slots are enabled, use the repaired (merged vertices) geometry.
+          // If slots are enabled, use the repaired geometry (already processed by conservativeSlotCutRepair).
           // If slots are DISABLED, use the pristine geometry from mergeGeometries which preserves normals.
           const finalGeo = rendered3DConfig.slotEnabled 
-             ? (repairGeometry(layerMerged, 0.0001, true) || layerMerged)
+             ? layerMerged
              : layerMerged;
 
           const mesh = new THREE_ACTUAL.Mesh(finalGeo);
@@ -2848,6 +2502,8 @@ const App: React.FC = () => {
                         onFontUpload={handleFontUpload}
                         dynamicFonts={dynamicFonts}
                         onAutoConfigureSlots={() => handleUpdateConfig({ layers: calculateOptimalSlots(config.layers), slotEnabled: true }, true)}
+                        calculateOptimalSlots={calculateOptimalSlots}
+                        setViewMode={setViewMode}
                         undo={undo}
                         redo={redo}
                         canUndo={canUndo}
@@ -2901,7 +2557,7 @@ const App: React.FC = () => {
                             onClick={() => setViewMode('2d')} 
                             className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${viewMode === '2d' ? 'bg-sky-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
                         >
-                            2D Preview
+                            2D
                         </button>
                         <button 
                             onClick={() => {
@@ -2910,7 +2566,7 @@ const App: React.FC = () => {
                             }} 
                             className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${viewMode === '3d' ? 'bg-sky-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
                         >
-                            3D Model
+                            3D
                         </button>
                     </div>
                 </div>

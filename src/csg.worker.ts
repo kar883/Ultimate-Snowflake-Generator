@@ -7,6 +7,16 @@ const evaluator = new Evaluator();
 evaluator.attributes = ['position', 'normal'];
 evaluator.useGroups = false;
 
+// Suppress deprecation warnings by overriding console.warn in worker context
+const originalWarn = console.warn;
+console.warn = (...args: any[]) => {
+  // Filter out MeshBVH deprecation warnings
+  if (args.length > 0 && typeof args[0] === 'string' && args[0].includes('maxLeafTris')) {
+    return; // Suppress this specific warning
+  }
+  return originalWarn.apply(console, args);
+};
+
 self.onmessage = (e) => {
     const { base, slots, rotation } = e.data;
 
@@ -18,6 +28,21 @@ self.onmessage = (e) => {
         if (data.index) geo.setIndex(new THREE.BufferAttribute(data.index, 1));
         return geo;
     };
+    
+    // Try to configure BVH with correct options
+    const configureBVH = (geometry: any) => {
+        try {
+            // @ts-ignore
+            if (geometry.computeBoundsTree) {
+                geometry.computeBoundsTree({
+                    maxLeafSize: 16, // Use correct option instead of deprecated maxLeafTris
+                    indirect: true
+                });
+            }
+        } catch (e) {
+            // Fallback: ignore if configuration not available
+        }
+    };
 
     let baseGeo: THREE.BufferGeometry | null = null;
     let toolBrush: any = null;
@@ -27,6 +52,9 @@ self.onmessage = (e) => {
         // Ensure base has normals for CSG
         if (!baseGeo.attributes.normal) baseGeo.computeVertexNormals();
         
+        // Configure BVH with correct options to avoid deprecation warning
+        configureBVH(baseGeo);
+        
         // `three-bvh-csg` types may not match runtime. Use any to avoid TS surface errors.
         // @ts-ignore
         const baseBrush: any = new Brush(baseGeo);
@@ -34,6 +62,9 @@ self.onmessage = (e) => {
 
         for (const slotData of slots) {
             const slotGeo = parseGeometry(slotData);
+            
+            // Configure BVH for slot geometry
+            configureBVH(slotGeo);
             
             // Apply rotation logic inside worker to match the layer orientation
             // The slot generation created them at origin, we rotate them to cut through the rotated plane correctly

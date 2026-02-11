@@ -42,7 +42,7 @@ export function hashConfig(config: any): string {
 }
 
 // Hash function for slot-cut specific parameters
-export function hashSlotCut(layer: any, slotLength: number, slotWidth: number, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, allLayers: any[]): string {
+export function hashSlotCut(layer: any, slotLength: number, slotWidth: number, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, allLayers: any[], globalStrokeWeight: number = 0): string {
   const relevantData = {
     layerId: layer.id,
     layerConfig: layer,
@@ -51,6 +51,7 @@ export function hashSlotCut(layer: any, slotLength: number, slotWidth: number, e
     extrusionDepth,
     bevelEnabled,
     bevelAmount,
+    globalStrokeWeight,
     allLayers: allLayers.map(l => ({ id: l.id, enabled: l.enabled, rotation3D: l.rotation3D, slotType: l.slotType }))
   };
   return JSON.stringify(relevantData);

@@ -5,6 +5,7 @@ import { CURSIVE_FONTS, FONT_TTF_URLS } from '../constants';
 import { SystemFontButton } from './LocalFontPicker';
 import { TooltipContext, InfoTooltip } from './Tooltip';
 import { useTranslation } from '../translations';
+import { clearGeometryCache } from '../geometryCache';
 import opentype from 'opentype.js';
 
 const Toggle: React.FC<{ 
@@ -635,6 +636,8 @@ interface ControlPanelProps {
   onFontUpload: (file: File) => void;
   dynamicFonts: Record<string, string>;
   onAutoConfigureSlots: () => void;
+  calculateOptimalSlots: (layers: LayerConfig[]) => LayerConfig[];
+  setViewMode: (mode: '2d' | '3d') => void;
   undo: () => void;
   redo: () => void;
   canUndo: boolean;
@@ -645,7 +648,7 @@ interface ControlPanelProps {
 }
 
 const ControlPanel: React.FC<ControlPanelProps> = ({ 
-  config, onUpdate, updateGroup, updateCharOffset, updateHubs, updateAbstracts, onAiPolish, aiLoading, aiProgress, onExportSTL, onExportLayerSTL, onExportAllLayersZip, onExport2D, exportLoading, onFetchFont, onFontUpload, dynamicFonts, onAutoConfigureSlots, undo, redo, canUndo, canRedo, shortcuts, activeTab, onTabChange
+  config, onUpdate, updateGroup, updateCharOffset, updateHubs, updateAbstracts, onAiPolish, aiLoading, aiProgress, onExportSTL, onExportLayerSTL, onExportAllLayersZip, onExport2D, exportLoading, onFetchFont, onFontUpload, dynamicFonts, onAutoConfigureSlots, calculateOptimalSlots, setViewMode, undo, redo, canUndo, canRedo, shortcuts, activeTab, onTabChange
 }) => {
   const { t } = useTranslation(config.language || 'en');
   const tabContentRef = useRef<HTMLDivElement>(null);
@@ -815,7 +818,47 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
     }
     
     const newLayers = [...config.layers];
+    const wasEnabled = newLayers[idx].enabled;
+    const isEnabled = updates.enabled !== undefined ? updates.enabled : wasEnabled;
     newLayers[idx] = { ...newLayers[idx], ...updates };
+    
+    // Check if we're changing plane count while slots are active
+    if (config.slotEnabled && updates.enabled !== undefined && wasEnabled !== isEnabled) {
+      const activePlanesAfterUpdate = newLayers.filter(l => l.enabled).length;
+      
+      if (isEnabled && activePlanesAfterUpdate === 3 && config.viewMode === '2d') {
+        // Scenario 1: Enabling 3rd plane while in 2-plane mode
+        console.log('🔄 3rd plane activated, switching to 3-plane mode and reconfiguring slots');
+        
+        // Clear 3D cache first
+        clearGeometryCache();
+        
+        // Switch to 3-plane mode and reconfigure slots
+        setViewMode('3d');
+        setTimeout(() => {
+          const updatedLayersWithSlots = calculateOptimalSlots(newLayers);
+          onUpdate({ layers: updatedLayersWithSlots, slotMode: '3-plane' }, true);
+        }, 100);
+        
+        return; // Skip the normal update flow
+        
+      } else if (!isEnabled && activePlanesAfterUpdate === 2 && config.viewMode === '3d') {
+        // Scenario 2: Disabling a plane while in 3-plane mode (backward compatibility)
+        console.log('🔄 Plane disabled, switching to 2-plane mode and reconfiguring slots');
+        
+        // Clear 3D cache first
+        clearGeometryCache();
+        
+        // Switch to 2-plane mode and reconfigure slots
+        setViewMode('2d');
+        setTimeout(() => {
+          const updatedLayersWithSlots = calculateOptimalSlots(newLayers);
+          onUpdate({ layers: updatedLayersWithSlots, slotMode: '2-plane' }, true);
+        }, 100);
+        
+        return; // Skip the normal update flow
+      }
+    }
     
     // Only log after update in development mode and reduce frequency
     if (process.env.NODE_ENV === 'development' && Math.random() < 0.1) {
@@ -1487,7 +1530,30 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                <InfoTooltip label={t('Auto Slots')} description={getDescription('Auto Slots', t)} className="w-full">
                  <div className={`${config.slotEnabled ? 'bg-sky-600/10 border-sky-500/30' : 'bg-slate-800/50 border-white/5'} p-2 rounded-lg border transition-all`}>
                     <button 
-                        onClick={() => config.slotEnabled ? onUpdate({ slotEnabled: false }, true) : onAutoConfigureSlots()} 
+                        onClick={() => {
+                          if (config.slotEnabled) {
+                            // Disable slots
+                            onUpdate({ slotEnabled: false }, true);
+                          } else {
+                            // Check number of active planes before enabling slots
+                            const activePlanes = config.layers.filter(l => l.enabled).length;
+                            
+                            if (activePlanes === 1) {
+                              // Show warning for single plane
+                              alert('Slots cannot be cut with only 1 active plane. Please enable at least 2 planes to use slot cutting.');
+                              return;
+                            }
+                            
+                            // Enable slots and auto-configure
+                            onAutoConfigureSlots();
+                            
+                            // Switch to appropriate view mode based on active planes
+                            const targetViewMode = activePlanes === 2 ? '2d' : '3d';
+                            if (config.viewMode !== targetViewMode) {
+                              setViewMode(targetViewMode);
+                            }
+                          }
+                        }} 
                         className={`${btnBase} w-full ${config.slotEnabled ? 'bg-sky-600 hover:bg-sky-500 text-white shadow-lg' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white'} flex items-center justify-between px-3`}
                     >
                         <span>{t('Cut Slots')}</span>
