@@ -467,6 +467,12 @@ self.onmessage = (e) => {
                 const slotGeo = parseGeometry(slotData);
                 console.log(`  Slot geometry: ${slotGeo.attributes.position.count} vertices, ${slotGeo.index ? slotGeo.index.count / 3 : 0} faces`);
                 
+                // Validate slot geometry
+                if (!slotGeo.index || slotGeo.index.count === 0) {
+                    console.error('❌ Slot geometry has no faces!');
+                    continue;
+                }
+                
                 configureBVH(slotGeo);
                 
                 slotGeo.rotateX(rotation.x * Math.PI / 180);
@@ -475,9 +481,19 @@ self.onmessage = (e) => {
                 slotGeometries.push(slotGeo);
             }
             
+            // Filter out invalid geometries
+            const validSlotGeometries = slotGeometries.filter(geo => geo.index && geo.index.count > 0);
+            console.log(`  Valid slot geometries: ${validSlotGeometries.length}/${slotGeometries.length}`);
+            
+            if (validSlotGeometries.length === 0) {
+                console.error('❌ No valid slot geometries to process!');
+                (self as any).postMessage({ position: base.position, normal: base.normal, index: base.index });
+                return;
+            }
+            
             // Merge all slot geometries into one
-            if (slotGeometries.length === 1) {
-                combinedSlotGeometry = slotGeometries[0];
+            if (validSlotGeometries.length === 1) {
+                combinedSlotGeometry = validSlotGeometries[0];
             } else {
                 // Manual merge since BufferGeometryUtils might not be available
                 const positions: number[] = [];
@@ -485,7 +501,7 @@ self.onmessage = (e) => {
                 const indices: number[] = [];
                 let vertexOffset = 0;
                 
-                for (const slotGeo of slotGeometries) {
+                for (const slotGeo of validSlotGeometries) {
                     const pos = slotGeo.attributes.position;
                     const norm = slotGeo.attributes.normal;
                     const idx = slotGeo.index;
@@ -538,6 +554,19 @@ self.onmessage = (e) => {
         
         // *** CHECK CSG RESULT ***
         let resGeo = result.geometry;
+        
+        if (!resGeo) {
+            console.error('❌ CSG operation returned null geometry!');
+            console.log('  Base geometry:', baseGeo?.attributes.position.count);
+            console.log('  Slot geometry:', combinedSlotGeometry?.attributes.position.count);
+            (self as any).postMessage({ 
+                position: base.position, 
+                normal: base.normal, 
+                index: base.index 
+            });
+            return;
+        }
+        
         const preRepairVertices = resGeo.attributes.position.count;
         const preRepairFaces = resGeo.index ? resGeo.index.count / 3 : 0;
         console.log(`🔍 CSG Result: ${preRepairVertices} vertices, ${preRepairFaces} faces`);
@@ -545,7 +574,11 @@ self.onmessage = (e) => {
         if (preRepairFaces === 0) {
             console.error('❌ CSG operation produced no faces! This indicates a problem with the CSG operation itself.');
             console.log('  Base geometry vertices:', baseGeo?.attributes.position.count);
-            console.log('  Tool geometry vertices:', toolBrush?.geometry?.attributes.position.count);
+            console.log('  Slot geometry vertices:', combinedSlotGeometry?.attributes.position.count);
+            console.log('  Result geometry:', resGeo);
+            console.log('  Result has attributes:', !!resGeo.attributes);
+            console.log('  Result has position:', !!resGeo.attributes?.position);
+            console.log('  Result has index:', !!resGeo.index);
         }
         
         // *** APPLY COMPREHENSIVE REPAIR ***
