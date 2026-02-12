@@ -361,15 +361,23 @@ function weldBoundaryVertices(geometry: THREE.BufferGeometry, tolerance: number 
 
 function comprehensiveSlotRepair(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
   console.log('🔧 COMPREHENSIVE slot repair (surgical + gap filling)');
+  console.log(`  Initial: ${geometry.attributes.position.count} vertices, ${geometry.index ? geometry.index.count / 3 : 0} faces`);
   
   let result = geometry;
   
   // PHASE 1: SURGICAL REPAIR
   console.log('Phase 1: Surgical topology repair');
   result = removeDegenerateTriangles(result, 0.00001);
+  console.log(`  After degenerate removal: ${result.attributes.position.count} vertices, ${result.index ? result.index.count / 3 : 0} faces`);
+  
   result = weldCoincidentVertices(result, 0.0001);
+  console.log(`  After vertex welding: ${result.attributes.position.count} vertices, ${result.index ? result.index.count / 3 : 0} faces`);
+  
   result = fixNonManifoldEdges(result);
+  console.log(`  After non-manifold fix: ${result.attributes.position.count} vertices, ${result.index ? result.index.count / 3 : 0} faces`);
+  
   result = removeDegenerateTriangles(result, 0.00001);
+  console.log(`  After final degenerate removal: ${result.attributes.position.count} vertices, ${result.index ? result.index.count / 3 : 0} faces`);
   
   // PHASE 2: GAP FILLING
   console.log('Phase 2: Gap filling on boundaries');
@@ -379,6 +387,7 @@ function comprehensiveSlotRepair(geometry: THREE.BufferGeometry): THREE.BufferGe
   if (boundaryBefore.length > 0) {
     // Weld boundary vertices more aggressively
     result = weldBoundaryVertices(result, 0.4);
+    console.log(`  After boundary welding: ${result.attributes.position.count} vertices, ${result.index ? result.index.count / 3 : 0} faces`);
     
     const boundaryAfter = findBoundaryEdges(result);
     console.log(`  Boundary edges after welding: ${boundaryAfter.length}`);
@@ -388,14 +397,20 @@ function comprehensiveSlotRepair(geometry: THREE.BufferGeometry): THREE.BufferGe
   console.log('Phase 3: Final cleanup');
   // Manual merge since BufferGeometryUtils not available in worker
   result = weldCoincidentVertices(result, 0.0002);
+  console.log(`  After final merge: ${result.attributes.position.count} vertices, ${result.index ? result.index.count / 3 : 0} faces`);
+  
   result = removeUnusedVertices(result);
+  console.log(`  After removing unused vertices: ${result.attributes.position.count} vertices, ${result.index ? result.index.count / 3 : 0} faces`);
+  
   result = removeDegenerateTriangles(result, 0.00001);
+  console.log(`  After final degenerate removal: ${result.attributes.position.count} vertices, ${result.index ? result.index.count / 3 : 0} faces`);
   
   result.computeVertexNormals();
   result.computeBoundingBox();
   
   const finalBoundary = findBoundaryEdges(result);
   console.log(`  Final boundary edges: ${finalBoundary.length}`);
+  console.log(`  Final: ${result.attributes.position.count} vertices, ${result.index ? result.index.count / 3 : 0} faces`);
   
   return result;
 }
@@ -472,10 +487,19 @@ self.onmessage = (e) => {
         
         const result: any = evaluator.evaluate(baseBrush, toolBrush, SUBTRACTION);
         
-        // *** APPLY COMPREHENSIVE REPAIR ***
+        // *** CHECK CSG RESULT ***
         let resGeo = result.geometry;
         const preRepairVertices = resGeo.attributes.position.count;
+        const preRepairFaces = resGeo.index ? resGeo.index.count / 3 : 0;
+        console.log(`🔍 CSG Result: ${preRepairVertices} vertices, ${preRepairFaces} faces`);
         
+        if (preRepairFaces === 0) {
+            console.error('❌ CSG operation produced no faces! This indicates a problem with the CSG operation itself.');
+            console.log('  Base geometry vertices:', baseGeo?.attributes.position.count);
+            console.log('  Tool geometry vertices:', toolBrush?.geometry?.attributes.position.count);
+        }
+        
+        // *** APPLY COMPREHENSIVE REPAIR ***
         resGeo = comprehensiveSlotRepair(resGeo);
         
         const postRepairVertices = resGeo.attributes.position.count;
