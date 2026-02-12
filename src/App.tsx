@@ -1750,7 +1750,7 @@ const App: React.FC = () => {
                };
                const normalShape = createAbstractShape(shapePoints);
                const abstractKey = makeAbstractKey(layer.id, abs, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight);
-               const normalGeo = getOrCreateGeometry(geometryCache.abstracts, abstractKey + '_normal', () => new THREE_ACTUAL.ExtrudeGeometry(finalNormalShape as any, extrudeSettings));
+               const normalGeo = getOrCreateGeometry(geometryCache.abstracts, abstractKey + '_normal', () => new THREE_ACTUAL.ExtrudeGeometry(normalShape as any, extrudeSettings));
                const mirroredPoints = shapePoints.map((pt) => new THREE_ACTUAL.Vector2(pt.x, -pt.y));
                const mirroredShape = createAbstractShape(mirroredPoints);
                
