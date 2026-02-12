@@ -454,8 +454,12 @@ self.onmessage = (e) => {
         const baseBrush: any = new Brush(baseGeo);
         if (baseBrush.updateMatrixWorld) baseBrush.updateMatrixWorld();
 
+        console.log(`🔍 CSG Debug: Processing ${slots.length} slots`);
+        console.log(`  Base geometry: ${baseGeo.attributes.position.count} vertices, ${baseGeo.index ? baseGeo.index.count / 3 : 0} faces`);
+        
         for (const slotData of slots) {
             const slotGeo = parseGeometry(slotData);
+            console.log(`  Slot geometry: ${slotGeo.attributes.position.count} vertices, ${slotGeo.index ? slotGeo.index.count / 3 : 0} faces`);
             
             configureBVH(slotGeo);
             
@@ -468,13 +472,16 @@ self.onmessage = (e) => {
 
             if (!toolBrush) {
                 toolBrush = brush;
+                console.log(`  Created initial tool brush`);
             } else {
+                console.log(`  Merging with existing tool brush`);
                 const nextTool: any = evaluator.evaluate(toolBrush, brush, ADDITION);
                 try {
                   if (toolBrush.geometry && toolBrush.geometry !== brush.geometry) toolBrush.geometry.dispose();
                 } catch {}
                 try { if (brush.geometry) brush.geometry.dispose(); } catch {}
                 toolBrush = nextTool;
+                console.log(`  After merge: ${nextTool.geometry.attributes.position.count} vertices, ${nextTool.geometry.index ? nextTool.geometry.index.count / 3 : 0} faces`);
             }
         }
 
@@ -484,6 +491,10 @@ self.onmessage = (e) => {
         }
 
         if (toolBrush.updateMatrixWorld) toolBrush.updateMatrixWorld();
+        
+        console.log(`🔍 Final CSG subtraction:`);
+        console.log(`  Base brush: ${baseBrush.geometry.attributes.position.count} vertices, ${baseBrush.geometry.index ? baseBrush.geometry.index.count / 3 : 0} faces`);
+        console.log(`  Tool brush: ${toolBrush.geometry.attributes.position.count} vertices, ${toolBrush.geometry.index ? toolBrush.geometry.index.count / 3 : 0} faces`);
         
         const result: any = evaluator.evaluate(baseBrush, toolBrush, SUBTRACTION);
         
