@@ -1,25 +1,4 @@
 import * as THREE from 'three';
-// @ts-ignore
-import { Brush, Evaluator, SUBTRACTION, ADDITION } from 'three-bvh-csg';
-
-const evaluator = new Evaluator();
-evaluator.attributes = ['position', 'normal'];
-evaluator.useGroups = false;
-
-// Suppress deprecation warnings by overriding console.warn in worker context
-const originalWarn = console.warn;
-console.warn = (...args: any[]) => {
-  // Filter out MeshBVH deprecation warnings
-  if (args.length > 0 && typeof args[0] === 'string' && args[0].includes('maxLeafTris')) {
-    return; // Suppress this specific warning
-  }
-  return originalWarn.apply(console, args);
-};
-
-/**
- * SURGICAL REPAIR FUNCTIONS
- * Integrated directly in worker for maximum performance
- */
 
 interface EdgeInfo {
   count: number;
@@ -60,7 +39,10 @@ function buildEdgeTopology(geometry: THREE.BufferGeometry): Map<string, EdgeInfo
   return edgeMap;
 }
 
-function removeDegenerateTriangles(geometry: THREE.BufferGeometry, minArea: number = 0.00001): THREE.BufferGeometry {
+function removeDegenerateTriangles(
+  geometry: THREE.BufferGeometry, 
+  minArea: number = 0.00001
+): THREE.BufferGeometry {
   const positions = geometry.attributes.position;
   const indices = geometry.index;
   
@@ -195,7 +177,10 @@ function removeUnusedVertices(geometry: THREE.BufferGeometry): THREE.BufferGeome
   return result;
 }
 
-function weldCoincidentVertices(geometry: THREE.BufferGeometry, tolerance: number = 0.0001): THREE.BufferGeometry {
+function weldCoincidentVertices(
+  geometry: THREE.BufferGeometry,
+  tolerance: number = 0.0001
+): THREE.BufferGeometry {
   const positions = geometry.attributes.position;
   const indices = geometry.index;
   
@@ -265,10 +250,10 @@ function weldCoincidentVertices(geometry: THREE.BufferGeometry, tolerance: numbe
   return removeUnusedVertices(result);
 }
 
-/**
- * Main surgical repair - runs in worker for best performance
- */
-function surgicalSlotRepair(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
+export function surgicalSlotRepair(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
+  console.log('🔬 Starting SURGICAL slot repair');
+  console.log(`  Initial: ${geometry.attributes.position.count} vertices, ${geometry.index?.count ? geometry.index.count / 3 : 0} faces`);
+  
   let result = geometry;
   
   // Step 1: Remove degenerate triangles
@@ -283,7 +268,7 @@ function surgicalSlotRepair(geometry: THREE.BufferGeometry): THREE.BufferGeometr
   // Step 4: Remove newly created degenerates
   result = removeDegenerateTriangles(result, 0.00001);
   
-  // Step 5: Manual merge with tight tolerance (since BufferGeometryUtils not available in worker)
+  // Step 5: Manual merge with tight tolerance
   const finalMergeMap = new Map<number, number>();
   const positions = result.attributes.position;
   const indices = result.index;
@@ -295,7 +280,6 @@ function surgicalSlotRepair(geometry: THREE.BufferGeometry): THREE.BufferGeometr
       const y = positions.getY(i);
       const z = positions.getZ(i);
       
-      // Check for nearby vertices to merge
       for (let j = i + 1; j < positions.count; j++) {
         const dx = positions.getX(j) - x;
         const dy = positions.getY(j) - y;
@@ -308,7 +292,6 @@ function surgicalSlotRepair(geometry: THREE.BufferGeometry): THREE.BufferGeometr
       }
     }
     
-    // Apply merge map to indices
     const newIndices: number[] = [];
     for (let i = 0; i < indices.count; i++) {
       const originalIdx = indices.getX(i);
@@ -329,130 +312,37 @@ function surgicalSlotRepair(geometry: THREE.BufferGeometry): THREE.BufferGeometr
   result.computeVertexNormals();
   result.computeBoundingBox();
   
+  console.log(`  Final: ${result.attributes.position.count} vertices, ${result.index?.count ? result.index.count / 3 : 0} faces`);
+  
   return result;
 }
 
-/**
- * MAIN WORKER MESSAGE HANDLER
- */
-self.onmessage = (e) => {
-    const { base, slots, rotation } = e.data;
-
-    // Helper to recreate geometry from buffer data
-    const parseGeometry = (data: any) => {
-        const geo = new THREE.BufferGeometry();
-        if (data.position) geo.setAttribute('position', new THREE.Float32BufferAttribute(data.position, 3));
-        if (data.normal) geo.setAttribute('normal', new THREE.Float32BufferAttribute(data.normal, 3));
-        if (data.index) geo.setIndex(new THREE.BufferAttribute(data.index, 1));
-        return geo;
-    };
-    
-    // Try to configure BVH with correct options
-    const configureBVH = (geometry: any) => {
-        try {
-            // @ts-ignore
-            if (geometry.computeBoundsTree) {
-                geometry.computeBoundsTree({
-                    maxLeafSize: 16, // Use correct option instead of deprecated maxLeafTris
-                    indirect: true
-                });
-            }
-        } catch (e) {
-            // Fallback: ignore if configuration not available
-        }
-    };
-
-    let baseGeo: THREE.BufferGeometry | null = null;
-    let toolBrush: any = null;
-
-    try {
-        baseGeo = parseGeometry(base);
-        // Ensure base has normals for CSG
-        if (!baseGeo.attributes.normal) baseGeo.computeVertexNormals();
-        
-        // Configure BVH with correct options to avoid deprecation warning
-        configureBVH(baseGeo);
-        
-        // `three-bvh-csg` types may not match runtime. Use any to avoid TS surface errors.
-        // @ts-ignore
-        const baseBrush: any = new Brush(baseGeo);
-        if (baseBrush.updateMatrixWorld) baseBrush.updateMatrixWorld();
-
-        for (const slotData of slots) {
-            const slotGeo = parseGeometry(slotData);
-            
-            // Configure BVH for slot geometry
-            configureBVH(slotGeo);
-            
-            // Apply rotation logic inside worker to match the layer orientation
-            // The slot generation created them at origin, we rotate them to cut through the rotated plane correctly
-            slotGeo.rotateX(rotation.x * Math.PI / 180);
-            slotGeo.rotateY(rotation.y * Math.PI / 180);
-            
-            // @ts-ignore
-            const brush: any = new Brush(slotGeo);
-            if (brush.updateMatrixWorld) brush.updateMatrixWorld();
-
-            if (!toolBrush) {
-                toolBrush = brush;
-            } else {
-                const nextTool: any = evaluator.evaluate(toolBrush, brush, ADDITION);
-                // Clean up intermediate geometry to prevent memory leaks in worker
-                try {
-                  if (toolBrush.geometry && toolBrush.geometry !== brush.geometry) toolBrush.geometry.dispose();
-                } catch {}
-                try { if (brush.geometry) brush.geometry.dispose(); } catch {}
-                toolBrush = nextTool;
-            }
-        }
-
-        if (!toolBrush) {
-            // No slots, return original data
-            const pos = base.position;
-            const norm = base.normal;
-            const idx = base.index;
-            (self as any).postMessage({ position: pos, normal: norm, index: idx });
-            return;
-        }
-
-        if (toolBrush.updateMatrixWorld) toolBrush.updateMatrixWorld();
-        const result: any = evaluator.evaluate(baseBrush, toolBrush, SUBTRACTION);
-        
-        // *** CRITICAL: Apply surgical repair to fix non-manifold edges ***
-        let resGeo = result.geometry;
-        const preRepairVertices = resGeo.attributes.position.count;
-        
-        resGeo = surgicalSlotRepair(resGeo);
-        
-        const postRepairVertices = resGeo.attributes.position.count;
-        console.log(`Worker repair: ${preRepairVertices} → ${postRepairVertices} vertices`);
-        
-        // Clean up
-        try { if (toolBrush.geometry) toolBrush.geometry.dispose(); } catch {}
-        try { baseGeo.dispose(); } catch {}
-
-        const position = resGeo.attributes.position.array;
-        const normal = resGeo.attributes.normal?.array;
-        const index = resGeo.index?.array;
-
-        // Use Transferables for performance
-        const transferables: Transferable[] = [position.buffer];
-        if (normal) transferables.push(normal.buffer);
-        if (index) transferables.push(index.buffer);
-
-        (self as any).postMessage({
-            position,
-            normal,
-            index
-        }, transferables);
-
-    } catch (error) {
-        console.error("Worker CSG Error:", error);
-        // Fallback: return original if calculation fails
-        (self as any).postMessage({ 
-            position: base.position, 
-            normal: base.normal, 
-            index: base.index 
-        });
-    }
-};
+export function getTopologyReport(geometry: THREE.BufferGeometry): {
+  vertices: number;
+  faces: number;
+  boundaryEdges: number;
+  interiorEdges: number;
+  nonManifoldEdges: number;
+  isManifold: boolean;
+} {
+  const edgeMap = buildEdgeTopology(geometry);
+  
+  let boundaryEdges = 0;
+  let interiorEdges = 0;
+  let nonManifoldEdges = 0;
+  
+  edgeMap.forEach((info) => {
+    if (info.count === 1) boundaryEdges++;
+    else if (info.count === 2) interiorEdges++;
+    else nonManifoldEdges++;
+  });
+  
+  return {
+    vertices: geometry.attributes.position.count,
+    faces: geometry.index ? geometry.index.count / 3 : 0,
+    boundaryEdges,
+    interiorEdges,
+    nonManifoldEdges,
+    isManifold: nonManifoldEdges === 0
+  };
+}

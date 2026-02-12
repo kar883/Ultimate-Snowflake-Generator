@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 // @ts-ignore
 import { Brush, Evaluator, SUBTRACTION, ADDITION } from 'three-bvh-csg';
+import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
 
 const evaluator = new Evaluator();
 evaluator.attributes = ['position', 'normal'];
@@ -283,41 +284,8 @@ function surgicalSlotRepair(geometry: THREE.BufferGeometry): THREE.BufferGeometr
   // Step 4: Remove newly created degenerates
   result = removeDegenerateTriangles(result, 0.00001);
   
-  // Step 5: Manual merge with tight tolerance (since BufferGeometryUtils not available in worker)
-  const finalMergeMap = new Map<number, number>();
-  const positions = result.attributes.position;
-  const indices = result.index;
-  
-  if (indices) {
-    const tolerance = 0.0002;
-    for (let i = 0; i < positions.count; i++) {
-      const x = positions.getX(i);
-      const y = positions.getY(i);
-      const z = positions.getZ(i);
-      
-      // Check for nearby vertices to merge
-      for (let j = i + 1; j < positions.count; j++) {
-        const dx = positions.getX(j) - x;
-        const dy = positions.getY(j) - y;
-        const dz = positions.getZ(j) - z;
-        const distSq = dx * dx + dy * dy + dz * dz;
-        
-        if (distSq < tolerance * tolerance && !finalMergeMap.has(j)) {
-          finalMergeMap.set(j, i);
-        }
-      }
-    }
-    
-    // Apply merge map to indices
-    const newIndices: number[] = [];
-    for (let i = 0; i < indices.count; i++) {
-      const originalIdx = indices.getX(i);
-      const mergedIdx = finalMergeMap.get(originalIdx) ?? originalIdx;
-      newIndices.push(mergedIdx);
-    }
-    
-    result.setIndex(newIndices);
-  }
+  // Step 5: Standard merge with tight tolerance
+  result = BufferGeometryUtils.mergeVertices(result, 0.0002);
   
   // Step 6: Remove unused vertices
   result = removeUnusedVertices(result);
@@ -353,7 +321,7 @@ self.onmessage = (e) => {
             // @ts-ignore
             if (geometry.computeBoundsTree) {
                 geometry.computeBoundsTree({
-                    maxLeafSize: 16, // Use correct option instead of deprecated maxLeafTris
+                    maxLeafSize: 16,
                     indirect: true
                 });
             }
@@ -370,10 +338,8 @@ self.onmessage = (e) => {
         // Ensure base has normals for CSG
         if (!baseGeo.attributes.normal) baseGeo.computeVertexNormals();
         
-        // Configure BVH with correct options to avoid deprecation warning
         configureBVH(baseGeo);
         
-        // `three-bvh-csg` types may not match runtime. Use any to avoid TS surface errors.
         // @ts-ignore
         const baseBrush: any = new Brush(baseGeo);
         if (baseBrush.updateMatrixWorld) baseBrush.updateMatrixWorld();
@@ -381,11 +347,9 @@ self.onmessage = (e) => {
         for (const slotData of slots) {
             const slotGeo = parseGeometry(slotData);
             
-            // Configure BVH for slot geometry
             configureBVH(slotGeo);
             
-            // Apply rotation logic inside worker to match the layer orientation
-            // The slot generation created them at origin, we rotate them to cut through the rotated plane correctly
+            // Apply rotation logic inside worker
             slotGeo.rotateX(rotation.x * Math.PI / 180);
             slotGeo.rotateY(rotation.y * Math.PI / 180);
             
@@ -397,7 +361,7 @@ self.onmessage = (e) => {
                 toolBrush = brush;
             } else {
                 const nextTool: any = evaluator.evaluate(toolBrush, brush, ADDITION);
-                // Clean up intermediate geometry to prevent memory leaks in worker
+                // Clean up intermediate geometry
                 try {
                   if (toolBrush.geometry && toolBrush.geometry !== brush.geometry) toolBrush.geometry.dispose();
                 } catch {}
@@ -416,6 +380,8 @@ self.onmessage = (e) => {
         }
 
         if (toolBrush.updateMatrixWorld) toolBrush.updateMatrixWorld();
+        
+        // Perform CSG subtraction
         const result: any = evaluator.evaluate(baseBrush, toolBrush, SUBTRACTION);
         
         // *** CRITICAL: Apply surgical repair to fix non-manifold edges ***

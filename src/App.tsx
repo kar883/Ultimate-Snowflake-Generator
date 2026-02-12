@@ -11,12 +11,12 @@ import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUti
 import opentype from 'opentype.js';
 import JSZip from 'jszip';
 import { GoogleGenAI } from "@google/genai";
+import { surgicalSlotRepair, getTopologyReport } from './surgicalSlotRepair';
 // @ts-ignore
 import { postCSGJob } from './csgWorkerManager';
 import { CavalierPathOperations, Polyline } from './cavalierContours';
 import { makeCacheKey, getOrCreateSlotGeometries } from './slotGeometryCache';
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, makeSlotKey, getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, slotCutCache, makeUnderlineKey } from './geometryCache';
-import { conservativeSlotCutRepair, analyzeManifoldEdges } from './conservativeSlotRepair';
 import { hashLayerContent, makeSlotCutCacheKey, improvedSlotCutCache } from './improvedSlotCache';
 
 const MAX_HISTORY = 50;
@@ -754,6 +754,15 @@ const applySlotCuts = async (layerGeo: THREE_ACTUAL.BufferGeometry, layer: Layer
           resultGeo.setAttribute('position', new THREE_ACTUAL.BufferAttribute(position, 3));
           if (normal) resultGeo.setAttribute('normal', new THREE_ACTUAL.BufferAttribute(normal, 3));
           if (index) resultGeo.setIndex(new THREE_ACTUAL.BufferAttribute(index, 1));
+          
+          // Verify topology after surgical repair in worker
+          const report = getTopologyReport(resultGeo);
+          console.log(`📊 Topology Report for layer ${layer.name}:`, report);
+          
+          if (!report.isManifold) {
+            console.warn(`⚠️ Layer ${layer.name} has ${report.nonManifoldEdges} non-manifold edges`);
+          }
+          
           // Dispose original slots (we kept references in slotGeometries)
           slotGeometries.forEach(g => g.dispose());
           return resultGeo;
@@ -783,6 +792,15 @@ const applySlotCuts = async (layerGeo: THREE_ACTUAL.BufferGeometry, layer: Layer
         resultGeo.setAttribute('position', new THREE_ACTUAL.BufferAttribute(position, 3));
         if (normal) resultGeo.setAttribute('normal', new THREE_ACTUAL.BufferAttribute(normal, 3));
         if (index) resultGeo.setIndex(new THREE_ACTUAL.BufferAttribute(index, 1));
+        
+        // Verify topology after surgical repair in worker
+        const report = getTopologyReport(resultGeo);
+        console.log(`📊 Topology Report for layer ${layer.name}:`, report);
+        
+        if (!report.isManifold) {
+          console.warn(`⚠️ Layer ${layer.name} has ${report.nonManifoldEdges} non-manifold edges`);
+        }
+        
         // Dispose original slots
         slotGeometries.forEach(g => g.dispose());
         return resultGeo;
@@ -1835,29 +1853,26 @@ const App: React.FC = () => {
               );
             }
 
-            // After cuts, apply conservative repair to fix non-manifold edges
-            const postSlotRepair = conservativeSlotCutRepair(layerMerged);
-            layerMerged = postSlotRepair;
-            
-            // Optional: Detailed diagnostics for debugging
-            const analysis = analyzeManifoldEdges(layerMerged);
+            // After cuts, verify topology (surgical repair already applied in worker)
+            const report = getTopologyReport(layerMerged);
             console.log(`📊 Manifold Analysis for layer ${layer.id}:`);
-            console.log(`  Total edges: ${analysis.totalEdges}`);
-            console.log(`  Manifold edges (2 faces): ${analysis.manifoldEdges}`);
-            console.log(`  Boundary edges (1 face): ${analysis.boundaryEdges}`);
-            console.log(`  Non-manifold edges (>2 faces): ${analysis.nonManifoldEdges}`);
-            console.log(`  Is fully manifold: ${analysis.isManifold}`);
+            console.log(`  Total vertices: ${report.vertices}`);
+            console.log(`  Total faces: ${report.faces}`);
+            console.log(`  Manifold edges (2 faces): ${report.interiorEdges}`);
+            console.log(`  Boundary edges (1 face): ${report.boundaryEdges}`);
+            console.log(`  Non-manifold edges (>2 faces): ${report.nonManifoldEdges}`);
+            console.log(`  Is fully manifold: ${report.isManifold}`);
             
-            // If still has non-manifold edges, apply second pass
-            if (analysis.nonManifoldEdges > 0) {
-              console.log(`⚠️ Second pass needed for ${analysis.nonManifoldEdges} non-manifold edges`);
-              layerMerged = conservativeSlotCutRepair(layerMerged);
+            // If still has non-manifold edges, apply second pass of surgical repair
+            if (report.nonManifoldEdges > 0) {
+              console.log(`⚠️ Second pass needed for ${report.nonManifoldEdges} non-manifold edges`);
+              layerMerged = surgicalSlotRepair(layerMerged);
             }
             if (lIdx === 0) layerMerged.rotateZ(Math.PI);
           }
           
           // Final clean up logic:
-          // If slots are enabled, use the repaired geometry (already processed by conservativeSlotCutRepair).
+          // If slots are enabled, use the repaired geometry (already processed by surgicalSlotRepair in worker).
           // If slots are DISABLED, use the pristine geometry from mergeGeometries which preserves normals.
           const finalGeo = rendered3DConfig.slotEnabled 
              ? layerMerged
@@ -1901,6 +1916,24 @@ const App: React.FC = () => {
         if (flatGeoms.length > 0) {
             const combinedForCheck = BufferGeometryUtils.mergeGeometries(flatGeoms);
             if (combinedForCheck) {
+                // Final topology verification before export
+                const report = getTopologyReport(combinedForCheck);
+                console.log(`📊 Final Export Topology Report:`, report);
+                
+                if (!report.isManifold) {
+                    console.warn(`⚠️ Export has ${report.nonManifoldEdges} non-manifold edges`);
+                    
+                    // Apply aggressive repair if needed
+                    if (report.nonManifoldEdges > 100) {
+                        console.log('🔨 Applying aggressive repair for export...');
+                        const repaired = surgicalSlotRepair(combinedForCheck);
+                        // Update the merged geometry with repaired version
+                        for (let i = 0; i < flatGeoms.length; i++) {
+                            flatGeoms[i] = repaired;
+                        }
+                    }
+                }
+                
                 const isConnected = checkConnectivity(combinedForCheck);
                 if (!isConnected) {
                     const confirmExport = window.confirm(

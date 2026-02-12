@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
 
 /**
  * TARGETED SLOT EDGE REPAIR
@@ -346,159 +347,15 @@ function stitchBoundaryEdges(geometry: THREE.BufferGeometry): THREE.BufferGeomet
 }
 
 /**
- * Detect and close mesh holes before repair
- * This specifically targets holes created by CSG slot cutting operations
- */
-function detectAndCloseHoles(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
-  console.log(`🔍 Detecting and closing mesh holes...`);
-  
-  const positions = geometry.attributes.position;
-  const indices = geometry.index;
-  if (!indices) return geometry;
-  
-  // Build edge map to find boundary edges (holes)
-  const edgeMap = buildDetailedEdgeMap(geometry);
-  const boundaryEdges: EdgeInfo[] = [];
-  
-  edgeMap.forEach((edge) => {
-    if (edge.faceIndices.length === 1) {
-      boundaryEdges.push(edge);
-    }
-  });
-  
-  if (boundaryEdges.length === 0) {
-    console.log(`  ✓ No boundary edges (holes) found`);
-    return geometry;
-  }
-  
-  console.log(`  🔍 Found ${boundaryEdges.length} boundary edges (potential holes)`);
-  
-  // Group boundary edges into hole loops
-  const holeLoops: number[][] = [];
-  const visitedEdges = new Set<string>();
-  
-  boundaryEdges.forEach((startEdge, edgeIdx) => {
-    if (visitedEdges.has(`${startEdge.v1}_${startEdge.v2}`)) return;
-    
-    const loop: number[] = [];
-    let currentEdge = startEdge;
-    let iterations = 0;
-    const maxIterations = boundaryEdges.length * 2; // Prevent infinite loops
-    
-    while (currentEdge && iterations < maxIterations) {
-      const edgeKey = `${currentEdge.v1}_${currentEdge.v2}`;
-      const reverseKey = `${currentEdge.v2}_${currentEdge.v1}`;
-      
-      if (visitedEdges.has(edgeKey)) break;
-      
-      visitedEdges.add(edgeKey);
-      loop.push(currentEdge.v2);
-      
-      // Find next connected edge
-      currentEdge = boundaryEdges.find(edge => 
-        (edge.v1 === currentEdge.v2 && !visitedEdges.has(`${edge.v1}_${edge.v2}`)) ||
-        (edge.v2 === currentEdge.v2 && !visitedEdges.has(`${edge.v2}_${edge.v1}`))
-      );
-      
-      iterations++;
-    }
-    
-    if (loop.length > 2) {
-      holeLoops.push(loop);
-    }
-  });
-  
-  console.log(`  🔍 Found ${holeLoops.length} hole loops`);
-  
-  if (holeLoops.length === 0) {
-    return geometry;
-  }
-  
-  // Close each hole by triangulating the loop
-  const newIndices: number[] = [];
-  const vA = new THREE.Vector3();
-  const vB = new THREE.Vector3();
-  const vC = new THREE.Vector3();
-  
-  // Copy existing indices
-  for (let i = 0; i < indices.count; i++) {
-    newIndices.push(indices.getX(i));
-  }
-  
-  // Add triangles to close holes
-  let holesClosed = 0;
-  holeLoops.forEach((loop, loopIdx) => {
-    if (loop.length < 3) return;
-    
-    // Calculate centroid of hole
-    const centroid = new THREE.Vector3();
-    loop.forEach(vertexIdx => {
-      vA.fromBufferAttribute(positions as THREE.BufferAttribute, vertexIdx);
-      centroid.add(vA);
-    });
-    centroid.divideScalar(loop.length);
-    
-    // Triangulate hole loop using fan triangulation from centroid
-    for (let i = 0; i < loop.length; i++) {
-      const v0 = loop[i];
-      const v1 = loop[(i + 1) % loop.length];
-      
-      // Check if triangle is valid (non-degenerate)
-      vA.fromBufferAttribute(positions as THREE.BufferAttribute, v0);
-      vB.fromBufferAttribute(positions as THREE.BufferAttribute, v1);
-      vC.fromBufferAttribute(positions as THREE.BufferAttribute, centroid);
-      
-      const area = vA.clone().sub(centroid).cross(vB.clone().sub(centroid)).length() / 2;
-      if (area > 0.0001) { // Only add if triangle has meaningful area
-        newIndices.push(v0, v1, positions.count); // Use centroid as new vertex
-        holesClosed++;
-      }
-    }
-  });
-  
-  console.log(`  🔧 Closed ${holesClosed} holes with ${holesClosed * 3} new triangles`);
-  
-  // Add centroid vertices to position attribute
-  const centroidPositions: number[] = [];
-  holeLoops.forEach((loop) => {
-    if (loop.length < 3) return;
-    
-    const centroid = new THREE.Vector3();
-    loop.forEach(vertexIdx => {
-      vA.fromBufferAttribute(positions as THREE.BufferAttribute, vertexIdx);
-      centroid.add(vA);
-    });
-    centroid.divideScalar(loop.length);
-    
-    centroidPositions.push(centroid.x, centroid.y, centroid.z);
-  });
-  
-  // Create new geometry with closed holes
-  const newGeo = geometry.clone();
-  
-  // Add centroid vertices to position attribute
-  const originalPositions = Array.from((positions as THREE.BufferAttribute).array);
-  const newPositions = [...originalPositions, ...centroidPositions];
-  newGeo.setAttribute('position', new THREE.Float32BufferAttribute(newPositions, 3));
-  
-  newGeo.setIndex(newIndices);
-  newGeo.computeVertexNormals();
-  newGeo.computeBoundingBox();
-  
-  return newGeo;
-}
-
-/**
  * CONSERVATIVE SLOT CUT REPAIR
  * 
  * This repair is CONSERVATIVE - it fixes topology errors without removing material.
  * 
  * Approach:
- * 1. Detect and close mesh holes from CSG operations
- * 2. Weld near-duplicate vertices ONLY at non-manifold edges
- * 3. Stitch boundary edges where slot cuts created gaps
- * 4. Remove only truly degenerate faces (identical vertices)
- * 5. Very light vertex merging (0.0001 tolerance) to clean up floating point errors
+ * 1. Weld near-duplicate vertices ONLY at non-manifold edges
+ * 2. Stitch boundary edges where slot cuts created gaps
+ * 3. Remove only truly degenerate faces (identical vertices)
+ * 4. Very light vertex merging (0.0001 tolerance) to clean up floating point errors
  * 
  * What it does NOT do:
  * - Aggressive vertex merging
@@ -511,47 +368,25 @@ export function conservativeSlotCutRepair(geometry: THREE.BufferGeometry): THREE
   
   let repaired = geometry;
   
-  // Step 1: Detect and close mesh holes from CSG operations
-  repaired = detectAndCloseHoles(repaired);
-  
-  // Step 2: Remove only truly invalid faces
+  // Step 1: Remove only truly invalid faces
   repaired = removeInvalidFaces(repaired);
   
-  // Step 3: Weld vertices ONLY at non-manifold edges
+  // Step 2: Weld vertices ONLY at non-manifold edges
   repaired = weldNonManifoldEdges(repaired);
   
-  // Step 4: Stitch boundary edges
+  // Step 3: Stitch boundary edges
   repaired = stitchBoundaryEdges(repaired);
   
-  // Step 5: Very conservative vertex merge (only floating point errors)
+  // Step 4: Very conservative vertex merge (only floating point errors)
   const beforeMerge = repaired.attributes.position.count;
-  // Manual vertex merging with ultra-tight tolerance
-  const mergeMap = findNearDuplicateVertices(repaired, 0.0001);
-  
-  if (mergeMap.size > 0 && repaired.index) {
-    const indices = repaired.index;
-    const newIndices: number[] = [];
-    
-    for (let i = 0; i < indices.count; i++) {
-      const i0 = mergeMap.get(indices.getX(i)) ?? indices.getX(i);
-      const i1 = mergeMap.get(indices.getX(i + 1)) ?? indices.getX(i + 1);
-      const i2 = mergeMap.get(indices.getX(i + 2)) ?? indices.getX(i + 2);
-      
-      if (i0 !== i1 && i1 !== i2 && i2 !== i0) {
-        newIndices.push(i0, i1, i2);
-      }
-    }
-    
-    repaired.setIndex(newIndices);
-  }
-  
+  repaired = BufferGeometryUtils.mergeVertices(repaired, 0.0001);
   const afterMerge = repaired.attributes.position.count;
   console.log(`  ✓ Ultra-tight merge removed ${beforeMerge - afterMerge} floating point duplicates`);
   
-  // Step 6: Final cleanup of any new degenerates
+  // Step 5: Final cleanup of any new degenerates
   repaired = removeInvalidFaces(repaired);
   
-  // Step 7: Remove unused vertices
+  // Step 6: Remove unused vertices
   repaired = removeUnusedVertices(repaired);
   
   // Recompute normals and bounds
