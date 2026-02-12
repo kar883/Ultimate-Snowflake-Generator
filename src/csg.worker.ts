@@ -457,46 +457,84 @@ self.onmessage = (e) => {
         console.log(`🔍 CSG Debug: Processing ${slots.length} slots`);
         console.log(`  Base geometry: ${baseGeo.attributes.position.count} vertices, ${baseGeo.index ? baseGeo.index.count / 3 : 0} faces`);
         
-        for (const slotData of slots) {
-            const slotGeo = parseGeometry(slotData);
-            console.log(`  Slot geometry: ${slotGeo.attributes.position.count} vertices, ${slotGeo.index ? slotGeo.index.count / 3 : 0} faces`);
+        // Combine all slot geometries into one instead of using ADDITION
+        let combinedSlotGeometry: THREE.BufferGeometry | null = null;
+        
+        if (slots.length > 0) {
+            const slotGeometries: THREE.BufferGeometry[] = [];
             
-            configureBVH(slotGeo);
+            for (const slotData of slots) {
+                const slotGeo = parseGeometry(slotData);
+                console.log(`  Slot geometry: ${slotGeo.attributes.position.count} vertices, ${slotGeo.index ? slotGeo.index.count / 3 : 0} faces`);
+                
+                configureBVH(slotGeo);
+                
+                slotGeo.rotateX(rotation.x * Math.PI / 180);
+                slotGeo.rotateY(rotation.y * Math.PI / 180);
+                
+                slotGeometries.push(slotGeo);
+            }
             
-            slotGeo.rotateX(rotation.x * Math.PI / 180);
-            slotGeo.rotateY(rotation.y * Math.PI / 180);
-            
-            // @ts-ignore
-            const brush: any = new Brush(slotGeo);
-            if (brush.updateMatrixWorld) brush.updateMatrixWorld();
-
-            if (!toolBrush) {
-                toolBrush = brush;
-                console.log(`  Created initial tool brush`);
+            // Merge all slot geometries into one
+            if (slotGeometries.length === 1) {
+                combinedSlotGeometry = slotGeometries[0];
             } else {
-                console.log(`  Merging with existing tool brush`);
-                const nextTool: any = evaluator.evaluate(toolBrush, brush, ADDITION);
-                try {
-                  if (toolBrush.geometry && toolBrush.geometry !== brush.geometry) toolBrush.geometry.dispose();
-                } catch {}
-                try { if (brush.geometry) brush.geometry.dispose(); } catch {}
-                toolBrush = nextTool;
-                console.log(`  After merge: ${nextTool.geometry.attributes.position.count} vertices, ${nextTool.geometry.index ? nextTool.geometry.index.count / 3 : 0} faces`);
+                // Manual merge since BufferGeometryUtils might not be available
+                const positions: number[] = [];
+                const normals: number[] = [];
+                const indices: number[] = [];
+                let vertexOffset = 0;
+                
+                for (const slotGeo of slotGeometries) {
+                    const pos = slotGeo.attributes.position;
+                    const norm = slotGeo.attributes.normal;
+                    const idx = slotGeo.index;
+                    
+                    // Add vertices
+                    for (let i = 0; i < pos.count; i++) {
+                        positions.push(pos.getX(i), pos.getY(i), pos.getZ(i));
+                        if (norm) {
+                            normals.push(norm.getX(i), norm.getY(i), norm.getZ(i));
+                        }
+                    }
+                    
+                    // Add indices with offset
+                    if (idx) {
+                        for (let i = 0; i < idx.count; i++) {
+                            indices.push(idx.getX(i) + vertexOffset);
+                        }
+                    }
+                    
+                    vertexOffset += pos.count;
+                }
+                
+                combinedSlotGeometry = new THREE.BufferGeometry();
+                combinedSlotGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                if (normals.length > 0) {
+                    combinedSlotGeometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+                }
+                combinedSlotGeometry.setIndex(new THREE.Uint32BufferAttribute(indices, 1));
+                combinedSlotGeometry.computeVertexNormals();
+                combinedSlotGeometry.computeBoundingBox();
+                
+                console.log(`  Combined slots: ${combinedSlotGeometry.attributes.position.count} vertices, ${combinedSlotGeometry.index ? combinedSlotGeometry.index.count / 3 : 0} faces`);
             }
         }
 
-        if (!toolBrush) {
+        if (!combinedSlotGeometry) {
             (self as any).postMessage({ position: base.position, normal: base.normal, index: base.index });
             return;
         }
-
-        if (toolBrush.updateMatrixWorld) toolBrush.updateMatrixWorld();
+        
+        // @ts-ignore
+        const slotBrush: any = new Brush(combinedSlotGeometry);
+        if (slotBrush.updateMatrixWorld) slotBrush.updateMatrixWorld();
         
         console.log(`🔍 Final CSG subtraction:`);
         console.log(`  Base brush: ${baseBrush.geometry.attributes.position.count} vertices, ${baseBrush.geometry.index ? baseBrush.geometry.index.count / 3 : 0} faces`);
-        console.log(`  Tool brush: ${toolBrush.geometry.attributes.position.count} vertices, ${toolBrush.geometry.index ? toolBrush.geometry.index.count / 3 : 0} faces`);
+        console.log(`  Slot brush: ${slotBrush.geometry.attributes.position.count} vertices, ${slotBrush.geometry.index ? slotBrush.geometry.index.count / 3 : 0} faces`);
         
-        const result: any = evaluator.evaluate(baseBrush, toolBrush, SUBTRACTION);
+        const result: any = evaluator.evaluate(baseBrush, slotBrush, SUBTRACTION);
         
         // *** CHECK CSG RESULT ***
         let resGeo = result.geometry;
@@ -516,8 +554,9 @@ self.onmessage = (e) => {
         const postRepairVertices = resGeo.attributes.position.count;
         console.log(`✅ Repair complete: ${preRepairVertices} → ${postRepairVertices} vertices`);
         
-        try { if (toolBrush.geometry) toolBrush.geometry.dispose(); } catch {}
+        try { if (slotBrush.geometry) slotBrush.geometry.dispose(); } catch {}
         try { baseGeo.dispose(); } catch {}
+        try { if (combinedSlotGeometry) combinedSlotGeometry.dispose(); } catch {}
 
         const position = resGeo.attributes.position.array;
         const normal = resGeo.attributes.normal?.array;
