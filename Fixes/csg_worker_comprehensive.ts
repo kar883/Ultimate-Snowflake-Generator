@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 // @ts-ignore
 import { Brush, Evaluator, SUBTRACTION, ADDITION } from 'three-bvh-csg';
+import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
 
 const evaluator = new Evaluator();
 evaluator.attributes = ['position', 'normal'];
@@ -386,8 +387,7 @@ function comprehensiveSlotRepair(geometry: THREE.BufferGeometry): THREE.BufferGe
   
   // PHASE 3: FINAL CLEANUP
   console.log('Phase 3: Final cleanup');
-  // Manual merge since BufferGeometryUtils not available in worker
-  result = weldCoincidentVertices(result, 0.0002);
+  result = BufferGeometryUtils.mergeVertices(result, 0.0002);
   result = removeUnusedVertices(result);
   result = removeDegenerateTriangles(result, 0.00001);
   
