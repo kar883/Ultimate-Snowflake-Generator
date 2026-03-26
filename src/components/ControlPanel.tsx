@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useContext, createContext } from 'react';
 import { createPortal } from 'react-dom';
-import { SnowflakeConfig, TextGroupConfig, HubConfig, CharOffset, LayerConfig, AbstractConfig, DesignQuality, ShortcutConfig } from '../types';
+import { SnowflakeConfig, TextGroupConfig, HubConfig, CharOffset, LayerConfig, AbstractConfig, DesignQuality, ShortcutConfig, ImageConfig, createDefaultImage } from '../types';
 import { CURSIVE_FONTS, FONT_TTF_URLS } from '../constants';
 import { SystemFontButton } from './LocalFontPicker';
 import { TooltipContext, InfoTooltip } from './Tooltip';
@@ -8,25 +8,44 @@ import { useTranslation } from '../translations';
 import { clearGeometryCache } from '../geometryCache';
 import opentype from 'opentype.js';
 
-const Toggle: React.FC<{ 
+const Toggle: React.FC<{
   label: string; 
   checked: boolean; 
   onChange: (checked: boolean) => void; 
   activeColor?: string;
   className?: string;
-}> = ({ label, checked, onChange, activeColor = "text-sky-400", className = "" }) => (
-  <label className={`flex items-center gap-2 cursor-pointer group ${className}`}>
-    <div className={`w-6 h-3 rounded-full border transition-colors relative ${checked ? 'bg-sky-600/20 border-sky-500/50' : 'bg-slate-800 border-white/10'}`}>
-      <div className={`absolute top-0.5 left-0.5 w-1.5 h-1.5 rounded-full transition-all ${checked ? `bg-sky-400 translate-x-3` : 'bg-slate-500 translate-x-0'}`} />
-    </div>
-    {label && (
-      <span className={`text-[9px] font-bold uppercase transition-colors ${checked ? activeColor : 'text-slate-500 group-hover:text-slate-400'}`}>
-        {label}
-      </span>
-    )}
-    <input type="checkbox" className="hidden" checked={checked} onChange={e => onChange(e.target.checked)} />
-  </label>
-);
+}> = ({ label, checked, onChange, activeColor = "text-sky-400", className = "" }) => {
+  const [localChecked, setLocalChecked] = useState(checked);
+
+  useEffect(() => {
+    setLocalChecked(checked);
+  }, [checked]);
+
+  const handleChange = () => {
+    const newValue = !localChecked;
+    setLocalChecked(newValue);
+    onChange(newValue);
+  };
+
+  return (
+    <label className={`flex items-center gap-2 cursor-pointer group ${className}`}>
+      <div className={`w-6 h-3 rounded-full border transition-colors relative ${checked ? 'bg-sky-600/20 border-sky-500/50' : 'bg-slate-800 border-white/10'}`}>
+        <div className={`absolute top-0.5 left-0.5 w-1.5 h-1.5 rounded-full transition-all ${checked ? `bg-sky-400 translate-x-3` : 'bg-slate-500 translate-x-0'}`} />
+      </div>
+      {label && (
+        <span className={`text-[9px] font-bold uppercase transition-colors ${checked ? activeColor : 'text-slate-500 group-hover:text-slate-400'}`}>
+          {label}
+        </span>
+      )}
+      <input 
+        type="checkbox" 
+        className="hidden" 
+        checked={localChecked} 
+        onChange={handleChange} 
+      />
+    </label>
+  );
+};
 
 const SlotModeToggle: React.FC<{
   mode: '2-plane' | '3-plane';
@@ -34,25 +53,19 @@ const SlotModeToggle: React.FC<{
   t: (key: string) => string;
 }> = ({ mode, onChange, t }) => (
   <div className="flex items-center gap-2">
-    <span className="text-[9px] font-bold text-slate-500 uppercase">{t('Mode')}:</span>
-    <div className="flex items-center gap-1 p-1 bg-slate-800/50 rounded-full border border-white/10">
-      <button
-        onClick={() => onChange('2-plane')}
-        className={`px-2 py-0.5 text-[8px] font-medium rounded-full transition-all ${
-          mode === '2-plane'
-            ? 'bg-sky-600 text-white'
-            : 'text-slate-500 hover:text-white'
-        }`}
+    <span className="text-[9px] font-bold text-slate-500 uppercase">
+      {t('Mode')}:
+    </span>
+    <div className="flex bg-slate-900 p-1 rounded-lg gap-1">
+      <button 
+        onClick={() => onChange('2-plane')} 
+        className={`px-3 py-1 text-[9px] font-black uppercase rounded ${mode === '2-plane' ? 'bg-sky-500 text-white' : 'text-slate-500'}`}
       >
         2-Plane
       </button>
-      <button
-        onClick={() => onChange('3-plane')}
-        className={`px-2 py-0.5 text-[8px] font-medium rounded-full transition-all ${
-          mode === '3-plane'
-            ? 'bg-sky-600 text-white'
-            : 'text-slate-500 hover:text-white'
-        }`}
+      <button 
+        onClick={() => onChange('3-plane')} 
+        className={`px-3 py-1 text-[9px] font-black uppercase rounded ${mode === '3-plane' ? 'bg-sky-500 text-white' : 'text-slate-500'}`}
       >
         3-Plane
       </button>
@@ -120,8 +133,6 @@ const DESCRIPTIONS: Record<string, string> = {
   "Font Search": "Filter the available cursive fonts by name.",
   "System Fonts": "Load a font installed on your local computer (Requires Chrome/Edge).",
   "Upload Font": "Upload a .ttf or .otf file to use a custom font.",
-  "Primary Group": "Controls the main text ring.",
-  "Secondary Group": "Controls the inner/secondary text ring.",
   "Layer Name": "Rename this plane for easier organization.",
   "Layer Visible": "Toggle the visibility of this entire plane in the 3D model.",
   "Font Family": "Select the typeface for the text.",
@@ -142,7 +153,6 @@ const DESCRIPTIONS: Record<string, string> = {
   "Branches Per Node": "Number of new branches spawned at each split point.",
   "Recursion Depth": "Number of branching generations.",
   "Min Branch Length": "Stop branching if segments get shorter than this.",
-  "Branch Pattern": "Algorithm for distributing branches.",
   "Branch Angle": "Spread angle between branches.",
   "Branch Length": "Length of the first branch segment. Automatically scales if it exceeds the outer radius.",
   "Length Decay": "Factor by which branches shorten each generation.",
@@ -153,7 +163,48 @@ const DESCRIPTIONS: Record<string, string> = {
   "Thickness Decay": "Controls how much thinner the branches get at each new generation.",
   "Rounded Tips": "Adds rounded caps to the ends of the final branches.",
   "Cut Slots": "Toggles the automatic slot cutting operation for assembly.",
-  "Slot Width": "Sets the total width of the cut slot. This should match your material thickness plus a small tolerance."
+  "Slot Width": "Sets the total width of the cut slot. This should match your material thickness plus a small tolerance.",
+  // ── Auto-fit / Fixed-size ──────────────────────────────────────────────────
+  "Auto-fit": "Automatically rescales the font size whenever you change fonts, letter spacing, or boldness to keep the arms exactly at the target outer radius.",
+  "Fixed-size": "One-shot manual set. The outer radius slider adjusts the font size once, but further edits (font changes, spacing) will not rescale automatically.",
+  "Diameter Mode": "Choose how the Outer Radius target is maintained. Auto-fit keeps arms at the target radius as you edit. Fixed-size sets it once and leaves it.",
+  // ── Primary / Secondary group ──────────────────────────────────────────────
+  "Primary Group": "The main text ring. Click to select and edit its properties below.",
+  "Secondary Group": "An optional inner text ring. Click to select and edit its properties below.",
+  // ── Bevel type ────────────────────────────────────────────────────────────
+  "Fillet": "Rounds the edges with a smooth curved profile.",
+  "Chamfer": "Cuts the edges at a flat 45-degree angle.",
+  // ── Hub tab ───────────────────────────────────────────────────────────────
+  "circle": "A circular hub shape.",
+  "polygon": "A flat-sided polygon hub (triangle, hexagon, etc.).",
+  "star": "A star-shaped hub with alternating inner and outer points.",
+  // ── Abstract tab ──────────────────────────────────────────────────────────
+  "line": "A straight radial line from inner to outer radius.",
+  "sine": "A sine-wave pattern along the radial arm.",
+  "zigzag": "A zigzag pattern along the radial arm.",
+  "symmetric": "Branches split evenly on both sides at each node.",
+  "alternating": "Branches alternate left and right at successive nodes.",
+  "random": "Branch angles are randomised using the seed value.",
+  "Add Shape": "Add a new procedural wave or line shape to this plane.",
+  "Add Fractal": "Add a new recursive fractal tree to this plane.",
+  "Mirror": "Reflect the shape to create a symmetric pair within each arm.",
+  "Round Tips": "Cap the terminal branches with a smooth semicircle.",
+  "Delete Abstract": "Remove this abstract shape from the plane.",
+  "Shape Type": "The wave pattern used for the abstract shape.",
+  "Branch Pattern": "Controls how branches are distributed at each split point.",
+  // ── Images tab ────────────────────────────────────────────────────────────
+  "Import SVG": "Import an SVG file and place its outline as a repeating arm element on the snowflake.",
+  "Image Visible": "Show or hide this SVG image on the snowflake.",
+  "Delete Image": "Remove this SVG image from the snowflake.",
+  "Scale": "Uniform scale factor. 1.0 = one SVG unit equals one millimetre.",
+  "Y Offset": "Vertical offset from the arm centreline in millimetres.",
+  "Flip Image": "Mirror the SVG horizontally around its own centre.",
+  "SVG Rotation": "Rotate the SVG around its own centre before placing it on the arm.",
+  "Image Mirror": "Reflect the image to create a mirrored copy on the opposite side of each arm.",
+  "Image Mirror Offset": "Vertical distance between the original and mirrored image copies.",
+  "Image Arms": "Number of times the SVG is repeated around the snowflake.",
+  "Image Rotation": "Rotate the image's arm position around the snowflake centre.",
+  "Image Inner Radius": "Distance from the snowflake centre to the left edge of the image."
 };
 
 // Helper function to get translated description
@@ -182,6 +233,7 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
   label, onExportSTL, onExport2D, isLoading, disabled, className, baseColor = "bg-sky-600", direction = 'up', show2D = false, shortcut, t
 }) => {
   const [quality, setQuality] = useState<DesignQuality>('med');
+  const [format, setFormat] = useState<'stl' | 'svg' | 'dxf'>('stl');
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -225,34 +277,31 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
   }, [isOpen, updatePosition]);
 
   const handleMainClick = () => {
-    if (!disabled && !isLoading) onExportSTL(quality);
+    if (disabled || isLoading) return;
+    if (format === 'stl') onExportSTL(quality);
+    else onExport2D?.(format);
   };
 
-  const handleQualitySelect = (q: DesignQuality) => {
-    setQuality(q);
-    setIsOpen(false);
-  };
+  const formatLabel = format === 'stl' ? `STL (${t ? t(quality) : quality})` : format.toUpperCase();
 
-  const handle2DSelect = (fmt: 'svg' | 'dxf') => {
-    onExport2D?.(fmt);
-    setIsOpen(false);
-  };
-
-  const mainBtnClass = `${baseColor} hover:brightness-110 text-white`;
-  const menuBtnClass = `${baseColor} hover:brightness-110 text-white border-l border-black/10`;
-  
   return (
     <div ref={containerRef} className={`relative flex rounded-lg shadow-lg ${disabled ? 'opacity-50 pointer-events-none' : ''} ${className}`}>
-      <button 
-        onClick={handleMainClick}
-        className={`flex-1 px-3 py-1.5 rounded-l-lg text-[10px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 ${mainBtnClass}`}
-        title={typeof shortcut === 'object' ? `Shortcut: ${(shortcut.ctrlKey?'Ctrl+':'')}${shortcut.key.toUpperCase()}` : ''}
-      >
-        {isLoading ? '...' : `${label} (${t ? t(quality) : quality})`}
-      </button>
+      <InfoTooltip label={label} description={`Export the current design. Currently set to ${formatLabel}.`} shortcut={shortcut} className="flex-1">
+        <button 
+          onClick={handleMainClick}
+          className={`w-full h-full px-3 py-1.5 rounded-l-lg text-[10px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 ${baseColor} hover:brightness-110 text-white`}
+        >
+          {isLoading ? (
+            <><div className="w-3 h-3 border-2 border-white/60 border-t-white rounded-full animate-spin" /><span>Exporting…</span></>
+          ) : (
+            <><svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            <span>{label} · {formatLabel}</span></>
+          )}
+        </button>
+      </InfoTooltip>
       <button 
         onClick={() => setIsOpen(!isOpen)}
-        className={`px-2 rounded-r-lg flex items-center justify-center transition-all ${menuBtnClass}`}
+        className={`px-2 rounded-r-lg flex items-center justify-center transition-all border-l border-black/10 ${baseColor} hover:brightness-110 text-white`}
       >
         <svg className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -262,31 +311,47 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
       {isOpen && createPortal(
         <div 
            ref={dropdownRef}
-           className="fixed z-[9999] bg-slate-800 border border-white/10 rounded-lg shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 flex flex-col p-1 gap-0.5"
+           className="fixed z-[9999] bg-slate-800 border border-white/10 rounded-lg shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 flex flex-col p-1.5 gap-1"
            style={{
              top: position.top,
              left: position.left,
-             width: position.width,
+             width: Math.max(position.width, 200),
              transform: direction === 'up' ? 'translateY(-100%) translateY(-4px)' : 'translateY(4px)'
            }}
         >
-           <div className="px-2 py-1 text-[8px] font-black uppercase text-slate-500 tracking-wider">3D Format (STL)</div>
-           {(['low', 'med', 'high'] as const).map(q => (
-              <button 
-                key={q} 
-                onClick={() => handleQualitySelect(q)}
-                className={`py-1 text-[8px] font-black uppercase rounded transition-all ${quality === q ? 'bg-sky-500 text-white' : 'text-slate-500'}`}
-              >
-                {t ? t(q) : q}
-              </button>
-           ))}
-           {show2D && (
+           {/* Format section */}
+           <div className="px-2 pt-1 pb-0.5 text-[8px] font-black uppercase text-slate-500 tracking-wider">Format</div>
+           <div className="grid grid-cols-3 gap-1 bg-slate-900/60 p-1 rounded-md">
+             {(['stl', 'svg', 'dxf'] as const).filter(f => f === 'stl' || show2D).map(f => (
+               <button key={f} onClick={() => setFormat(f)}
+                 className={`py-1.5 text-[9px] font-black uppercase rounded transition-all ${format === f ? 'bg-sky-500 text-white' : 'text-slate-400 hover:text-white'}`}>
+                 {f.toUpperCase()}
+               </button>
+             ))}
+           </div>
+
+           {/* Quality section — only for STL */}
+           {format === 'stl' && (
              <>
-               <div className="px-2 py-1 text-[8px] font-black uppercase text-slate-500 tracking-wider mt-1 border-t border-white/5 pt-2">{t('2D Formats')}</div>
-               <button onClick={() => handle2DSelect('svg')} className="text-left px-3 py-2 text-[9px] font-bold uppercase rounded hover:bg-white/10 text-slate-400 hover:text-white">{t('SVG Vector')}</button>
-               <button onClick={() => handle2DSelect('dxf')} className="text-left px-3 py-2 text-[9px] font-bold uppercase rounded hover:bg-white/10 text-slate-400 hover:text-white">{t('DXF (CAD)')}</button>
+               <div className="px-2 pt-1 pb-0.5 text-[8px] font-black uppercase text-slate-500 tracking-wider">Quality</div>
+               <div className="grid grid-cols-3 gap-1 bg-slate-900/60 p-1 rounded-md">
+                 {(['low', 'med', 'high'] as const).map(q => (
+                   <button key={q} onClick={() => setQuality(q)}
+                     className={`py-1.5 text-[9px] font-black uppercase rounded transition-all ${quality === q ? 'bg-sky-500 text-white' : 'text-slate-400 hover:text-white'}`}>
+                     {t ? t(q) : q}
+                   </button>
+                 ))}
+               </div>
              </>
            )}
+
+           {/* Export action */}
+           <button
+             onClick={() => { handleMainClick(); setIsOpen(false); }}
+             className={`mt-0.5 w-full py-2 text-[10px] font-black uppercase rounded-md text-white transition-all ${baseColor} hover:brightness-110`}
+           >
+             Export {format.toUpperCase()}{format === 'stl' ? ` (${t ? t(quality) : quality})` : ''}
+           </button>
         </div>,
         document.body
       )}
@@ -312,7 +377,7 @@ const AiRandomizerMenu: React.FC<{
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as Node;
       if (
-        containerRef.current && !containerRef.current.contains(target) && 
+        containerRef.current && !containerRef.current.contains(target) &&
         dropdownRef.current && !dropdownRef.current.contains(target)
       ) {
         setIsOpen(false);
@@ -324,132 +389,98 @@ const AiRandomizerMenu: React.FC<{
 
   const updatePosition = useCallback(() => {
     if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
-        setPosition({
-            top: rect.top, // Open upwards by default since it is in footer
-            left: rect.left,
-            width: rect.width
-        });
+      const rect = containerRef.current.getBoundingClientRect();
+      setPosition({ top: rect.top, left: rect.left, width: rect.width });
     }
   }, []);
 
   useEffect(() => {
-      if(isOpen) {
-          updatePosition();
-          window.addEventListener('scroll', updatePosition, true);
-          window.addEventListener('resize', updatePosition);
-          return () => {
-              window.removeEventListener('scroll', updatePosition, true);
-              window.removeEventListener('resize', updatePosition);
-          }
-      }
+    if (isOpen) {
+      updatePosition();
+      window.addEventListener('scroll', updatePosition, true);
+      window.addEventListener('resize', updatePosition);
+      return () => {
+        window.removeEventListener('scroll', updatePosition, true);
+        window.removeEventListener('resize', updatePosition);
+      };
+    }
   }, [isOpen, updatePosition]);
 
   const handleModeSelect = (mode: '3d' | '2d' | 'fractal') => {
-      setLastMode(mode);
-      onGenerate(mode, resetOnRefresh); // Pass reset flag
-      setIsOpen(false);
+    setLastMode(mode);
+    onGenerate(mode, resetOnRefresh);
+    setIsOpen(false);
   };
 
   const handleRefresh = (e: React.MouseEvent) => {
-      e.stopPropagation();
-      const mode = lastMode || '3d'; // Default to 3d if no mode previously selected
-      onGenerate(mode, resetOnRefresh); // Pass reset flag
+    e.stopPropagation();
+    onGenerate(lastMode || '3d', resetOnRefresh);
   };
 
+  const modeLabel = lastMode ? (lastMode === 'fractal' ? 'Trad.' : lastMode.toUpperCase()) : null;
+
   return (
-    <div ref={containerRef} className={`relative ${className}`}>
-      <InfoTooltip label={t('AI Randomizer')} description={getDescription('AI Randomizer', t)} className="w-full h-full">
-        <div className="flex flex-col w-full gap-1.5">
-          {/* Main Button Row */}
-          <div className="flex w-full h-8 rounded-lg bg-violet-600 shadow-lg overflow-hidden relative">
-            {isLoading && (
-              <div 
-                className="absolute left-0 top-0 h-full bg-violet-400/50 transition-all duration-300 ease-out z-0" 
-                style={{ width: `${progress}%` }} 
-              />
+    <div ref={containerRef} className={`relative flex flex-col gap-1 ${className}`}>
+      {/* Row 1: AI Randomizer button (full width) */}
+      <div className="relative h-8 rounded-lg bg-violet-600 overflow-hidden shadow-lg">
+        {isLoading && (
+          <div className="absolute inset-0 bg-violet-400/40 transition-all duration-300 ease-out" style={{ width: `${progress}%` }} />
+        )}
+        <InfoTooltip label={t('AI Randomizer')} description={getDescription('AI Randomizer', t)} className="w-full h-full">
+          <button
+            onClick={() => !isLoading && setIsOpen(o => !o)}
+            disabled={isLoading}
+            className="relative w-full h-full flex items-center justify-center gap-1.5 text-white text-[9px] font-black uppercase tracking-wider hover:bg-violet-500 transition-colors z-10"
+          >
+            {isLoading ? (
+              <><div className="w-3 h-3 border-2 border-white/60 border-t-white rounded-full animate-spin" /><span>{progress}%</span></>
+            ) : (
+              <><span>✦ AI Randomizer</span>{modeLabel && <span className="opacity-60 text-[8px]">({modeLabel})</span>}<span className="opacity-50 text-[8px]">▼</span></>
             )}
+          </button>
+        </InfoTooltip>
+      </div>
 
-            <button 
-                onClick={() => !isLoading && setIsOpen(!isOpen)}
-                disabled={isLoading}
-                className="flex-1 flex items-center justify-center gap-2 text-white text-[9px] font-black uppercase tracking-wider hover:bg-violet-500 transition-colors z-10 w-full"
-            >
-                {isLoading ? (
-                    <span>{progress}%</span>
-                ) : (
-                    <>
-                        {t('AI Randomizer')} {lastMode ? <span className="opacity-75">({lastMode === 'fractal' ? 'Trad.' : lastMode})</span> : ''} <span className="text-[8px] opacity-60">▼</span>
-                    </>
-                )}
-            </button>
+      {/* Row 2: Shuffle button + Reset on Shuffle toggle */}
+      <div className="flex items-center gap-1.5 h-7">
+        <InfoTooltip label={t('Shuffle / Refresh')} description={getDescription('Shuffle / Refresh', t)} className="flex-1 h-full">
+          <button
+            onClick={handleRefresh}
+            disabled={isLoading}
+            className="w-full h-full bg-violet-600/20 hover:bg-violet-600 border border-violet-500/30 rounded-md flex items-center justify-center gap-1 text-violet-300 hover:text-white transition-all text-[9px] font-bold uppercase"
+          >
+            <svg className={`w-3 h-3 shrink-0 ${isLoading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            {lastMode ? 'Shuffle Again' : 'Shuffle'}
+          </button>
+        </InfoTooltip>
+        <InfoTooltip label={t('Reset on Shuffle')} description={getDescription('Reset on Shuffle', t)} className="h-full">
+          <div className="flex items-center gap-1.5 bg-violet-900/30 border border-violet-500/20 rounded-md px-2 h-full cursor-default">
+            <span className="text-[8px] font-bold uppercase text-violet-300/70 whitespace-nowrap">Reset</span>
+            <Toggle label="" checked={resetOnRefresh} onChange={setResetOnRefresh} activeColor="text-violet-400" className="scale-90 origin-right" />
           </div>
-          
-          {/* Second Row: Refresh | Reset */}
-          <div className="flex items-center justify-between gap-1 h-7">
-             {/* Refresh Button - Left Side */}
-             <div className="flex-1 h-full">
-                <InfoTooltip label={t('Shuffle / Refresh')} description={getDescription('Shuffle / Refresh', t)} className="w-full h-full">
-                    <button 
-                        onClick={handleRefresh}
-                        disabled={isLoading}
-                        className="w-full h-full bg-violet-600/20 hover:bg-violet-600 border border-violet-500/30 rounded flex items-center justify-center text-violet-300 hover:text-white transition-all text-[9px] font-bold uppercase gap-1"
-                    >
-                        <svg className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                        </svg>
-                        {lastMode ? t('Refresh') : t('Shuffle')}
-                    </button>
-                </InfoTooltip>
-             </div>
+        </InfoTooltip>
+      </div>
 
-             {/* Reset Toggle - Right Side */}
-             <div className="flex items-center gap-2 bg-violet-900/30 rounded px-2 h-full border border-violet-500/20 shrink-0">
-                <InfoTooltip label={t('Reset on Shuffle')} description={getDescription('Reset on Shuffle', t)}>
-                    <span className="text-[9px] font-bold uppercase text-violet-300/80 cursor-help">{t('Reset on Shuffle')}</span>
-                </InfoTooltip>
-                <Toggle 
-                  label="" 
-                  checked={resetOnRefresh} 
-                  onChange={setResetOnRefresh}
-                  activeColor="text-violet-400"
-                  className="scale-90 origin-right"
-                />
-             </div>
-          </div>
-        </div>
-      </InfoTooltip>
-
+      {/* Mode dropdown */}
       {isOpen && !isLoading && createPortal(
-        <div 
-           ref={dropdownRef}
-           className="fixed z-[9999] bg-slate-800 border border-white/10 rounded-lg shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 flex flex-col p-1 gap-0.5"
-           style={{
-             top: position.top,
-             left: position.left,
-             width: 180,
-             transform: 'translateY(-100%) translateY(-4px)'
-           }}
+        <div
+          ref={dropdownRef}
+          className="fixed z-[9999] bg-slate-800 border border-white/10 rounded-lg shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 flex flex-col p-1 gap-0.5"
+          style={{ top: position.top, left: position.left, width: Math.max(position.width, 190), transform: 'translateY(-100%) translateY(-4px)' }}
         >
-           <div className="px-2 py-1 text-[8px] font-black uppercase text-slate-500 tracking-wider">Select Generation Mode</div>
-           <button 
-             onClick={() => handleModeSelect('3d')}
-             className="text-left px-3 py-2 text-[9px] font-bold uppercase rounded hover:bg-white/10 text-slate-300 hover:text-white"
-           >
-             3D Printing Safe <span className="block text-[8px] font-normal text-slate-500 normal-case">Contiguous, sturdy parts</span>
-           </button>
-           <button 
-             onClick={() => handleModeSelect('2d')}
-             className="text-left px-3 py-2 text-[9px] font-bold uppercase rounded hover:bg-white/10 text-slate-300 hover:text-white"
-           >
-             2D / Laser <span className="block text-[8px] font-normal text-slate-500 normal-case">Aesthetic, may float</span>
-           </button>
-           <button 
-             onClick={() => handleModeSelect('fractal')}
-             className="text-left px-3 py-2 text-[9px] font-bold uppercase rounded hover:bg-white/10 text-slate-300 hover:text-white"
-           >
-             Traditional Snowflake <span className="block text-[8px] font-normal text-slate-500 normal-case">No text, just crystals</span>
-           </button>
+          <div className="px-2 py-1 text-[8px] font-black uppercase text-slate-500 tracking-wider">Select Generation Mode</div>
+          {([
+            { mode: '3d' as const,      label: '3D Printing Safe',      sub: 'Contiguous, sturdy parts' },
+            { mode: '2d' as const,      label: '2D / Laser',            sub: 'Aesthetic, may float' },
+            { mode: 'fractal' as const, label: 'Traditional Snowflake', sub: 'No text, just crystals' },
+          ]).map(({ mode, label, sub }) => (
+            <button key={mode} onClick={() => handleModeSelect(mode)}
+              className={`text-left px-3 py-2 text-[9px] font-bold uppercase rounded hover:bg-white/10 transition-colors ${lastMode === mode ? 'text-violet-300' : 'text-slate-300 hover:text-white'}`}>
+              {label} <span className="block text-[8px] font-normal normal-case text-slate-500">{sub}</span>
+            </button>
+          ))}
         </div>,
         document.body
       )}
@@ -556,18 +587,158 @@ const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, m
   const largeStep = step * 10;
 
   return (
-    <div className={`relative flex items-center bg-slate-900 border border-white/10 rounded-lg h-8 w-28 overflow-hidden select-none ${className} ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>
-      <div className="flex flex-col border-r border-white/10 h-full w-6 bg-slate-800/50">
-        <button className="flex-1 hover:bg-sky-500 hover:text-white text-slate-400 flex items-center justify-center transition-colors active:bg-sky-600" onMouseDown={() => startAdjust(largeStep)} onMouseUp={stopAdjust} onMouseLeave={stopAdjust} tabIndex={-1}><svg viewBox="0 0 24 24" width="8" height="8" fill="currentColor"><path d="M12 4l-8 8h16z"/></svg></button>
-        <button className="flex-1 hover:bg-sky-500 hover:text-white text-slate-400 flex items-center justify-center transition-colors border-t border-white/5 active:bg-sky-600" onMouseDown={() => startAdjust(-largeStep)} onMouseUp={stopAdjust} onMouseLeave={stopAdjust} tabIndex={-1}><svg viewBox="0 0 24 24" width="8" height="8" fill="currentColor"><path d="M12 20l-8-8h16z"/></svg></button>
+    <div className={`relative flex items-center bg-slate-900 border border-white/10 rounded-lg h-6 w-28 overflow-hidden select-none ${className} ${disabled ? 'opacity-50 pointer-events-none' : ''}`} 
+         style={{
+           position: 'relative',
+           display: 'flex',
+           alignItems: 'center',
+           backgroundColor: '#0f172a',
+           border: '1px solid rgba(255,255,255,0.1)',
+           borderRadius: '8px',
+           height: '24px',
+           width: '112px',
+           overflow: 'hidden',
+           userSelect: 'none',
+           opacity: disabled ? 0.5 : 1,
+           pointerEvents: disabled ? 'none' : 'auto'
+         }}>
+      <div className="flex flex-col border-r border-white/10 h-full w-6 bg-slate-800/50" 
+           style={{
+             display: 'flex',
+             flexDirection: 'column',
+             borderRight: '1px solid rgba(255,255,255,0.1)',
+             height: '100%',
+             width: '24px',
+             backgroundColor: 'rgba(30,41,59,0.5)'
+           }}>
+        <button 
+          className="flex-1 hover:bg-sky-500 hover:text-white text-slate-400 flex items-center justify-center transition-colors active:bg-sky-600" 
+          onMouseDown={() => startAdjust(largeStep)} 
+          onMouseUp={stopAdjust} 
+          onMouseLeave={stopAdjust} 
+          tabIndex={-1}
+          style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#94a3b8',
+            transition: 'all 0.2s',
+            cursor: 'pointer'
+          }}
+        >
+          <svg viewBox="0 0 24 24" width="8" height="8" fill="currentColor" style={{ width: '8px', height: '8px' }}><path d="M12 4l-8 8h16z"/></svg>
+        </button>
+        <button 
+          className="flex-1 hover:bg-sky-500 hover:text-white text-slate-400 flex items-center justify-center transition-colors border-t border-white/5 active:bg-sky-600" 
+          onMouseDown={() => startAdjust(-largeStep)} 
+          onMouseUp={stopAdjust} 
+          onMouseLeave={stopAdjust} 
+          tabIndex={-1}
+          style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#94a3b8',
+            borderTop: '1px solid rgba(255,255,255,0.05)',
+            transition: 'all 0.2s',
+            cursor: 'pointer'
+          }}
+        >
+          <svg viewBox="0 0 24 24" width="8" height="8" fill="currentColor" style={{ width: '8px', height: '8px' }}><path d="M12 20l-8-8h16z"/></svg>
+        </button>
       </div>
-      <div className="flex-1 relative h-full">
-        <input type="number" value={localValue} step={step} min={min} max={max} onChange={handleChange} onBlur={commit} onKeyDown={handleKeyDown} disabled={disabled} className="w-full h-full bg-transparent text-center text-[10px] font-black text-sky-400 focus:outline-none focus:bg-slate-800/50 px-1 appearance-none" />
-        {suffix && <div className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none"><span className="text-[8px] font-black uppercase text-slate-600">{suffix}</span></div>}
+      <div className="flex-1 relative h-full" style={{ flex: 1, position: 'relative', height: '100%' }}>
+        <input 
+          type="number" 
+          value={localValue} 
+          step={step} 
+          min={min} 
+          max={max} 
+          onChange={handleChange} 
+          onBlur={commit} 
+          onKeyDown={handleKeyDown} 
+          disabled={disabled} 
+          className="w-full h-full bg-transparent text-center text-[10px] font-black text-sky-400 focus:outline-none focus:bg-slate-800/50 px-1 appearance-none" 
+          style={{
+            width: '100%',
+            height: '100%',
+            backgroundColor: 'transparent',
+            textAlign: 'center',
+            fontSize: '10px',
+            fontWeight: '900',
+            color: '#38bdf8',
+            outline: 'none',
+            padding: '0 4px',
+            appearance: 'none'
+          }}
+        />
+        {suffix && <div className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none" 
+                     style={{
+                       position: 'absolute',
+                       right: '4px',
+                       top: '50%',
+                       transform: 'translateY(-50%)',
+                       pointerEvents: 'none'
+                     }}>
+          <span className="text-[8px] font-black uppercase text-slate-600" 
+                style={{
+                  fontSize: '8px',
+                  fontWeight: '900',
+                  textTransform: 'uppercase',
+                  color: '#475569'
+                }}>
+            {suffix}
+          </span>
+        </div>}
       </div>
-      <div className="flex flex-col border-l border-white/10 h-full w-6 bg-slate-800/50">
-        <button className="flex-1 hover:bg-sky-500 hover:text-white text-slate-400 flex items-center justify-center transition-colors active:bg-sky-600" onMouseDown={() => startAdjust(smallStep)} onMouseUp={stopAdjust} onMouseLeave={stopAdjust} tabIndex={-1}><svg viewBox="0 0 24 24" width="8" height="8" fill="currentColor"><path d="M12 4l-8 8h16z"/></svg></button>
-        <button className="flex-1 hover:bg-sky-500 hover:text-white text-slate-400 flex items-center justify-center transition-colors border-t border-white/5 active:bg-sky-600" onMouseDown={() => startAdjust(-smallStep)} onMouseUp={stopAdjust} onMouseLeave={stopAdjust} tabIndex={-1}><svg viewBox="0 0 24 24" width="8" height="8" fill="currentColor"><path d="M12 20l-8-8h16z"/></svg></button>
+      <div className="flex flex-col border-l border-white/10 h-full w-6 bg-slate-800/50"
+           style={{
+             display: 'flex',
+             flexDirection: 'column',
+             borderLeft: '1px solid rgba(255,255,255,0.1)',
+             height: '100%',
+             width: '24px',
+             backgroundColor: 'rgba(30,41,59,0.5)'
+           }}>
+        <button 
+          className="flex-1 hover:bg-sky-500 hover:text-white text-slate-400 flex items-center justify-center transition-colors active:bg-sky-600" 
+          onMouseDown={() => startAdjust(smallStep)} 
+          onMouseUp={stopAdjust} 
+          onMouseLeave={stopAdjust} 
+          tabIndex={-1}
+          style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#94a3b8',
+            transition: 'all 0.2s',
+            cursor: 'pointer'
+          }}
+        >
+          <svg viewBox="0 0 24 24" width="8" height="8" fill="currentColor" style={{ width: '8px', height: '8px' }}><path d="M12 4l-8 8h16z"/></svg>
+        </button>
+        <button 
+          className="flex-1 hover:bg-sky-500 hover:text-white text-slate-400 flex items-center justify-center transition-colors border-t border-white/5 active:bg-sky-600" 
+          onMouseDown={() => startAdjust(-smallStep)} 
+          onMouseUp={stopAdjust} 
+          onMouseLeave={stopAdjust} 
+          tabIndex={-1}
+          style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#94a3b8',
+            borderTop: '1px solid rgba(255,255,255,0.05)',
+            transition: 'all 0.2s',
+            cursor: 'pointer'
+          }}
+        >
+          <svg viewBox="0 0 24 24" width="8" height="8" fill="currentColor" style={{ width: '8px', height: '8px' }}><path d="M12 20l-8-8h16z"/></svg>
+        </button>
       </div>
     </div>
   );
@@ -593,27 +764,94 @@ const DeferredTextInput: React.FC<DeferredTextInputProps> = ({ value, onChange, 
   const showRevert = defaultValue !== undefined && value !== defaultValue;
   const heightClass = className?.includes('h-') ? 'h-full' : 'h-9';
   return (
-    <div className={`space-y-1.5 ${className}`}>
+    <div className={`space-y-1.5 ${className}`} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
       {label && (
-         <div className="flex justify-between items-center">
+         <div className="flex justify-between items-center" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <InfoTooltip label={label} description={getDescription(label, t)} />
-            {showRevert && <button onClick={() => onChange(defaultValue, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
+            {showRevert && (
+               <button 
+                 onClick={() => { onChange(defaultValue || '', true); setLocalValue(defaultValue || ''); }} 
+                 className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center" 
+                 title={t('reset')}
+                 style={{
+                   width: '16px',
+                   height: '16px',
+                   borderRadius: '4px',
+                   backgroundColor: 'transparent',
+                   color: '#64748b',
+                   display: 'flex',
+                   alignItems: 'center',
+                   justifyContent: 'center',
+                   cursor: 'pointer',
+                   transition: 'all 0.2s'
+                 }}
+               >
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: '12px', height: '12px' }}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
+               </button>
+            )}
          </div>
       )}
-      <input type="text" value={localValue} onChange={handleChange} onKeyDown={handleKeyDown} onBlur={commit} className={`w-full ${heightClass} bg-slate-900 border border-white/10 rounded-lg px-3 text-xs font-bold text-white placeholder-slate-600 focus:ring-1 focus:border-sky-500 ring-sky-500/50 outline-none`} placeholder={placeholder} />
+      <input 
+        type="text" 
+        value={localValue} 
+        onChange={handleChange} 
+        onBlur={commit} 
+        onKeyDown={handleKeyDown} 
+        placeholder={placeholder}
+        className={`w-full bg-slate-900 border border-white/10 rounded-lg px-3 text-xs font-black text-white placeholder-slate-600 focus:border-sky-500 focus:ring-1 focus:ring-sky-500 outline-none transition-all ${heightClass}`}
+        style={{
+          width: '100%',
+          backgroundColor: '#0f172a',
+          border: '1px solid rgba(255,255,255,0.1)',
+          borderRadius: '8px',
+          paddingLeft: '12px',
+          paddingRight: '12px',
+          fontSize: '12px',
+          fontWeight: '900',
+          color: 'white',
+          outline: 'none',
+          transition: 'all 0.2s',
+          height: className?.includes('h-') ? 'auto' : '36px'
+        }}
+      />
     </div>
   );
 };
 
 const ControlRow: React.FC<{ label: string; children: React.ReactNode; onReset?: () => void; isModified?: boolean; t?: (key: string) => string }> = ({ label, children, onReset, isModified, t }) => (
-    <div className="space-y-2">
-        <div className="flex justify-between items-center">
-            <div className="flex items-center">
+    <div className="space-y-2" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <div className="flex justify-between items-center" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="flex items-center" style={{ display: 'flex', alignItems: 'center' }}>
                 <InfoTooltip label={label} description={getDescription(label, t || ((k) => k))} />
-                {isModified && onReset && <button onClick={onReset} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t ? t('reset') : 'Reset'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
+                {isModified && onReset && (
+                  <button 
+                    onClick={onReset} 
+                    className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" 
+                    title={t ? t('reset') : 'Reset'}
+                    style={{
+                      width: '16px',
+                      height: '16px',
+                      borderRadius: '4px',
+                      backgroundColor: 'transparent',
+                      color: '#64748b',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginRight: '4px',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: '12px', height: '12px' }}>
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                    </svg>
+                  </button>
+                )}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+                {children}
             </div>
         </div>
-        {children}
     </div>
 );
 
@@ -624,6 +862,7 @@ interface ControlPanelProps {
   updateCharOffset: (group: 'primary' | 'secondary', charIndex: number, offset: Partial<CharOffset>, commitTo3D?: boolean) => void;
   updateHubs: (newHubs: HubConfig[], commitTo3D?: boolean) => void;
   updateAbstracts: (newAbstracts: AbstractConfig[], commitTo3D?: boolean) => void;
+  updateImages: (newImages: ImageConfig[], commitTo3D?: boolean) => void;
   onAiPolish: (mode: '3d' | '2d' | 'fractal', reset?: boolean) => void;
   aiLoading: boolean;
   aiProgress: number;
@@ -635,32 +874,39 @@ interface ControlPanelProps {
   onFetchFont: (name: string) => Promise<boolean>;
   onFontUpload: (file: File) => void;
   dynamicFonts: Record<string, string>;
-  onAutoConfigureSlots: () => void;
-  calculateOptimalSlots: (layers: LayerConfig[]) => LayerConfig[];
+  // SLOT-DISABLED: onAutoConfigureSlots: () => void;
+  // SLOT-DISABLED: calculateOptimalSlots: (layers: LayerConfig[]) => LayerConfig[];
   setViewMode: (mode: '2d' | '3d') => void;
   undo: () => void;
   redo: () => void;
   canUndo: boolean;
   canRedo: boolean;
   shortcuts?: ShortcutConfig;
-  activeTab: 'global' | 'text' | 'Letter Ctrl' | 'hubs' | 'abstract' | 'planes';
-  onTabChange: (tab: 'global' | 'text' | 'Letter Ctrl' | 'hubs' | 'abstract' | 'planes') => void;
+  activeTab: 'global' | 'text' | 'Letter Ctrl' | 'hubs' | 'abstract' | 'planes' | 'images';
+  onTabChange: (tab: 'global' | 'text' | 'Letter Ctrl' | 'hubs' | 'abstract' | 'planes' | 'images') => void;
 }
 
 const ControlPanel: React.FC<ControlPanelProps> = ({ 
-  config, onUpdate, updateGroup, updateCharOffset, updateHubs, updateAbstracts, onAiPolish, aiLoading, aiProgress, onExportSTL, onExportLayerSTL, onExportAllLayersZip, onExport2D, exportLoading, onFetchFont, onFontUpload, dynamicFonts, onAutoConfigureSlots, calculateOptimalSlots, setViewMode, undo, redo, canUndo, canRedo, shortcuts, activeTab, onTabChange
+  config, onUpdate, updateGroup, updateCharOffset, updateHubs, updateAbstracts, updateImages, onAiPolish, aiLoading, aiProgress, onExportSTL, onExportLayerSTL, onExportAllLayersZip, onExport2D, exportLoading, onFetchFont, onFontUpload, dynamicFonts, /* SLOT-DISABLED: onAutoConfigureSlots, calculateOptimalSlots, */ setViewMode, undo, redo, canUndo, canRedo, shortcuts, activeTab, onTabChange
 }) => {
   const { t } = useTranslation(config.language || 'en');
   const tabContentRef = useRef<HTMLDivElement>(null);
+  const isInitialLoad = useRef(true);
+  
+  useEffect(() => {
+    isInitialLoad.current = false;
+  }, []);
   
   const [activeGroup, setActiveGroup] = useState<'primary' | 'secondary'>('primary');
   
   const [selectedCharIndex, setSelectedCharIndex] = useState(0);
   const [selectedHubIndex, setSelectedHubIndex] = useState(0);
   const [selectedAbstractIndex, setSelectedAbstractIndex] = useState(0);
+  const [selectedImageIndex, setSelectedImageIndex] = useState(0);
   const [fontSearch, setFontSearch] = useState('');
   const [currentStats, setCurrentStats] = useState({ radius: 95, diameter: 190, activeGroupRadius: 95, activeGroupDiameter: 190 });
   const [radiusLocks, setRadiusLocks] = useState({ primary: { locked: true, target: 95 }, secondary: { locked: false, target: 20 } });
+  const [diameterMode, setDiameterMode] = useState<'auto-fit' | 'fixed-size'>('fixed-size');
   
   const [showTooltips, setShowTooltips] = useState(true);
   
@@ -728,7 +974,26 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
 
   const updateGroupWithLock = useCallback(async (group: 'primary' | 'secondary', updates: Partial<TextGroupConfig>, commitTo3D: boolean = false) => {
     updateGroup(group, updates, commitTo3D);
-  }, [updateGroup]);
+
+    // AUTO-FIT: after the group updates, rescale font size to maintain the locked outer radius.
+    // Only fires when diameterMode is 'auto-fit' AND the change is not itself a font-size change
+    // (to avoid infinite rescale loops).
+    if (diameterMode === 'auto-fit' && !('fontSize' in updates)) {
+      const targetRad = radiusLocks[group]?.target ?? 95;
+      const currentGroup = { ...activeLayer[group], ...updates };
+      const safeTextX = isNaN(currentGroup.textX) ? 0 : currentGroup.textX;
+      const neededWidth = targetRad - safeTextX;
+      if (neededWidth >= 1) {
+        getTextExtent(currentGroup).then(currentWidth => {
+          if (currentWidth > 0.1) {
+            const ratio = neededWidth / currentWidth;
+            const newFontSize = currentGroup.fontSize * ratio;
+            updateGroup(group, { fontSize: newFontSize }, commitTo3D);
+          }
+        });
+      }
+    }
+  }, [updateGroup, diameterMode, radiusLocks, activeLayer, getTextExtent]);
 
   useEffect(() => {
       const calcStats = async () => {
@@ -822,43 +1087,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
     const isEnabled = updates.enabled !== undefined ? updates.enabled : wasEnabled;
     newLayers[idx] = { ...newLayers[idx], ...updates };
     
-    // Check if we're changing plane count while slots are active
-    if (config.slotEnabled && updates.enabled !== undefined && wasEnabled !== isEnabled) {
-      const activePlanesAfterUpdate = newLayers.filter(l => l.enabled).length;
-      
-      if (isEnabled && activePlanesAfterUpdate === 3 && config.viewMode === '2d') {
-        // Scenario 1: Enabling 3rd plane while in 2-plane mode
-        console.log('🔄 3rd plane activated, switching to 3-plane mode and reconfiguring slots');
-        
-        // Clear 3D cache first
-        clearGeometryCache();
-        
-        // Switch to 3-plane mode and reconfigure slots
-        setViewMode('3d');
-        setTimeout(() => {
-          const updatedLayersWithSlots = calculateOptimalSlots(newLayers);
-          onUpdate({ layers: updatedLayersWithSlots, slotMode: '3-plane' }, true);
-        }, 100);
-        
-        return; // Skip the normal update flow
-        
-      } else if (!isEnabled && activePlanesAfterUpdate === 2 && config.viewMode === '3d') {
-        // Scenario 2: Disabling a plane while in 3-plane mode (backward compatibility)
-        console.log('🔄 Plane disabled, switching to 2-plane mode and reconfiguring slots');
-        
-        // Clear 3D cache first
-        clearGeometryCache();
-        
-        // Switch to 2-plane mode and reconfigure slots
-        setViewMode('2d');
-        setTimeout(() => {
-          const updatedLayersWithSlots = calculateOptimalSlots(newLayers);
-          onUpdate({ layers: updatedLayersWithSlots, slotMode: '2-plane' }, true);
-        }, 100);
-        
-        return; // Skip the normal update flow
-      }
-    }
+    // SLOT-DISABLED: slot-mode auto-switch block removed
     
     // Only log after update in development mode and reduce frequency
     if (process.env.NODE_ENV === 'development' && Math.random() < 0.1) {
@@ -898,9 +1127,16 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
     const showRevert = defaultValue !== undefined && Math.abs(safeValue - defaultValue) > 0.01;
     
     return (
-      <div className={`space-y-2 ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>
-        <div className="flex justify-between items-center">
-          <div className="flex items-center">
+      <div className={`space-y-2 ${disabled ? 'opacity-50 pointer-events-none' : ''}`} 
+           style={{ 
+             display: 'flex', 
+             flexDirection: 'column', 
+             gap: '8px',
+             opacity: disabled ? 0.5 : 1,
+             pointerEvents: disabled ? 'none' : 'auto'
+           }}>
+        <div className="flex justify-between items-center" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div className="flex items-center" style={{ display: 'flex', alignItems: 'center' }}>
             <InfoTooltip label={label} description={getDescription(label, t)} />
             {extraLabel}
             {showRevert && (
@@ -908,8 +1144,21 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                 onClick={() => onChange(defaultValue!, true)} 
                 className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center ml-2" 
                 title="Reset to Default"
+                style={{
+                  width: '16px',
+                  height: '16px',
+                  borderRadius: '4px',
+                  backgroundColor: 'transparent',
+                  color: '#64748b',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginLeft: '8px',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
               >
-                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: '12px', height: '12px' }}>
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
                 </svg>
               </button>
@@ -923,9 +1172,19 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
             max={max} 
             step={step} 
             value={safeValue} 
-            onChange={(e) => onChange(parseFloat(e.target.value), false)} 
-            onMouseUp={(e) => onChange(parseFloat((e.target as HTMLInputElement).value), true)}
+            onChange={(e) => onChange(Math.max(min, Math.min(max, parseFloat(e.target.value))), false)} 
+            onMouseUp={(e) => onChange(Math.max(min, Math.min(max, parseFloat((e.target as HTMLInputElement).value))), true)}
             className="w-full h-1 bg-slate-800 rounded-lg accent-sky-500 cursor-pointer" 
+            style={{
+              width: '100%',
+              height: '4px',
+              backgroundColor: '#1e293b',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              WebkitAppearance: 'none',
+              appearance: 'none',
+              outline: 'none'
+            }}
         />
       </div>
     );
@@ -939,7 +1198,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
     'Letter Ctrl': t('Letter Ctrl'), 
     'hubs': t('hubs'), 
     'abstract': t('abstract'), 
-    'planes': t('planes') 
+    'planes': t('planes'),
+    'images': 'Images'
   };
   const TAB_SHORTCUTS: Record<string, keyof ShortcutConfig> = {
     'global': 'switchToGlobalTab',
@@ -962,44 +1222,121 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
 
   return (
     <TooltipContext.Provider value={showTooltips}>
-      <div className="flex flex-col h-full">
+      <div className="flex flex-col h-full" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         {/* Tab Headers */}
-        <div className="p-2 bg-slate-900/50 border-b border-white/5 shrink-0">
-           <div className="grid grid-cols-6 gap-1">
-              {(['global', 'text', 'Letter Ctrl', 'hubs', 'abstract', 'planes'] as const).map(tab => (
+        <div className="p-2 bg-slate-900/50 border-b border-white/5 shrink-0" style={{ padding: '8px', backgroundColor: 'rgba(15,23,42,0.5)', borderBottom: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 }}>
+           <div className="grid grid-cols-6 gap-1" style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '4px' }}>
+              {(['global', 'text', 'Letter Ctrl', 'hubs', 'abstract', 'images' /* SLOT-DISABLED: 'planes' */] as const).map(tab => {
+                 const isActive = activeTab === tab;
+                 const btnActive = 'bg-sky-600 text-white border-sky-500';
+                 const btnInactive = 'bg-slate-800 text-slate-400 border-white/10 hover:bg-slate-700 hover:text-white';
+                 return (
                  <InfoTooltip key={tab} label={TAB_LABELS[tab]} shortcut={shortcuts?.[TAB_SHORTCUTS[tab]]} placement="bottom" className="h-full">
-                     <button onClick={() => onTabChange(tab)} className={`${activeTab === tab ? btnActive : btnInactive} w-full`}>{TAB_LABELS[tab]}</button>
+                     <button 
+                       onClick={() => onTabChange(tab)} 
+                       className={`${isActive ? btnActive : btnInactive} w-full`}
+                       style={{
+                         width: '100%',
+                         padding: '6px 4px',
+                         fontSize: '10px',
+                         fontWeight: 'bold',
+                         textTransform: 'uppercase',
+                         borderRadius: '4px',
+                         border: '1px solid',
+                         backgroundColor: isActive ? '#0284c7' : '#1e293b',
+                         color: isActive ? 'white' : '#94a3b8',
+                         borderColor: isActive ? '#0ea5e9' : 'rgba(255,255,255,0.1)',
+                         cursor: 'pointer',
+                         transition: 'all 0.2s'
+                       }}
+                     >
+                       {TAB_LABELS[tab]}
+                     </button>
                  </InfoTooltip>
-              ))}
+              )})}
            </div>
         </div>
 
         {/* Tab Content */}
-        <div ref={tabContentRef} className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-6">
+        <div ref={tabContentRef} className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-4" style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
           {activeTab === 'global' && (
-             <div className="space-y-6 animate-in fade-in duration-200">
-               <div className="p-3 bg-slate-800/30 rounded-xl border border-white/5 space-y-5">
-                  <div className="space-y-2">
-                      <div className="flex justify-between items-center">
-                          <div className="flex items-center gap-4">
-                              <div className="flex items-center">
+             <div className="space-y-4 animate-in fade-in duration-200" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+               <div className="p-3 bg-slate-800/30 rounded-xl border border-white/5 space-y-4" style={{ padding: '12px', backgroundColor: 'rgba(30,41,59,0.3)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div className="space-y-1.5" style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <div className="flex justify-between items-center" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div className="flex items-center gap-4" style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                              <div className="flex items-center" style={{ display: 'flex', alignItems: 'center' }}>
                                   <InfoTooltip label={t('Model Color')} description={getDescription('Model Color', t)} />
                                   {config.color !== '#38bdf8' && (
-                                      <button onClick={() => onUpdate({ color: '#38bdf8' })} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}>
-                                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
+                                      <button 
+                                        onClick={() => onUpdate({ color: '#38bdf8' })} 
+                                        className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" 
+                                        title={t('reset')}
+                                        style={{
+                                          width: '16px',
+                                          height: '16px',
+                                          borderRadius: '4px',
+                                          backgroundColor: 'transparent',
+                                          color: '#64748b',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'center',
+                                          marginRight: '4px',
+                                          cursor: 'pointer',
+                                          transition: 'all 0.2s'
+                                        }}
+                                      >
+                                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: '12px', height: '12px' }}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
                                       </button>
                                   )}
                               </div>
                           </div>
                       </div>
-                      <input type="color" value={config.color} onChange={(e) => onUpdate({ color: e.target.value })} className="w-full h-8 bg-slate-900 border border-white/10 rounded-lg cursor-pointer p-0.5" />
+                      <input 
+                        type="color" 
+                        value={config.color} 
+                        onChange={(e) => onUpdate({ color: e.target.value })} 
+                        className="w-full h-8 bg-slate-900 border border-white/10 rounded-lg cursor-pointer p-0.5" 
+                        style={{
+                          width: '100%',
+                          height: '32px',
+                          backgroundColor: '#0f172a',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          padding: '2px'
+                        }}
+                      />
                   </div>
 
                   {renderSlider(t('Extrusion Depth'), config.extrusionDepth, 1, 20, 0.1, (v, c) => onUpdate({ extrusionDepth: v }, c), "mm", false, 3)}
                   {renderSlider(t('Global Boldness'), config.globalStrokeWeight, 0, 10, 0.1, (v, c) => onUpdate({ globalStrokeWeight: v }, c), "mm", false, 0)}
                   <ControlRow label={t('Preview Resolution')} onReset={() => onUpdate({ quality: 'low' }, true)} isModified={config.quality !== 'low'} t={t}>
-                     <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-lg">
-                        {(['low', 'med', 'high'] as const).map(q => (<button key={q} onClick={() => onUpdate({ quality: q }, true)} className={`py-1 text-[9px] font-black uppercase rounded transition-all ${config.quality === q ? 'bg-sky-500 text-white' : 'text-slate-500'}`}>{t(q)}</button>))}
+                     <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-lg" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px', backgroundColor: '#0f172a', padding: '4px', borderRadius: '8px' }}>
+                        {(['low', 'med', 'high'] as const).map(q => {
+                          const isActive = config.quality === q;
+                          return (
+                            <button 
+                              key={q} 
+                              onClick={() => onUpdate({ quality: q }, true)} 
+                              className={`py-1 text-[9px] font-black uppercase rounded transition-all ${isActive ? 'bg-sky-500 text-white' : 'text-slate-500'}`}
+                              style={{
+                                padding: '4px',
+                                fontSize: '9px',
+                                fontWeight: '900',
+                                textTransform: 'uppercase',
+                                borderRadius: '4px',
+                                transition: 'all 0.2s',
+                                backgroundColor: isActive ? '#0ea5e9' : 'transparent',
+                                color: isActive ? 'white' : '#64748b',
+                                cursor: 'pointer',
+                                border: 'none'
+                              }}
+                            >
+                              {t(q)}
+                            </button>
+                          );
+                        })}
                      </div>
                   </ControlRow>
                   <div className="space-y-4 pt-4 border-t border-white/5">
@@ -1011,10 +1348,10 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                          <Toggle label={config.bevelEnabled ? t('ON') : t('OFF')} checked={config.bevelEnabled} onChange={(c) => onUpdate({ bevelEnabled: c }, true)} />
                      </div>
                      {config.bevelEnabled && (
-                        <div className="space-y-4">
+                        <div className="space-y-3">
                           <div className="flex bg-slate-900 p-1 rounded-lg gap-1">
-                               <button onClick={() => onUpdate({ bevelType: 'fillet' }, true)} className={`flex-1 px-3 py-1 text-[9px] font-black uppercase rounded ${config.bevelType === 'fillet' ? 'bg-sky-500 text-white' : 'text-slate-500'}`}>{t('Fillet')}</button>
-                               <button onClick={() => onUpdate({ bevelType: 'chamfer' }, true)} className={`flex-1 px-3 py-1 text-[9px] font-black uppercase rounded ${config.bevelType === 'chamfer' ? 'bg-sky-500 text-white' : 'text-slate-500'}`}>{t('Chamfer')}</button>
+                               <InfoTooltip label={t('Fillet')} description={getDescription('Fillet', t)} className="flex-1"><button onClick={() => onUpdate({ bevelType: 'fillet' }, true)} className={`w-full px-3 py-1 text-[9px] font-black uppercase rounded ${config.bevelType === 'fillet' ? 'bg-sky-500 text-white' : 'text-slate-500'}`}>{t('Fillet')}</button></InfoTooltip>
+                               <InfoTooltip label={t('Chamfer')} description={getDescription('Chamfer', t)} className="flex-1"><button onClick={() => onUpdate({ bevelType: 'chamfer' }, true)} className={`w-full px-3 py-1 text-[9px] font-black uppercase rounded ${config.bevelType === 'chamfer' ? 'bg-sky-500 text-white' : 'text-slate-500'}`}>{t('Chamfer')}</button></InfoTooltip>
                           </div>
                           {renderSlider(t('Bevel Amount'), config.bevelAmount, 0, 5, 0.05, (v, c) => onUpdate({ bevelAmount: v }, c), "mm", false, 0.4)}
                           {config.bevelType === 'fillet' && renderSlider(t('Fillet Detail'), config.bevelSegments, 2, 12, 1, (v, c) => onUpdate({ bevelSegments: v }, c), "", false, 2)}
@@ -1026,10 +1363,11 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
           )}
           
           {(activeTab === 'text' || activeTab === 'Letter Ctrl') && (
-             <div className="grid grid-cols-2 gap-2 mb-4">
+             <div className="grid grid-cols-2 gap-2 mb-2">
+                <InfoTooltip label={t('Primary Group')} description={getDescription('Primary Group', t)} className="w-full">
                 <div 
                   onClick={() => setActiveGroup('primary')}
-                  className={`p-2 rounded-xl border transition-all cursor-pointer ${activeGroup === 'primary' ? 'bg-slate-800/80 border-sky-500/50 shadow-lg shadow-sky-500/10' : 'bg-slate-900/50 border-white/5 hover:bg-slate-800/50'}`}
+                  className={`p-2 rounded-xl border transition-all cursor-pointer w-full ${activeGroup === 'primary' ? 'bg-slate-800/80 border-sky-500/50 shadow-lg shadow-sky-500/10' : 'bg-slate-900/50 border-white/5 hover:bg-slate-800/50'}`}
                 >
                    <div className="flex flex-col gap-2">
                       <div className="flex justify-between items-center">
@@ -1040,9 +1378,11 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                       </div>
                    </div>
                 </div>
+                </InfoTooltip>
+                <InfoTooltip label={t('Secondary Group')} description={getDescription('Secondary Group', t)} className="w-full">
                 <div 
                   onClick={() => setActiveGroup('secondary')}
-                  className={`p-2 rounded-xl border transition-all cursor-pointer ${activeGroup === 'secondary' ? 'bg-slate-800/80 border-sky-500/50 shadow-lg shadow-sky-500/10' : 'bg-slate-900/50 border-white/5 hover:bg-slate-800/50'}`}
+                  className={`p-2 rounded-xl border transition-all cursor-pointer w-full ${activeGroup === 'secondary' ? 'bg-slate-800/80 border-sky-500/50 shadow-lg shadow-sky-500/10' : 'bg-slate-900/50 border-white/5 hover:bg-slate-800/50'}`}
                 >
                    <div className="flex flex-col gap-2">
                       <div className="flex justify-between items-center">
@@ -1053,11 +1393,12 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                       </div>
                    </div>
                 </div>
+                </InfoTooltip>
              </div>
           )}
 
           {activeTab === 'text' && (
-            <div className="space-y-5 animate-in fade-in duration-200">
+            <div className="space-y-0 animate-in fade-in duration-200">
               <DeferredTextInput 
                 label={t('Phrase Content')} 
                 value={groupData.text} 
@@ -1067,7 +1408,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                 defaultValue={activeGroup === 'primary' ? 'Snow' : ''} 
               />
               
-              <div className="space-y-2">
+              <div className="space-y-1">
                 <div className="flex gap-2 h-9">
                   <InfoTooltip label={t('Font Search')} description={getDescription('Font Search', t)} className="flex-1 h-full"><input type="text" placeholder={t('Search Fonts...')} value={fontSearch} onChange={(e) => setFontSearch(e.target.value)} className="w-full h-full bg-slate-900 border border-white/10 rounded-lg px-3 text-xs font-bold text-white placeholder-slate-600 focus:border-sky-500 outline-none" /></InfoTooltip>
                   <InfoTooltip label={t('System Fonts')} description={getDescription('System Fonts', t)} className="h-full">
@@ -1086,7 +1427,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                   </InfoTooltip>
                 </div>
                 <div className="grid grid-cols-2 gap-1 max-h-32 overflow-y-auto custom-scrollbar bg-slate-900 p-1 rounded-lg border border-white/5">
-                  {filteredFonts.map(font => (<button key={font.name} onClick={() => updateGroup(activeGroup, { fontFamily: font.name }, true)} className={`text-left px-2 py-1.5 rounded text-xs truncate transition-all ${groupData.fontFamily === font.name ? 'bg-sky-600 text-white' : 'text-slate-400 hover:bg-white/5'}`} style={{ fontFamily: font.family }}>{font.name}</button>))}
+                  {filteredFonts.map(font => (<button key={font.name} onClick={() => updateGroupWithLock(activeGroup, { fontFamily: font.name }, true)} className={`text-left px-2 py-1.5 rounded text-xs truncate transition-all ${groupData.fontFamily === font.name ? 'bg-sky-600 text-white' : 'text-slate-400 hover:bg-white/5'}`} style={{ fontFamily: font.family }}>{font.name}</button>))}
                 </div>
               </div>
               
@@ -1112,17 +1453,26 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                        </div>
                        <div className="flex items-center gap-2">
                           <span className="text-[10px] font-black text-slate-500">(D: <span className="text-white">{currentStats.activeGroupDiameter.toFixed(1)}mm</span>)</span>
+                          <InfoTooltip label={t('Diameter Mode')} description={getDescription('Diameter Mode', t)} className="flex-shrink-0">
                           <div className="grid grid-cols-2 gap-1 bg-slate-900 p-1 rounded-lg flex-shrink-0">
                              {(['auto-fit', 'fixed-size'] as const).map(mode => (
                                 <button 
                                    key={mode} 
-                                   onClick={() => onUpdate({ diameterMode: mode }, true)} 
-                                   className={`py-1 text-[8px] font-black uppercase rounded transition-all ${config.diameterMode === mode ? 'bg-sky-500 text-white' : 'text-slate-500'}`}
+                                   onClick={() => {
+                                     setDiameterMode(mode);
+                                     // Switching TO auto-fit: immediately rescale to current target
+                                     if (mode === 'auto-fit') {
+                                       const targetRad = radiusLocks[activeGroup]?.target ?? 95;
+                                       handleArmRadiusChange(targetRad, true);
+                                     }
+                                   }}
+                                   className={`py-1 text-[8px] font-black uppercase rounded transition-all ${diameterMode === mode ? 'bg-sky-500 text-white' : 'text-slate-500'}`}
                                 >
                                    {t(mode)}
                                 </button>
                              ))}
                           </div>
+                          </InfoTooltip>
                           <DeferredNumberInput value={currentArmRadius} min={10} max={500} step={0.1} onChange={(v, c) => handleArmRadiusChange(v, c)} suffix="mm" />
                        </div>
                     </div>
@@ -1139,7 +1489,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                  </div>
                  {renderSlider(t('Inner Radius'), groupData.textX, -100, 300, 0.1, (v, c) => handleGroupDistChange(v, c), "mm", false, activeGroup === 'primary' ? 20 : 10)}
                  {renderSlider(t('Boldness'), groupData.thickness, -5, 10, 0.1, (v, c) => updateGroupWithLock(activeGroup, { thickness: v }, c), "mm", false, 0)}
-                 {renderSlider(t('Letter Spacing'), groupData.letterSpacing, -5, 20, 0.1, (v, c) => updateGroup(activeGroup, { letterSpacing: v }, c), "mm", false, 0)}
+                 {renderSlider(t('Letter Spacing'), groupData.letterSpacing, -5, 20, 0.1, (v, c) => updateGroupWithLock(activeGroup, { letterSpacing: v }, c), "mm", false, 0)}
                  {renderSlider(t('Manual Rotation'), groupData.rotationOffset, -180, 180, 1, (v, c) => updateGroup(activeGroup, { rotationOffset: v }, c), "°", false, activeGroup === 'primary' ? 0 : 30)}
               </div>
 
@@ -1193,11 +1543,60 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
           {activeTab === 'Letter Ctrl' && (
              <div className="space-y-4 animate-in fade-in duration-200">
                 {renderSlider(t('Font Size'), groupData.fontSize, 10, 200, 1, (v, c) => updateGroupWithLock(activeGroup, { fontSize: v }, c), "px", false, 34)}
-                <div className="flex space-x-2 overflow-x-auto custom-scrollbar pb-2 h-11">
-                    {groupData.text.split('').map((char, i) => (<button key={i} onClick={() => setSelectedCharIndex(i)} className={`min-w-[40px] h-9 rounded-lg text-lg font-bold border transition-all ${selectedCharIndex === i ? 'bg-sky-600 border-sky-500 text-white shadow-lg' : 'bg-slate-800 border-white/5 text-slate-400'}`}>{char}</button>))}
+                <div className="flex space-x-2 overflow-x-auto custom-scrollbar pb-2 h-11" 
+                     style={{ 
+                       display: 'flex', 
+                       gap: '8px', 
+                       overflowX: 'auto', 
+                       paddingBottom: '8px', 
+                       height: '44px' 
+                     }}>
+                    {groupData.text.split('').map((char, i) => (
+                      <button 
+                        key={i} 
+                        onClick={() => setSelectedCharIndex(i)} 
+                        className={`min-w-[40px] h-9 rounded-lg text-lg font-bold border transition-all ${selectedCharIndex === i ? 'bg-sky-600 border-sky-500 text-white shadow-lg' : 'bg-slate-800 border-white/5 text-slate-400'}`}
+                        style={{
+                          minWidth: '40px',
+                          height: '36px',
+                          borderRadius: '8px',
+                          fontSize: '18px',
+                          fontWeight: 'bold',
+                          border: '1px solid',
+                          transition: 'all 0.2s',
+                          backgroundColor: selectedCharIndex === i ? '#0284c7' : '#1e293b',
+                          borderColor: selectedCharIndex === i ? '#0ea5e9' : 'rgba(255,255,255,0.05)',
+                          color: selectedCharIndex === i ? 'white' : '#94a3b8',
+                          cursor: 'pointer',
+                          boxShadow: selectedCharIndex === i ? '0 10px 15px -3px rgba(0,0,0,0.1)' : 'none'
+                        }}
+                      >
+                        {char}
+                      </button>
+                    ))}
                 </div>
-                <div className="bg-slate-800/30 p-3 rounded-xl border border-white/5 space-y-4">
-                  <p className="text-[9px] font-black uppercase text-slate-500 border-b border-white/5 pb-2 mb-2">{t('Selected Character')}: <span className="text-white text-base ml-2">"{groupData.text[selectedCharIndex]}"</span></p>
+                <div className="bg-slate-800/30 p-3 rounded-xl border border-white/5 space-y-4" 
+                     style={{
+                       backgroundColor: 'rgba(30,41,59,0.3)',
+                       padding: '12px',
+                       borderRadius: '12px',
+                       border: '1px solid rgba(255,255,255,0.05)',
+                       display: 'flex',
+                       flexDirection: 'column',
+                       gap: '16px'
+                     }}>
+                  <p className="text-[9px] font-black uppercase text-slate-500 border-b border-white/5 pb-2 mb-2" 
+                     style={{
+                       fontSize: '9px',
+                       fontWeight: '900',
+                       textTransform: 'uppercase',
+                       color: '#64748b',
+                       borderBottom: '1px solid rgba(255,255,255,0.05)',
+                       paddingBottom: '8px',
+                       marginBottom: '8px'
+                     }}>
+                    {t('Selected Character')}: <span className="text-white text-base ml-2" style={{ color: 'white', fontSize: '16px', marginLeft: '8px' }}>"{groupData.text[selectedCharIndex]}"</span>
+                  </p>
                   {renderSlider(t('Offset X'), groupData.charOffsets[selectedCharIndex]?.x || 0, -50, 50, 0.1, (v, c) => updateCharOffset(activeGroup, selectedCharIndex, { x: v }, c), "mm", false, 0)}
                   {renderSlider(t('Offset Y'), groupData.charOffsets[selectedCharIndex]?.y || 0, -50, 50, 0.1, (v, c) => updateCharOffset(activeGroup, selectedCharIndex, { y: v }, c), "mm", false, 0)}
                 </div>
@@ -1205,16 +1604,90 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
           )}
           
           {activeTab === 'hubs' && (
-             <div className="space-y-4 animate-in fade-in duration-200">
-                <div className="grid grid-cols-4 gap-2">
-                   {activeLayer.hubs.map((hub, i) => (<button key={hub.id} onClick={() => setSelectedHubIndex(i)} className={`h-8 rounded-lg text-xs font-bold uppercase border transition-all ${selectedHubIndex === i ? 'bg-sky-600 border-sky-500 text-white' : 'bg-slate-800 border-white/5 text-slate-400'}`}>{t('Hub')} {i + 1}</button>))}
-                   <InfoTooltip label={t('Add Hub')} description={getDescription('Add Hub', t)}><button onClick={() => { const newHub: HubConfig = { id: `hub-${Date.now()}`, enabled: true, shape: 'circle', sides: 6, outerRadius: 20, hollow: true, wallThickness: 2, starRatio: 0.5, rotationOffset: 0, oscillationEnabled: false, oscillationAmplitude: 5, oscillationFrequency: 6 }; updateHubs([...activeLayer.hubs, newHub], false); setSelectedHubIndex(activeLayer.hubs.length); }} className="w-full h-8 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs font-bold uppercase transition-all hover:bg-emerald-500 hover:text-white">{t('+ Hub')}</button></InfoTooltip>
+             <div className="space-y-4 animate-in fade-in duration-200" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div className="grid grid-cols-4 gap-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
+                   {activeLayer.hubs.map((hub, i) => (
+                     <button 
+                       key={hub.id} 
+                       onClick={() => setSelectedHubIndex(i)} 
+                       className={`h-8 rounded-lg text-xs font-bold uppercase border transition-all ${selectedHubIndex === i ? 'bg-sky-600 border-sky-500 text-white' : 'bg-slate-800 border-white/5 text-slate-400'}`}
+                       style={{
+                         height: '32px',
+                         borderRadius: '8px',
+                         fontSize: '12px',
+                         fontWeight: 'bold',
+                         textTransform: 'uppercase',
+                         border: '1px solid',
+                         transition: 'all 0.2s',
+                         backgroundColor: selectedHubIndex === i ? '#0284c7' : '#1e293b',
+                         borderColor: selectedHubIndex === i ? '#0ea5e9' : 'rgba(255,255,255,0.05)',
+                         color: selectedHubIndex === i ? 'white' : '#94a3b8',
+                         cursor: 'pointer'
+                       }}
+                     >
+                       {t('Hub')} {i + 1}
+                     </button>
+                   ))}
+                   <InfoTooltip label={t('Add Hub')} description={getDescription('Add Hub', t)}>
+                     <button 
+                       onClick={() => { 
+                         const newHub: HubConfig = { 
+                           id: `hub-${Date.now()}`, 
+                           enabled: true, 
+                           shape: 'circle', 
+                           sides: 6, 
+                           outerRadius: 20, 
+                           hollow: true, 
+                           wallThickness: 0.5, 
+                           starRatio: 0.5, 
+                           rotationOffset: 0, 
+                           oscillationEnabled: false, 
+                           oscillationAmplitude: 5, 
+                           oscillationFrequency: 6 
+                         }; 
+                         updateHubs([...activeLayer.hubs, newHub], false); 
+                         setSelectedHubIndex(activeLayer.hubs.length); 
+                       }} 
+                       className="w-full h-8 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs font-bold uppercase transition-all hover:bg-emerald-500 hover:text-white"
+                       style={{
+                         width: '100%',
+                         height: '32px',
+                         borderRadius: '8px',
+                         backgroundColor: 'rgba(16,185,129,0.1)',
+                         color: '#34d399',
+                         border: '1px solid rgba(16,185,129,0.2)',
+                         fontSize: '12px',
+                         fontWeight: 'bold',
+                         textTransform: 'uppercase',
+                         transition: 'all 0.2s',
+                         cursor: 'pointer'
+                       }}
+                     >
+                       {t('+ Hub')}
+                     </button>
+                   </InfoTooltip>
                 </div>
                 {activeLayer.hubs.length > 0 && activeLayer.hubs[selectedHubIndex] && (
-                   <div className="space-y-5">
-                     <div className="flex justify-between items-center border-b border-white/5 pb-2">
-                          <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{t('Hub Properties')}</span>
-                          <div className="flex items-center gap-3">
+                   <div className="space-y-5" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                     <div className="flex justify-between items-center border-b border-white/5 pb-2" 
+                          style={{ 
+                            display: 'flex', 
+                            justifyContent: 'space-between', 
+                            alignItems: 'center', 
+                            borderBottom: '1px solid rgba(255,255,255,0.05)', 
+                            paddingBottom: '8px' 
+                          }}>
+                          <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest" 
+                                style={{ 
+                                  fontSize: '10px', 
+                                  fontWeight: '900', 
+                                  color: '#64748b', 
+                                  textTransform: 'uppercase', 
+                                  letterSpacing: '0.1em' 
+                                }}>
+                            {t('Hub Properties')}
+                          </span>
+                          <div className="flex items-center gap-3" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                                <ControlRow label={t('Visible')} onReset={() => updateHubConfig({ enabled: true }, true)} isModified={!activeLayer.hubs[selectedHubIndex].enabled} t={t}>
                                    <div className="flex justify-end">
                                       <Toggle label="" checked={activeLayer.hubs[selectedHubIndex].enabled} onChange={(c) => updateHubConfig({ enabled: c }, true)} />
@@ -1231,7 +1704,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                           </div>
                      </div>
                      <ControlRow label={t('Hub Shape')} onReset={() => updateHubConfig({ shape: 'circle' }, true)} isModified={activeLayer.hubs[selectedHubIndex].shape !== 'circle'} t={t}>
-                         <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-lg">{(['circle', 'polygon', 'star'] as const).map(s => (<button key={s} onClick={() => updateHubConfig({ shape: s }, true)} className={`py-1 text-[9px] font-black uppercase rounded transition-all ${activeLayer.hubs[selectedHubIndex].shape === s ? 'bg-sky-600 text-white' : 'text-slate-500'}`}>{t(s)}</button>))}</div>
+                         <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-lg">{(['circle', 'polygon', 'star'] as const).map(s => (<InfoTooltip key={s} label={t(s)} description={getDescription(s, t)} className="flex-1"><button onClick={() => updateHubConfig({ shape: s }, true)} className={`w-full py-1 text-[9px] font-black uppercase rounded transition-all ${activeLayer.hubs[selectedHubIndex].shape === s ? 'bg-sky-600 text-white' : 'text-slate-500'}`}>{t(s)}</button></InfoTooltip>))}</div>
                      </ControlRow>
                      {renderSlider(
                         t('Hub Radius'), 
@@ -1245,7 +1718,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                         20,
                         <span className="text-[10px] font-black text-slate-500 ml-2">(D: <span className="text-white">{(activeLayer.hubs[selectedHubIndex].outerRadius * 2).toFixed(1)}mm</span>)</span>
                      )}
-                     {activeLayer.hubs[selectedHubIndex].hollow && renderSlider(t('Boldness'), activeLayer.hubs[selectedHubIndex].wallThickness, 0.5, 20, 0.1, (v, c) => updateHubConfig({ wallThickness: v }, c), "mm", false, 2)}
+                     {activeLayer.hubs[selectedHubIndex].hollow && renderSlider(t('Boldness'), activeLayer.hubs[selectedHubIndex].wallThickness, 0.5, 20, 0.1, (v, c) => updateHubConfig({ wallThickness: v }, c), "mm", false, 0.5)}
                      {activeLayer.hubs[selectedHubIndex].shape !== 'circle' && renderSlider(t('Hub Sides'), activeLayer.hubs[selectedHubIndex].sides, 3, 24, 1, (v, c) => updateHubConfig({ sides: v }, c), "", false, 6)}
                      {activeLayer.hubs[selectedHubIndex].shape === 'star' && renderSlider(t('Star Ratio'), activeLayer.hubs[selectedHubIndex].starRatio, 0.1, 0.9, 0.05, (v, c) => updateHubConfig({ starRatio: v }, c), "", false, 0.5)}
                      
@@ -1276,7 +1749,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                <div className="flex gap-2 mb-2">
                   <InfoTooltip label={t('Add Shape')} description={getDescription('Add Shape', t)} className="flex-1">
                       <button 
-                          onClick={() => { const newAbs: AbstractConfig = { id: `abs-${Date.now()}`, enabled: true, type: 'sine', arms: 6, rotationOffset: 0, innerRadius: 20, outerRadius: 60, amplitude: 5, frequency: 0.4, thickness: 2, mirrorEnabled: true, mirrorOffset: 0 }; updateAbstracts([...activeLayer.abstracts, newAbs], false); setSelectedAbstractIndex(activeLayer.abstracts.length); }} 
+                          onClick={() => { const newAbs: AbstractConfig = { id: `abs-${Date.now()}`, enabled: true, type: 'sine', arms: 6, rotationOffset: 0, innerRadius: 20, outerRadius: 60, amplitude: 5, frequency: 0.4, thickness: 0.5, mirrorEnabled: true, mirrorOffset: 0 }; updateAbstracts([...activeLayer.abstracts, newAbs], false); setSelectedAbstractIndex(activeLayer.abstracts.length); }} 
                           className="w-full h-8 rounded-lg bg-sky-500/10 text-sky-400 border border-sky-500/20 text-xs font-bold uppercase transition-all hover:bg-sky-500 hover:text-white"
                       >
                           {t('+ Shape')}
@@ -1284,7 +1757,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                   </InfoTooltip>
                   <InfoTooltip label={t('Add Fractal')} description={getDescription('Add Fractal', t)} className="flex-1">
                       <button 
-                          onClick={() => { const newAbs: AbstractConfig = { id: `fract-${Date.now()}`, enabled: true, type: 'fractal', arms: 6, rotationOffset: 0, innerRadius: 20, outerRadius: 60, amplitude: 5, frequency: 0.4, thickness: 2, mirrorEnabled: false, mirrorOffset: 0, trunkLength: 20, branchesPerNode: 2, recursionDepth: 4, minBranchLength: 5, branchPattern: 'symmetric', branchAngle: 45, initialLength: 30, lengthDecay: 0.8, randomSeed: 1234, angleVariation: 0, lengthVariation: 0, thicknessDecay: 0.8 }; updateAbstracts([...activeLayer.abstracts, newAbs], false); setSelectedAbstractIndex(activeLayer.abstracts.length); }} 
+                          onClick={() => { const newAbs: AbstractConfig = { id: `fract-${Date.now()}`, enabled: true, type: 'fractal', arms: 6, rotationOffset: 0, innerRadius: 20, outerRadius: 60, amplitude: 5, frequency: 0.4, thickness: 0.5, mirrorEnabled: false, mirrorOffset: 0, trunkLength: 20, branchesPerNode: 2, recursionDepth: 4, minBranchLength: 5, branchPattern: 'symmetric', branchAngle: 45, initialLength: 30, lengthDecay: 0.8, randomSeed: 1234, angleVariation: 0, lengthVariation: 0, thicknessDecay: 0.8 }; updateAbstracts([...activeLayer.abstracts, newAbs], false); setSelectedAbstractIndex(activeLayer.abstracts.length); }} 
                           className="w-full h-8 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs font-bold uppercase transition-all hover:bg-emerald-500 hover:text-white"
                       >
                           {t('+ Fractal')}
@@ -1313,10 +1786,13 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                </div>
 
                {activeLayer.abstracts.length > 0 && activeLayer.abstracts[selectedAbstractIndex] && (
-                 <div className="space-y-5 animate-in fade-in duration-200">
-                    <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                 <div className="space-y-3 animate-in fade-in duration-200">
+                    {/* Title row */}
+                    <div className="border-b border-white/5 pb-1">
                         <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{activeLayer.abstracts[selectedAbstractIndex].type === 'fractal' ? t('Fractal Settings') : t('Shape Settings')}</span>
-                        <div className="flex items-center gap-2">
+                    </div>
+                    {/* Toggles + delete row */}
+                    <div className="flex items-center gap-2 pb-2">
                           <ControlRow label={t('Mirror')} onReset={() => updateAbstractConfig({ mirrorEnabled: true }, true)} isModified={!activeLayer.abstracts[selectedAbstractIndex].mirrorEnabled} t={t}>
                               <div className="flex justify-end">
                                   <Toggle label="" checked={activeLayer.abstracts[selectedAbstractIndex].mirrorEnabled} onChange={(c) => updateAbstractConfig({ mirrorEnabled: c }, true)} />
@@ -1340,8 +1816,9 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                   <Toggle label="" checked={activeLayer.abstracts[selectedAbstractIndex].enabled} onChange={(c) => updateAbstractConfig({ enabled: c }, true)} />
                               </div>
                           </ControlRow>
-                          <InfoTooltip label={t('Delete')}><button onClick={() => { const newAbs = [...activeLayer.abstracts]; newAbs.splice(selectedAbstractIndex, 1); updateAbstracts(newAbs, true); setSelectedAbstractIndex(prev => Math.max(0, prev - 1)); }} className="text-[9px] font-black uppercase text-rose-400 hover:text-rose-300 ml-2">{t('Delete')}</button></InfoTooltip>
-                        </div>
+                          <div className="ml-auto">
+                            <InfoTooltip label={t('Delete')}><button onClick={() => { const newAbs = [...activeLayer.abstracts]; newAbs.splice(selectedAbstractIndex, 1); updateAbstracts(newAbs, true); setSelectedAbstractIndex(prev => Math.max(0, prev - 1)); }} className="text-[9px] font-black uppercase text-rose-400 hover:text-rose-300">{t('Delete')}</button></InfoTooltip>
+                          </div>
                     </div>
                     
                     {activeLayer.abstracts[selectedAbstractIndex].enabled && (
@@ -1349,7 +1826,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                         {activeLayer.abstracts[selectedAbstractIndex].type !== 'fractal' && (
                             <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-lg">
                               {(['line', 'sine', 'zigzag'] as const).map(type => (
-                                <button key={type} onClick={() => updateAbstractConfig({ type: type }, true)} className={`py-1 text-[9px] font-black uppercase rounded transition-all ${activeLayer.abstracts[selectedAbstractIndex].type === type ? 'bg-sky-600 text-white' : 'text-slate-500'}`}>{t(type)}</button>
+                                <InfoTooltip key={type} label={t(type)} description={getDescription(type, t)} className="flex-1"><button onClick={() => updateAbstractConfig({ type: type }, true)} className={`w-full py-1 text-[9px] font-black uppercase rounded transition-all ${activeLayer.abstracts[selectedAbstractIndex].type === type ? 'bg-sky-600 text-white' : 'text-slate-500'}`}>{t(type)}</button></InfoTooltip>
                               ))}
                             </div>
                         )}
@@ -1368,7 +1845,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                             60,
                             <span className="text-[10px] font-black text-slate-500 ml-2">(D: <span className="text-white">{(activeLayer.abstracts[selectedAbstractIndex].outerRadius * 2).toFixed(1)}mm</span>)</span>
                         )}
-                        {renderSlider(t('Boldness'), activeLayer.abstracts[selectedAbstractIndex].thickness, 0.5, 10, 0.1, (v, c) => updateAbstractConfig({ thickness: v }, c), "mm", false, 2)}
+                        {renderSlider(t('Boldness'), activeLayer.abstracts[selectedAbstractIndex].thickness, 0.5, 10, 0.1, (v, c) => updateAbstractConfig({ thickness: v }, c), "mm", false, 0.5)}
                         
                         {activeLayer.abstracts[selectedAbstractIndex].type === 'fractal' && (
                             <div className="space-y-4 pt-2">
@@ -1385,7 +1862,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                     <ControlRow label={t('Branch Pattern')} onReset={() => updateAbstractConfig({ branchPattern: 'symmetric' }, true)} isModified={activeLayer.abstracts[selectedAbstractIndex].branchPattern !== 'symmetric'} t={t}>
                                         <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-lg">
                                             {(['symmetric', 'alternating', 'random'] as const).map(p => (
-                                                <button key={p} onClick={() => updateAbstractConfig({ branchPattern: p }, true)} className={`py-1 text-[9px] font-black uppercase rounded transition-all ${activeLayer.abstracts[selectedAbstractIndex].branchPattern === p ? 'bg-sky-600 text-white' : 'text-slate-500'}`}>{p}</button>
+                                                <InfoTooltip key={p} label={p} description={getDescription(p, t)} className="flex-1"><button onClick={() => updateAbstractConfig({ branchPattern: p }, true)} className={`w-full py-1 text-[9px] font-black uppercase rounded transition-all ${activeLayer.abstracts[selectedAbstractIndex].branchPattern === p ? 'bg-sky-600 text-white' : 'text-slate-500'}`}>{p}</button></InfoTooltip>
                                             ))}
                                         </div>
                                     </ControlRow>
@@ -1426,7 +1903,204 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
              </div>
           )}
 
-          {activeTab === 'planes' && (
+
+          {activeTab === 'images' && (
+            <div className="space-y-4 animate-in fade-in duration-200">
+
+              {/* Upload button */}
+              <InfoTooltip label={t('Import SVG')} description={getDescription('Import SVG', t)} className="w-full">
+              <label className="flex items-center justify-center gap-2 w-full h-9 rounded-lg bg-sky-500/10 text-sky-400 border border-sky-500/20 text-xs font-bold uppercase transition-all hover:bg-sky-500 hover:text-white cursor-pointer">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                </svg>
+                Import SVG
+                <input
+                  type="file"
+                  accept=".svg"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = (ev) => {
+                      const raw = ev.target?.result as string;
+                      if (!raw) return;
+                      const parseSVG = () => {
+                        try {
+                          const parser = new DOMParser();
+                          const doc = parser.parseFromString(raw, 'image/svg+xml');
+                          const svgEl = doc.querySelector('svg');
+                          const paths: string[] = [];
+                          const pathElements = doc.querySelectorAll('path');
+                          const maxPaths = 1000;
+                          const pathCount = Math.min(pathElements.length, maxPaths);
+                          for (let i = 0; i < pathCount; i++) {
+                            const d = pathElements[i].getAttribute('d');
+                            if (d) paths.push(d);
+                          }
+                          if (paths.length === 0) {
+                            const allElements = doc.querySelectorAll('[d]');
+                            const elementCount = Math.min(allElements.length, maxPaths);
+                            for (let i = 0; i < elementCount; i++) {
+                              const d = allElements[i].getAttribute('d');
+                              if (d) paths.push(d);
+                            }
+                          }
+                          if (paths.length === 0) {
+                            alert('No path elements found in this SVG. Please export your design as paths from your vector editor.');
+                            return;
+                          }
+                          const vb = svgEl?.getAttribute('viewBox')?.split(/[\s,]+/).map(Number) || [0, 0, 100, 100];
+                          const w = vb[2] || parseFloat(svgEl?.getAttribute('width') || '100');
+                          const h = vb[3] || parseFloat(svgEl?.getAttribute('height') || '100');
+                          const newImage = createDefaultImage(`img-${Date.now()}`, file.name.replace(/\.svg$/i, ''), paths, w, h);
+                          const newImages = [...(activeLayer.images || []), newImage];
+                          updateImages(newImages, false);
+                          setSelectedImageIndex(newImages.length - 1);
+                        } catch (err) {
+                          alert('Failed to parse SVG file.');
+                        }
+                      };
+                      if (window.requestIdleCallback) {
+                        window.requestIdleCallback(parseSVG, { timeout: 2000 });
+                      } else {
+                        setTimeout(parseSVG, 100);
+                      }
+                    };
+                    reader.readAsText(file);
+                    e.target.value = '';
+                  }}
+                />
+              </label>
+              </InfoTooltip>
+
+              {/* Image selector chips */}
+              {(activeLayer.images || []).length > 0 && (
+                <div className="grid grid-cols-3 gap-1.5">
+                  {(activeLayer.images || []).map((img, i) => (
+                    <button
+                      key={img.id}
+                      onClick={() => setSelectedImageIndex(i)}
+                      className={`h-8 rounded-lg text-[10px] font-bold uppercase border transition-all truncate px-2 ${
+                        selectedImageIndex === i
+                          ? 'bg-sky-600 border-sky-500 text-white'
+                          : 'bg-slate-800 border-white/5 text-slate-400 hover:bg-slate-700'
+                      }`}
+                    >
+                      {img.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Per-image controls */}
+              {(activeLayer.images || []).length > 0 && (activeLayer.images || [])[selectedImageIndex] && (() => {
+                const img = (activeLayer.images || [])[selectedImageIndex];
+                const updateImg = (updates: Partial<ImageConfig>, commit = false) => {
+                  const newImages = (activeLayer.images || []).map((im, i) =>
+                    i === selectedImageIndex ? { ...im, ...updates } : im
+                  );
+                  updateImages(newImages, commit);
+                };
+
+                return (
+                  <div className="space-y-3 animate-in fade-in duration-150">
+                    {/* Header row: name + visible + delete */}
+                    <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                      <span className="text-[10px] font-black uppercase text-slate-400 truncate flex-1 mr-2">{img.name}</span>
+                      <div className="flex items-center gap-2">
+                        <InfoTooltip label={t('Image Visible')} description={getDescription('Image Visible', t)}>
+                          <Toggle
+                            label={img.enabled ? 'ON' : 'OFF'}
+                            checked={img.enabled}
+                            onChange={(c) => updateImg({ enabled: c }, true)}
+                          />
+                        </InfoTooltip>
+                        <InfoTooltip label={t('Delete Image')} description={getDescription('Delete Image', t)}>
+                          <button
+                            onClick={() => {
+                              const newImages = (activeLayer.images || []).filter((_, i) => i !== selectedImageIndex);
+                              updateImages(newImages, true);
+                              setSelectedImageIndex(prev => Math.max(0, prev - 1));
+                            }}
+                            className="text-[9px] font-black uppercase text-rose-400 hover:text-rose-300 ml-1"
+                          >
+                            Delete
+                          </button>
+                        </InfoTooltip>
+                      </div>
+                    </div>
+
+                    {/* SVG thumbnail */}
+                    <div className="w-full h-24 bg-slate-900 rounded-lg border border-slate-700/30 flex items-center justify-center overflow-hidden relative">
+                      {img.svgPaths.length > 0 ? (
+                        <svg
+                          viewBox={`0 0 ${img.svgWidth || 100} ${img.svgHeight || 100}`}
+                          className="max-w-full max-h-full"
+                          style={{ fill: '#38bdf8' }}
+                        >
+                          {img.svgPaths.slice(0, 100).map((d, di) => (
+                            <path key={di} d={d} />
+                          ))}
+                        </svg>
+                      ) : (
+                        <div className="text-slate-600 text-xs">No paths</div>
+                      )}
+                    </div>
+
+                    {/* Sliders — all routed through renderSlider which adds InfoTooltip via ControlRow */}
+                    {renderSlider('Image Arms', img.arms, 1, 24, 1, (v, c) => updateImg({ arms: v }, c), '', false, 6)}
+                    {renderSlider('Scale', img.scale, 0.05, 10, 0.05, (v, c) => updateImg({ scale: v }, c), '×', false, 1.0)}
+                    {renderSlider('Image Inner Radius', img.innerRadius, 0, 200, 0.5, (v, c) => updateImg({ innerRadius: v }, c), 'mm', false, 10)}
+                    {renderSlider('Y Offset', img.yOffset, -100, 100, 0.5, (v, c) => updateImg({ yOffset: v }, c), 'mm', false, 0)}
+                    {renderSlider('Image Rotation', img.rotationOffset, -180, 180, 1, (v, c) => updateImg({ rotationOffset: v }, c), '°', false, 0)}
+
+                    {/* Mirror */}
+                    <div className="flex justify-between items-center">
+                      <InfoTooltip label={t('Image Mirror')} description={getDescription('Image Mirror', t)}>
+                        <span className="text-[9px] font-black uppercase text-slate-400 border-b border-dotted border-slate-600 cursor-help">Mirror</span>
+                      </InfoTooltip>
+                      <Toggle
+                        label={img.mirrorEnabled ? 'ON' : 'OFF'}
+                        checked={img.mirrorEnabled}
+                        onChange={(c) => updateImg({ mirrorEnabled: c }, true)}
+                      />
+                    </div>
+                    {img.mirrorEnabled && renderSlider('Image Mirror Offset', img.mirrorOffset, -200, 200, 0.5, (v, c) => updateImg({ mirrorOffset: v }, c), 'mm', false, 0)}
+
+                    {/* Flip */}
+                    <div className="flex justify-between items-center">
+                      <InfoTooltip label={t('Flip Image')} description={getDescription('Flip Image', t)}>
+                        <span className="text-[9px] font-black uppercase text-slate-400 border-b border-dotted border-slate-600 cursor-help">Flip Image</span>
+                      </InfoTooltip>
+                      <Toggle
+                        label={img.flipEnabled ? 'ON' : 'OFF'}
+                        checked={img.flipEnabled}
+                        onChange={(c) => updateImg({ flipEnabled: c }, true)}
+                      />
+                    </div>
+
+                    {/* SVG Rotation */}
+                    {renderSlider('SVG Rotation', img.svgRotation, -180, 180, 1, (v, c) => updateImg({ svgRotation: v }, c), '°', false, 0)}
+                  </div>
+                );
+              })()}
+
+              {(activeLayer.images || []).length === 0 && (
+                <div className="text-center py-8 text-slate-600 text-xs">
+                  <svg className="w-10 h-10 mx-auto mb-3 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                      d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  <p className="font-bold uppercase tracking-wider">No SVG imported yet</p>
+                  <p className="mt-1 opacity-60">Upload an SVG to use its outline as a snowflake arm</p>
+                </div>
+              )}
+
+            </div>
+          )}
+
+          {false /* SLOT-DISABLED: planes tab */ && (
              <div className="space-y-5 animate-in fade-in duration-200">
                 <div className="space-y-2 pb-4 border-b border-white/5">
                     <div className="flex justify-between items-center">
@@ -1468,10 +2142,6 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                       className="hidden" 
                                       checked={layer.enabled} 
                                       onChange={(e) => {
-                                        // Only log toggle clicks in development mode and reduce frequency
-                                        if (process.env.NODE_ENV === 'development' && Math.random() < 0.1) {
-                                          console.log(`🔄 Toggle clicked: layer=${layer.name} (idx=${idx}), enabled=${e.target.checked}`);
-                                        }
                                         handleLayerUpdate(idx, { enabled: e.target.checked }, true);
                                       }} 
                                     />
@@ -1526,91 +2196,22 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
 
         {/* Footer actions */}
         <div className="p-2 bg-slate-900/80 border-t border-white/10 shrink-0 flex flex-col gap-2">
-            <div className="grid grid-cols-2 gap-2">
-               <InfoTooltip label={t('Auto Slots')} description={getDescription('Auto Slots', t)} className="w-full">
-                 <div className={`${config.slotEnabled ? 'bg-sky-600/10 border-sky-500/30' : 'bg-slate-800/50 border-white/5'} p-2 rounded-lg border transition-all`}>
-                    <button 
-                        onClick={() => {
-                          if (config.slotEnabled) {
-                            // Disable slots
-                            onUpdate({ slotEnabled: false }, true);
-                          } else {
-                            // Check number of active planes before enabling slots
-                            const activePlanes = config.layers.filter(l => l.enabled).length;
-                            
-                            if (activePlanes === 1) {
-                              // Show warning for single plane
-                              alert('Slots cannot be cut with only 1 active plane. Please enable at least 2 planes to use slot cutting.');
-                              return;
-                            }
-                            
-                            // Enable slots and auto-configure
-                            onAutoConfigureSlots();
-                            
-                            // Switch to appropriate view mode based on active planes
-                            const targetViewMode = activePlanes === 2 ? '2d' : '3d';
-                            if (config.viewMode !== targetViewMode) {
-                              setViewMode(targetViewMode);
-                            }
-                          }
-                        }} 
-                        className={`${btnBase} w-full ${config.slotEnabled ? 'bg-sky-600 hover:bg-sky-500 text-white shadow-lg' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white'} flex items-center justify-between px-3`}
-                    >
-                        <span>{t('Cut Slots')}</span>
-                        <div className={`w-6 h-3 rounded-full border transition-colors relative ${config.slotEnabled ? 'bg-white/20 border-white/50' : 'bg-black/20 border-white/10'}`}>
-                          <div className={`absolute top-0.5 left-0.5 w-1.5 h-1.5 rounded-full bg-white transition-all ${config.slotEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
-                        </div>
-                    </button>
-                    
-                    {/* Slot Mode Toggle - integrated within the banner */}
-                    {config.slotEnabled && (
-                        <div className="mt-2 pt-2 border-t border-white/10">
-                            <SlotModeToggle 
-                                mode={config.slotMode || '2-plane'} 
-                                onChange={(mode) => {
-                                    onUpdate({ slotMode: mode }, true);
-                                    onAutoConfigureSlots();
-                                    // Force immediate 3D model refresh when slot mode changes
-                                    setTimeout(() => {
-                                        // Trigger immediate 3D regeneration
-                                        onUpdate({}, true);
-                                    }, 100);
-                                }}
-                                t={t}
-                            />
-                        </div>
-                    )}
-                 </div>
-               </InfoTooltip>
-               <AiRandomizerMenu onGenerate={onAiPolish} isLoading={aiLoading} progress={aiProgress} className="w-full" t={t} />
-            </div>
-            <div className="grid grid-cols-4 gap-2">
-               <div className="col-span-2">
-                  <InfoTooltip label={t('Combined STL')} description={getDescription('Combined STL', t)} shortcut={shortcuts?.exportCombinedSTL} className="w-full">
-                      <ExportMenu
-                         label={t('Combined STL')}
-                         onExportSTL={onExportSTL}
-                         isLoading={exportLoading}
-                         t={t}
-                         className="w-full h-8"
-                         shortcut={shortcuts?.exportCombinedSTL}
-                      />
-                  </InfoTooltip>
-               </div>
-               <div className="col-span-2">
-                  <InfoTooltip label={t('Zip All STLs')} description={getDescription('Zip All STLs', t)} className="w-full">
-                      <ExportMenu
-                         label={t('Zip All STLs')}
-                         onExportSTL={onExportAllLayersZip}
-                         isLoading={exportLoading}
-                         t={t}
-                         disabled={config.layers.filter(l => l.enabled).length < 2}
-                         className="w-full h-8"
-                         baseColor="bg-slate-700"
-                      />
-                  </InfoTooltip>
-               </div>
-            </div>
+
+            {/* AI Randomizer section */}
+            <AiRandomizerMenu onGenerate={onAiPolish} isLoading={aiLoading} progress={aiProgress} className="w-full" t={t} />
+
+            {/* Export button — full width, format + quality in dropdown */}
+            <ExportMenu
+              label="Export"
+              onExportSTL={onExportSTL}
+              onExport2D={(fmt) => onExport2D?.(config.activeLayerIndex, fmt)}
+              isLoading={exportLoading}
+              t={t}
+              className="w-full h-9"
+              baseColor="bg-sky-600"
+              show2D={true}
+              shortcut={shortcuts?.exportCombinedSTL}
+            />
         </div>
       </div>
     </TooltipContext.Provider>

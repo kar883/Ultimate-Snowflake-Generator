@@ -14,7 +14,7 @@ export const CURSIVE_FONTS: FontOption[] = [
   { name: 'Cookie', family: 'Cookie' },
   { name: 'Petit Formal Script', family: 'Petit Formal Script' },
   { name: 'Meie Script', family: 'Meie Script' },
-  { name: 'Grand Hotel', family: 'Grand Hotel' },
+  { name: 'Grand Hotel', family: 'GrandHotel' },
   { name: 'Rochester', family: 'Rochester' },
   { name: 'Sacramento', family: 'Sacramento' },
   { name: 'Windsong', family: 'Windsong' },

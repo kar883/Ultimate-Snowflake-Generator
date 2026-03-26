@@ -75,11 +75,70 @@ export interface TextGroupConfig {
   underline: UnderlineConfig;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SVG Image Import
+// ─────────────────────────────────────────────────────────────────────────────
+export interface ImageConfig {
+  id: string;
+  /** Display name (usually the filename without extension) */
+  name: string;
+  enabled: boolean;
+  /** Raw SVG path `d` strings extracted from the imported file */
+  svgPaths: string[];
+  /** Approximate viewBox of the original SVG, used for normalisation */
+  svgWidth: number;
+  svgHeight: number;
+  // ── Arm layout ──────────────────────────────────────────────────────────
+  arms: number;
+  rotationOffset: number;
+  mirrorEnabled: boolean;
+  mirrorOffset: number;
+  // ── SVG Transform ───────────────────────────────────────────────────────
+  /** Flip the SVG horizontally (left/right) */
+  flipEnabled: boolean;
+  /** Rotate the SVG itself around its center (degrees) */
+  svgRotation: number;
+  // ── Placement ───────────────────────────────────────────────────────────
+  /** Uniform scale – 1.0 means 1 SVG unit = 1 mm */
+  scale: number;
+  /** Distance from the snowflake centre to the left edge of the shape (mm) */
+  innerRadius: number;
+  /** Vertical offset from the arm centreline (mm) */
+  yOffset: number;
+  /** Line thickness/boldness for the SVG paths (mm) */
+  thickness: number;
+}
+
+export const createDefaultImage = (
+  id: string,
+  name: string,
+  svgPaths: string[],
+  svgWidth: number,
+  svgHeight: number
+): ImageConfig => ({
+  id,
+  name,
+  enabled: true,
+  svgPaths,
+  svgWidth,
+  svgHeight,
+  arms: 6,
+  rotationOffset: 0,
+  mirrorEnabled: true,
+  mirrorOffset: 0,
+  flipEnabled: false,
+  svgRotation: 0,
+  scale: 1.0,
+  innerRadius: 10,
+  yOffset: 0,
+  thickness: 0,
+});
+
 export interface LayerConfig {
   id: string;
   name: string;
   enabled: boolean;
-  rotation3D: { x: number; y: number };
+  rotation3D: { x: number; y: number; z: number };
   primary: TextGroupConfig;
   secondary: TextGroupConfig;
   secondaryEnabled: boolean;
@@ -88,6 +147,7 @@ export interface LayerConfig {
   slotType: 'none' | 'half-back' | 'half-front' | 'third-back' | 'third-middle' | 'third-front' | 'custom';
   slotLengthAdjustment?: number;
   slotWidthOffset?: number;
+  images: ImageConfig[];
 }
 
 export type DesignQuality = 'low' | 'med' | 'high';
@@ -105,6 +165,7 @@ export interface SnowflakeConfig {
   slotEnabled: boolean;
   slotLength: number;
   slotWidth: number;
+  slotMode: '2-plane' | '3-plane';
   quality: DesignQuality;
   syncAllLayers: boolean;
   globalStrokeWeight: number;

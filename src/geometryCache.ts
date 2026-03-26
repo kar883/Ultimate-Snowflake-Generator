@@ -25,7 +25,7 @@ export const slotCutCache = new Map<string, THREE.BufferGeometry>();
 export function hashConfig(config: any): string {
   // Create a deterministic string representation of the config
   const relevantConfig = {
-    layers: config.layers,
+    layers: config.layers.filter((l: any) => l.enabled),
     extrusionDepth: config.extrusionDepth,
     bevelEnabled: config.bevelEnabled,
     bevelType: config.bevelType,

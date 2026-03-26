@@ -1,612 +1,304 @@
-import * as THREE from 'three';
-// @ts-ignore
-import { Brush, Evaluator, SUBTRACTION, ADDITION } from 'three-bvh-csg';
-
-const evaluator = new Evaluator();
-evaluator.attributes = ['position', 'normal'];
-evaluator.useGroups = false;
-
-// Suppress deprecation warnings
-const originalWarn = console.warn;
-console.warn = (...args: any[]) => {
-  if (args.length > 0 && typeof args[0] === 'string' && args[0].includes('maxLeafTris')) {
-    return;
-  }
-  return originalWarn.apply(console, args);
-};
-
 /**
- * COMPREHENSIVE SLOT REPAIR - COMBINED APPROACH
- * 1. Surgical repair (fix topology, weld coincident vertices)
- * 2. Gap filling (bridge holes along slot paths)
+ * CSG Worker — Pure JS Convex Subtraction
+ *
+ * This worker uses a pure-JS BSP algorithm for Boolean subtraction.
+ * No WASM dependencies = no loading issues in workers.
+ *
+ * Output: Clean slot cuts with open boundaries.
+ * For closed meshes: manifold-3d can be used on the main thread for final export.
  */
 
-interface EdgeInfo {
-  count: number;
-  faces: number[];
-  vertices?: [number, number];
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface Vec3 { x: number; y: number; z: number }
+interface Triangle { a: Vec3; b: Vec3; c: Vec3 }
+interface Plane { nx: number; ny: number; nz: number; d: number }
+
+interface WorkerInput {
+  base: { positions: number[]; indices: number[] | null };
+  slots: Array<{ positions: number[]; indices: number[] | null; rotation: [number,number,number] }>;
+}
+interface WorkerOutput {
+  success: boolean;
+  geometry?: { positions: number[]; indices: number[]; normals: number[] | null };
+  stats?: { vertices: number; faces: number; isWatertight: boolean };
+  error?: string; stack?: string;
 }
 
-interface BoundaryEdge {
-  v1: number;
-  v2: number;
-  faceIdx: number;
-}
+// ─── Vector math ─────────────────────────────────────────────────────────────
 
-// ============================================================================
-// SURGICAL REPAIR FUNCTIONS
-// ============================================================================
-
-function buildEdgeTopology(geometry: THREE.BufferGeometry): Map<string, EdgeInfo> {
-  const indices = geometry.index;
-  if (!indices) return new Map();
-  
-  const edgeMap = new Map<string, EdgeInfo>();
-  
-  for (let i = 0; i < indices.count; i += 3) {
-    const faceIdx = Math.floor(i / 3);
-    const i0 = indices.getX(i);
-    const i1 = indices.getX(i + 1);
-    const i2 = indices.getX(i + 2);
-    
-    const edges: [number, number][] = [[i0, i1], [i1, i2], [i2, i0]];
-    
-    for (const [v1, v2] of edges) {
-      const key = v1 < v2 ? `${v1}_${v2}` : `${v2}_${v1}`;
-      
-      if (!edgeMap.has(key)) {
-        edgeMap.set(key, { count: 0, faces: [], vertices: [Math.min(v1, v2), Math.max(v1, v2)] });
-      }
-      
-      const info = edgeMap.get(key)!;
-      info.count++;
-      info.faces.push(faceIdx);
-    }
-  }
-  
-  return edgeMap;
-}
-
-function removeDegenerateTriangles(geometry: THREE.BufferGeometry, minArea: number = 0.00001): THREE.BufferGeometry {
-  const positions = geometry.attributes.position;
-  const indices = geometry.index;
-  
-  if (!indices) return geometry;
-  
-  const newIndices: number[] = [];
-  const v0 = new THREE.Vector3();
-  const v1 = new THREE.Vector3();
-  const v2 = new THREE.Vector3();
-  
-  for (let i = 0; i < indices.count; i += 3) {
-    const i0 = indices.getX(i);
-    const i1 = indices.getX(i + 1);
-    const i2 = indices.getX(i + 2);
-    
-    if (i0 === i1 || i1 === i2 || i2 === i0) continue;
-    
-    v0.fromBufferAttribute(positions as THREE.BufferAttribute, i0);
-    v1.fromBufferAttribute(positions as THREE.BufferAttribute, i1);
-    v2.fromBufferAttribute(positions as THREE.BufferAttribute, i2);
-    
-    const edge1 = new THREE.Vector3().subVectors(v1, v0);
-    const edge2 = new THREE.Vector3().subVectors(v2, v0);
-    const cross = new THREE.Vector3().crossVectors(edge1, edge2);
-    const area = cross.length() * 0.5;
-    
-    if (area >= minArea) {
-      newIndices.push(i0, i1, i2);
-    }
-  }
-  
-  const result = geometry.clone();
-  result.setIndex(newIndices);
-  return result;
-}
-
-function fixNonManifoldEdges(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
-  const edgeMap = buildEdgeTopology(geometry);
-  const indices = geometry.index;
-  
-  if (!indices) return geometry;
-  
-  const facesToRemove = new Set<number>();
-  
-  edgeMap.forEach((info) => {
-    if (info.count > 2) {
-      for (let i = 2; i < info.faces.length; i++) {
-        facesToRemove.add(info.faces[i]);
-      }
-    }
-  });
-  
-  if (facesToRemove.size === 0) return geometry;
-  
-  const newIndices: number[] = [];
-  
-  for (let i = 0; i < indices.count; i += 3) {
-    const faceIdx = Math.floor(i / 3);
-    
-    if (!facesToRemove.has(faceIdx)) {
-      newIndices.push(indices.getX(i), indices.getX(i + 1), indices.getX(i + 2));
-    }
-  }
-  
-  const result = geometry.clone();
-  result.setIndex(newIndices);
-  return result;
-}
-
-function removeUnusedVertices(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
-  const positions = geometry.attributes.position;
-  const normals = geometry.attributes.normal;
-  const indices = geometry.index;
-  
-  if (!indices) return geometry;
-  
-  const usedVertices = new Set<number>();
-  for (let i = 0; i < indices.count; i++) {
-    usedVertices.add(indices.getX(i));
-  }
-  
-  if (usedVertices.size === positions.count) return geometry;
-  
-  const oldToNew = new Map<number, number>();
-  const newPositions: number[] = [];
-  const newNormals: number[] = [];
-  
-  let newIndex = 0;
-  for (let oldIndex = 0; oldIndex < positions.count; oldIndex++) {
-    if (usedVertices.has(oldIndex)) {
-      oldToNew.set(oldIndex, newIndex);
-      newPositions.push(positions.getX(oldIndex), positions.getY(oldIndex), positions.getZ(oldIndex));
-      if (normals) {
-        newNormals.push(normals.getX(oldIndex), normals.getY(oldIndex), normals.getZ(oldIndex));
-      }
-      newIndex++;
-    }
-  }
-  
-  const newIndices: number[] = [];
-  for (let i = 0; i < indices.count; i++) {
-    const mappedIndex = oldToNew.get(indices.getX(i));
-    if (mappedIndex !== undefined) {
-      newIndices.push(mappedIndex);
-    }
-  }
-  
-  const result = new THREE.BufferGeometry();
-  result.setAttribute('position', new THREE.Float32BufferAttribute(newPositions, 3));
-  if (normals) {
-    result.setAttribute('normal', new THREE.Float32BufferAttribute(newNormals, 3));
-  }
-  result.setIndex(newIndices);
-  
-  return result;
-}
-
-function weldCoincidentVertices(geometry: THREE.BufferGeometry, tolerance: number = 0.0001): THREE.BufferGeometry {
-  const positions = geometry.attributes.position;
-  const indices = geometry.index;
-  
-  if (!indices) return geometry;
-  
-  const gridSize = tolerance * 2;
-  const spatialHash = new Map<string, number[]>();
-  
-  const hashVertex = (x: number, y: number, z: number): string => {
-    const gx = Math.floor(x / gridSize);
-    const gy = Math.floor(y / gridSize);
-    const gz = Math.floor(z / gridSize);
-    return `${gx}_${gy}_${gz}`;
-  };
-  
-  const vertexMap = new Map<number, number>();
-  
-  for (let i = 0; i < positions.count; i++) {
-    const x = positions.getX(i);
-    const y = positions.getY(i);
-    const z = positions.getZ(i);
-    const hash = hashVertex(x, y, z);
-    
-    const nearby = spatialHash.get(hash) || [];
-    let merged = false;
-    
-    for (const nearbyIdx of nearby) {
-      const nx = positions.getX(nearbyIdx);
-      const ny = positions.getY(nearbyIdx);
-      const nz = positions.getZ(nearbyIdx);
-      
-      const dx = x - nx, dy = y - ny, dz = z - nz;
-      const distSq = dx * dx + dy * dy + dz * dz;
-      
-      if (distSq < tolerance * tolerance) {
-        vertexMap.set(i, nearbyIdx);
-        merged = true;
-        break;
-      }
-    }
-    
-    if (!merged) {
-      if (!spatialHash.has(hash)) {
-        spatialHash.set(hash, []);
-      }
-      spatialHash.get(hash)!.push(i);
-      vertexMap.set(i, i);
-    }
-  }
-  
-  const newIndices: number[] = [];
-  for (let i = 0; i < indices.count; i += 3) {
-    const i0 = vertexMap.get(indices.getX(i))!;
-    const i1 = vertexMap.get(indices.getX(i + 1))!;
-    const i2 = vertexMap.get(indices.getX(i + 2))!;
-    
-    if (i0 !== i1 && i1 !== i2 && i2 !== i0) {
-      newIndices.push(i0, i1, i2);
-    }
-  }
-  
-  const result = geometry.clone();
-  result.setIndex(newIndices);
-  return removeUnusedVertices(result);
-}
-
-// ============================================================================
-// GAP FILLING FUNCTIONS
-// ============================================================================
-
-function findBoundaryEdges(geometry: THREE.BufferGeometry): BoundaryEdge[] {
-  const edgeMap = buildEdgeTopology(geometry);
-  const boundaryEdges: BoundaryEdge[] = [];
-  
-  edgeMap.forEach((info) => {
-    if (info.count === 1 && info.vertices) {
-      boundaryEdges.push({
-        v1: info.vertices[0],
-        v2: info.vertices[1],
-        faceIdx: info.faces[0]
-      });
-    }
-  });
-  
-  return boundaryEdges;
-}
-
-function weldBoundaryVertices(geometry: THREE.BufferGeometry, tolerance: number = 0.4): THREE.BufferGeometry {
-  const boundaryEdges = findBoundaryEdges(geometry);
-  
-  if (boundaryEdges.length === 0) return geometry;
-  
-  const boundaryVertices = new Set<number>();
-  for (const edge of boundaryEdges) {
-    boundaryVertices.add(edge.v1);
-    boundaryVertices.add(edge.v2);
-  }
-  
-  const positions = geometry.attributes.position;
-  const indices = geometry.index!;
-  
-  const gridSize = tolerance * 2;
-  const spatialHash = new Map<string, number[]>();
-  
-  const hashVertex = (x: number, y: number, z: number): string => {
-    const gx = Math.floor(x / gridSize);
-    const gy = Math.floor(y / gridSize);
-    const gz = Math.floor(z / gridSize);
-    return `${gx}_${gy}_${gz}`;
-  };
-  
-  const vertexMap = new Map<number, number>();
-  let mergedCount = 0;
-  
-  for (const vertexIdx of boundaryVertices) {
-    const x = positions.getX(vertexIdx);
-    const y = positions.getY(vertexIdx);
-    const z = positions.getZ(vertexIdx);
-    const hash = hashVertex(x, y, z);
-    
-    const nearby = spatialHash.get(hash) || [];
-    let merged = false;
-    
-    for (const nearbyIdx of nearby) {
-      const nx = positions.getX(nearbyIdx);
-      const ny = positions.getY(nearbyIdx);
-      const nz = positions.getZ(nearbyIdx);
-      
-      const dx = x - nx, dy = y - ny, dz = z - nz;
-      const distSq = dx * dx + dy * dy + dz * dz;
-      
-      if (distSq < tolerance * tolerance) {
-        vertexMap.set(vertexIdx, nearbyIdx);
-        merged = true;
-        mergedCount++;
-        break;
-      }
-    }
-    
-    if (!merged) {
-      if (!spatialHash.has(hash)) {
-        spatialHash.set(hash, []);
-      }
-      spatialHash.get(hash)!.push(vertexIdx);
-      vertexMap.set(vertexIdx, vertexIdx);
-    }
-  }
-  
-  if (mergedCount === 0) return geometry;
-  
-  console.log(`  Welded ${mergedCount} boundary vertices`);
-  
-  const newIndices: number[] = [];
-  
-  for (let i = 0; i < indices.count; i += 3) {
-    const i0 = vertexMap.get(indices.getX(i)) ?? indices.getX(i);
-    const i1 = vertexMap.get(indices.getX(i + 1)) ?? indices.getX(i + 1);
-    const i2 = vertexMap.get(indices.getX(i + 2)) ?? indices.getX(i + 2);
-    
-    if (i0 !== i1 && i1 !== i2 && i2 !== i0) {
-      newIndices.push(i0, i1, i2);
-    }
-  }
-  
-  const result = geometry.clone();
-  result.setIndex(newIndices);
-  return result;
-}
-
-// ============================================================================
-// COMBINED REPAIR PIPELINE
-// ============================================================================
-
-function comprehensiveSlotRepair(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
-  console.log('🔧 COMPREHENSIVE slot repair (surgical + gap filling)');
-  console.log(`  Initial: ${geometry.attributes.position.count} vertices, ${geometry.index ? geometry.index.count / 3 : 0} faces`);
-  
-  let result = geometry;
-  
-  // PHASE 1: SURGICAL REPAIR
-  console.log('Phase 1: Surgical topology repair');
-  result = removeDegenerateTriangles(result, 0.00001);
-  console.log(`  After degenerate removal: ${result.attributes.position.count} vertices, ${result.index ? result.index.count / 3 : 0} faces`);
-  
-  result = weldCoincidentVertices(result, 0.0001);
-  console.log(`  After vertex welding: ${result.attributes.position.count} vertices, ${result.index ? result.index.count / 3 : 0} faces`);
-  
-  result = fixNonManifoldEdges(result);
-  console.log(`  After non-manifold fix: ${result.attributes.position.count} vertices, ${result.index ? result.index.count / 3 : 0} faces`);
-  
-  result = removeDegenerateTriangles(result, 0.00001);
-  console.log(`  After final degenerate removal: ${result.attributes.position.count} vertices, ${result.index ? result.index.count / 3 : 0} faces`);
-  
-  // PHASE 2: GAP FILLING
-  console.log('Phase 2: Gap filling on boundaries');
-  const boundaryBefore = findBoundaryEdges(result);
-  console.log(`  Boundary edges before: ${boundaryBefore.length}`);
-  
-  if (boundaryBefore.length > 0) {
-    // Weld boundary vertices more aggressively
-    result = weldBoundaryVertices(result, 0.4);
-    console.log(`  After boundary welding: ${result.attributes.position.count} vertices, ${result.index ? result.index.count / 3 : 0} faces`);
-    
-    const boundaryAfter = findBoundaryEdges(result);
-    console.log(`  Boundary edges after welding: ${boundaryAfter.length}`);
-  }
-  
-  // PHASE 3: FINAL CLEANUP
-  console.log('Phase 3: Final cleanup');
-  // Manual merge since BufferGeometryUtils not available in worker
-  result = weldCoincidentVertices(result, 0.0002);
-  console.log(`  After final merge: ${result.attributes.position.count} vertices, ${result.index ? result.index.count / 3 : 0} faces`);
-  
-  result = removeUnusedVertices(result);
-  console.log(`  After removing unused vertices: ${result.attributes.position.count} vertices, ${result.index ? result.index.count / 3 : 0} faces`);
-  
-  result = removeDegenerateTriangles(result, 0.00001);
-  console.log(`  After final degenerate removal: ${result.attributes.position.count} vertices, ${result.index ? result.index.count / 3 : 0} faces`);
-  
-  result.computeVertexNormals();
-  result.computeBoundingBox();
-  
-  const finalBoundary = findBoundaryEdges(result);
-  console.log(`  Final boundary edges: ${finalBoundary.length}`);
-  console.log(`  Final: ${result.attributes.position.count} vertices, ${result.index ? result.index.count / 3 : 0} faces`);
-  
-  return result;
-}
-
-// ============================================================================
-// WORKER MESSAGE HANDLER
-// ============================================================================
-
-self.onmessage = (e) => {
-    const { base, slots, rotation } = e.data;
-
-    const parseGeometry = (data: any) => {
-        const geo = new THREE.BufferGeometry();
-        if (data.position) geo.setAttribute('position', new THREE.Float32BufferAttribute(data.position, 3));
-        if (data.normal) geo.setAttribute('normal', new THREE.Float32BufferAttribute(data.normal, 3));
-        if (data.index) geo.setIndex(new THREE.BufferAttribute(data.index, 1));
-        return geo;
-    };
-    
-    const configureBVH = (geometry: any) => {
-        try {
-            if (geometry.computeBoundsTree) {
-                geometry.computeBoundsTree({
-                    maxLeafSize: 16,
-                    indirect: true
-                });
-            }
-        } catch (e) {}
-    };
-
-    let baseGeo: THREE.BufferGeometry | null = null;
-    let toolBrush: any = null;
-
-    try {
-        baseGeo = parseGeometry(base);
-        if (!baseGeo.attributes.normal) baseGeo.computeVertexNormals();
-        
-        configureBVH(baseGeo);
-        
-        // @ts-ignore
-        const baseBrush: any = new Brush(baseGeo);
-        if (baseBrush.updateMatrixWorld) baseBrush.updateMatrixWorld();
-
-        console.log(`🔍 CSG Debug: Processing ${slots.length} slots`);
-        console.log(`  Base geometry: ${baseGeo.attributes.position.count} vertices, ${baseGeo.index ? baseGeo.index.count / 3 : 0} faces`);
-        
-        // Combine all slot geometries into one instead of using ADDITION
-        let combinedSlotGeometry: THREE.BufferGeometry | null = null;
-        
-        if (slots.length > 0) {
-            const slotGeometries: THREE.BufferGeometry[] = [];
-            
-            for (const slotData of slots) {
-                const slotGeo = parseGeometry(slotData);
-                console.log(`  Slot geometry: ${slotGeo.attributes.position.count} vertices, ${slotGeo.index ? slotGeo.index.count / 3 : 0} faces`);
-                
-                // Validate slot geometry
-                if (!slotGeo.index || slotGeo.index.count === 0) {
-                    console.error('❌ Slot geometry has no faces!');
-                    continue;
-                }
-                
-                configureBVH(slotGeo);
-                
-                slotGeo.rotateX(rotation.x * Math.PI / 180);
-                slotGeo.rotateY(rotation.y * Math.PI / 180);
-                
-                slotGeometries.push(slotGeo);
-            }
-            
-            // Filter out invalid geometries
-            const validSlotGeometries = slotGeometries.filter(geo => geo.index && geo.index.count > 0);
-            console.log(`  Valid slot geometries: ${validSlotGeometries.length}/${slotGeometries.length}`);
-            
-            if (validSlotGeometries.length === 0) {
-                console.error('❌ No valid slot geometries to process!');
-                (self as any).postMessage({ position: base.position, normal: base.normal, index: base.index });
-                return;
-            }
-            
-            // Merge all slot geometries into one
-            if (validSlotGeometries.length === 1) {
-                combinedSlotGeometry = validSlotGeometries[0];
-            } else {
-                // Manual merge since BufferGeometryUtils might not be available
-                const positions: number[] = [];
-                const normals: number[] = [];
-                const indices: number[] = [];
-                let vertexOffset = 0;
-                
-                for (const slotGeo of validSlotGeometries) {
-                    const pos = slotGeo.attributes.position;
-                    const norm = slotGeo.attributes.normal;
-                    const idx = slotGeo.index;
-                    
-                    // Add vertices
-                    for (let i = 0; i < pos.count; i++) {
-                        positions.push(pos.getX(i), pos.getY(i), pos.getZ(i));
-                        if (norm) {
-                            normals.push(norm.getX(i), norm.getY(i), norm.getZ(i));
-                        }
-                    }
-                    
-                    // Add indices with offset
-                    if (idx) {
-                        for (let i = 0; i < idx.count; i++) {
-                            indices.push(idx.getX(i) + vertexOffset);
-                        }
-                    }
-                    
-                    vertexOffset += pos.count;
-                }
-                
-                combinedSlotGeometry = new THREE.BufferGeometry();
-                combinedSlotGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-                if (normals.length > 0) {
-                    combinedSlotGeometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-                }
-                combinedSlotGeometry.setIndex(new THREE.Uint32BufferAttribute(indices, 1));
-                combinedSlotGeometry.computeVertexNormals();
-                combinedSlotGeometry.computeBoundingBox();
-                
-                console.log(`  Combined slots: ${combinedSlotGeometry.attributes.position.count} vertices, ${combinedSlotGeometry.index ? combinedSlotGeometry.index.count / 3 : 0} faces`);
-            }
-        }
-
-        if (!combinedSlotGeometry) {
-            (self as any).postMessage({ position: base.position, normal: base.normal, index: base.index });
-            return;
-        }
-        
-        // @ts-ignore
-        const slotBrush: any = new Brush(combinedSlotGeometry);
-        if (slotBrush.updateMatrixWorld) slotBrush.updateMatrixWorld();
-        
-        console.log(`🔍 Final CSG subtraction:`);
-        console.log(`  Base brush: ${baseBrush.geometry.attributes.position.count} vertices, ${baseBrush.geometry.index ? baseBrush.geometry.index.count / 3 : 0} faces`);
-        console.log(`  Slot brush: ${slotBrush.geometry.attributes.position.count} vertices, ${slotBrush.geometry.index ? slotBrush.geometry.index.count / 3 : 0} faces`);
-        
-        const result: any = evaluator.evaluate(baseBrush, slotBrush, SUBTRACTION);
-        
-        // *** CHECK CSG RESULT ***
-        let resGeo = result.geometry;
-        
-        if (!resGeo) {
-            console.error('❌ CSG operation returned null geometry!');
-            console.log('  Base geometry:', baseGeo?.attributes.position.count);
-            console.log('  Slot geometry:', combinedSlotGeometry?.attributes.position.count);
-            (self as any).postMessage({ 
-                position: base.position, 
-                normal: base.normal, 
-                index: base.index 
-            });
-            return;
-        }
-        
-        const preRepairVertices = resGeo.attributes.position.count;
-        const preRepairFaces = resGeo.index ? resGeo.index.count / 3 : 0;
-        console.log(`🔍 CSG Result: ${preRepairVertices} vertices, ${preRepairFaces} faces`);
-        
-        if (preRepairFaces === 0) {
-            console.error('❌ CSG operation produced no faces! This indicates a problem with the CSG operation itself.');
-            console.log('  Base geometry vertices:', baseGeo?.attributes.position.count);
-            console.log('  Slot geometry vertices:', combinedSlotGeometry?.attributes.position.count);
-            console.log('  Result geometry:', resGeo);
-            console.log('  Result has attributes:', !!resGeo.attributes);
-            console.log('  Result has position:', !!resGeo.attributes?.position);
-            console.log('  Result has index:', !!resGeo.index);
-        }
-        
-        // *** APPLY COMPREHENSIVE REPAIR ***
-        resGeo = comprehensiveSlotRepair(resGeo);
-        
-        const postRepairVertices = resGeo.attributes.position.count;
-        console.log(`✅ Repair complete: ${preRepairVertices} → ${postRepairVertices} vertices`);
-        
-        try { if (slotBrush.geometry) slotBrush.geometry.dispose(); } catch {}
-        try { baseGeo.dispose(); } catch {}
-        try { if (combinedSlotGeometry) combinedSlotGeometry.dispose(); } catch {}
-
-        const position = resGeo.attributes.position.array;
-        const normal = resGeo.attributes.normal?.array;
-        const index = resGeo.index?.array;
-
-        const transferables: Transferable[] = [position.buffer];
-        if (normal) transferables.push(normal.buffer);
-        if (index) transferables.push(index.buffer);
-
-        (self as any).postMessage({ position, normal, index }, transferables);
-
-    } catch (error) {
-        console.error("Worker CSG Error:", error);
-        (self as any).postMessage({ 
-            position: base.position, 
-            normal: base.normal, 
-            index: base.index 
-        });
-    }
+const v3 = {
+  sub:   (a: Vec3, b: Vec3): Vec3 => ({ x: a.x-b.x, y: a.y-b.y, z: a.z-b.z }),
+  scale: (a: Vec3, s: number): Vec3 => ({ x: a.x*s, y: a.y*s, z: a.z*s }),
+  cross: (a: Vec3, b: Vec3): Vec3 => ({
+    x: a.y*b.z - a.z*b.y, y: a.z*b.x - a.x*b.z, z: a.x*b.y - a.y*b.x,
+  }),
+  dot:  (a: Vec3, b: Vec3): number => a.x*b.x + a.y*b.y + a.z*b.z,
+  len:  (a: Vec3): number => Math.sqrt(a.x*a.x + a.y*a.y + a.z*a.z),
+  norm: (a: Vec3): Vec3 => { const l = v3.len(a)||1; return v3.scale(a, 1/l); },
+  lerp: (a: Vec3, b: Vec3, t: number): Vec3 => ({
+    x: a.x+t*(b.x-a.x), y: a.y+t*(b.y-a.y), z: a.z+t*(b.z-a.z),
+  }),
 };
+
+// ─── Geometry helpers ─────────────────────────────────────────────────────────
+
+function extractTriangles(pos: Float32Array, idx: Uint32Array): Triangle[] {
+  const tris: Triangle[] = [];
+  for (let i = 0; i < idx.length; i += 3) {
+    const ai=idx[i]*3, bi=idx[i+1]*3, ci=idx[i+2]*3;
+    tris.push({
+      a:{x:pos[ai],   y:pos[ai+1], z:pos[ai+2]},
+      b:{x:pos[bi],   y:pos[bi+1], z:pos[bi+2]},
+      c:{x:pos[ci],   y:pos[ci+1], z:pos[ci+2]},
+    });
+  }
+  return tris;
+}
+
+/**
+ * Convert triangles to an indexed buffer with properly SHARED vertices.
+ *
+ * The old version gave every triangle its own 3 unique vertex slots so no
+ * vertices were ever shared between neighbours. This made boundary-edge
+ * detection impossible — every edge appeared to have valence 1.
+ *
+ * This version uses a spatial hash to deduplicate vertices within MERGE_EPS.
+ * Adjacent triangles sharing a geometrically coincident vertex now share the
+ * same index, so interior edges get valence 2 and open-hole boundary edges
+ * correctly get valence 1.
+ */
+function trianglesToBuffers(tris: Triangle[]): { positions: Float32Array; indices: Uint32Array } {
+  const MERGE_EPS = 1e-4;
+  const INV_EPS   = 1 / MERGE_EPS;
+
+  const vertMap = new Map<string, number>();
+  const posOut: number[] = [];
+  const idxOut: number[] = [];
+
+  const addVert = (v: Vec3): number => {
+    const gx = Math.round(v.x * INV_EPS);
+    const gy = Math.round(v.y * INV_EPS);
+    const gz = Math.round(v.z * INV_EPS);
+    const key = `${gx},${gy},${gz}`;
+    let idx = vertMap.get(key);
+    if (idx === undefined) {
+      idx = posOut.length / 3;
+      vertMap.set(key, idx);
+      posOut.push(gx * MERGE_EPS, gy * MERGE_EPS, gz * MERGE_EPS);
+    }
+    return idx;
+  };
+
+  for (const { a, b, c } of tris) {
+    const ia = addVert(a);
+    const ib = addVert(b);
+    const ic = addVert(c);
+    if (ia === ib || ib === ic || ia === ic) continue; // skip degenerate
+    idxOut.push(ia, ib, ic);
+  }
+
+  return {
+    positions: new Float32Array(posOut),
+    indices:   new Uint32Array(idxOut),
+  };
+}
+
+function makeSequentialIndices(n: number): Uint32Array {
+  const idx = new Uint32Array(n);
+  for (let i=0; i<n; i++) idx[i]=i;
+  return idx;
+}
+
+// ─── AABB ─────────────────────────────────────────────────────────────────────
+
+type AABB = { minX:number; minY:number; minZ:number; maxX:number; maxY:number; maxZ:number };
+
+function computeAABB(tris: Triangle[]): AABB {
+  let minX=Infinity, minY=Infinity, minZ=Infinity;
+  let maxX=-Infinity, maxY=-Infinity, maxZ=-Infinity;
+  for (const t of tris) for (const v of [t.a,t.b,t.c]) {
+    if(v.x<minX)minX=v.x; if(v.x>maxX)maxX=v.x;
+    if(v.y<minY)minY=v.y; if(v.y>maxY)maxY=v.y;
+    if(v.z<minZ)minZ=v.z; if(v.z>maxZ)maxZ=v.z;
+  }
+  return {minX,minY,minZ,maxX,maxY,maxZ};
+}
+
+function triAABB(t: Triangle): AABB {
+  return {
+    minX:Math.min(t.a.x,t.b.x,t.c.x), maxX:Math.max(t.a.x,t.b.x,t.c.x),
+    minY:Math.min(t.a.y,t.b.y,t.c.y), maxY:Math.max(t.a.y,t.b.y,t.c.y),
+    minZ:Math.min(t.a.z,t.b.z,t.c.z), maxZ:Math.max(t.a.z,t.b.z,t.c.z),
+  };
+}
+
+function aabbsOverlap(a: AABB, b: AABB, pad=0.05): boolean {
+  return a.minX-pad<=b.maxX && a.maxX+pad>=b.minX &&
+         a.minY-pad<=b.maxY && a.maxY+pad>=b.minY &&
+         a.minZ-pad<=b.maxZ && a.maxZ+pad>=b.minZ;
+}
+
+// ─── Extract unique outward face planes from a convex mesh ───────────────────
+
+function extractConvexPlanes(tris: Triangle[]): Plane[] {
+  const map = new Map<string, Plane>();
+  const SNAP = 100;
+  for (const t of tris) {
+    const n = v3.norm(v3.cross(v3.sub(t.b,t.a), v3.sub(t.c,t.a)));
+    if (!isFinite(n.x)||!isFinite(n.y)||!isFinite(n.z)) continue;
+    const key = `${Math.round(n.x*SNAP)},${Math.round(n.y*SNAP)},${Math.round(n.z*SNAP)}`;
+    const d = v3.dot(n, t.a);
+    const ex = map.get(key);
+    if (!ex || d > ex.d) map.set(key, {nx:n.x, ny:n.y, nz:n.z, d});
+  }
+  return Array.from(map.values());
+}
+
+function planeDist(p: Plane, v: Vec3): number {
+  return p.nx*v.x + p.ny*v.y + p.nz*v.z - p.d;
+}
+
+// ─── Per-plane triangle split ─────────────────────────────────────────────────
+
+const SPLIT_EPS = 1e-6;
+
+function toTris(pts: Vec3[]): Triangle[] {
+  if (pts.length < 3) return [];
+  if (pts.length === 3) return [{a:pts[0], b:pts[1], c:pts[2]}];
+  return [{a:pts[0],b:pts[1],c:pts[2]}, {a:pts[0],b:pts[2],c:pts[3]}];
+}
+
+function splitByPlane(
+  tri: Triangle, plane: Plane
+): { inside: Triangle[]; outside: Triangle[] } {
+  const verts = [tri.a, tri.b, tri.c];
+  const d = verts.map(v => planeDist(plane, v));
+
+  if (d[0] >= -SPLIT_EPS && d[1] >= -SPLIT_EPS && d[2] >= -SPLIT_EPS)
+    return { inside: [], outside: [tri] };
+  if (d[0] <= SPLIT_EPS && d[1] <= SPLIT_EPS && d[2] <= SPLIT_EPS)
+    return { inside: [tri], outside: [] };
+
+  const inPts: Vec3[] = [], outPts: Vec3[] = [];
+  for (let i = 0; i < 3; i++) {
+    const j = (i+1) % 3;
+    if (d[i] >= -SPLIT_EPS) outPts.push(verts[i]);
+    if (d[i] <=  SPLIT_EPS)  inPts.push(verts[i]);
+    if ((d[i] > SPLIT_EPS && d[j] < -SPLIT_EPS) ||
+        (d[i] < -SPLIT_EPS && d[j] > SPLIT_EPS)) {
+      const t = d[i] / (d[i] - d[j]);
+      const pt = v3.lerp(verts[i], verts[j], t);
+      inPts.push(pt); outPts.push(pt);
+    }
+  }
+  return { inside: toTris(inPts), outside: toTris(outPts) };
+}
+
+// ─── Core subtraction ─────────────────────────────────────────────────────────
+
+function subtractMesh(baseTris: Triangle[], subTris: Triangle[]): Triangle[] {
+  if (!baseTris.length || !subTris.length) return baseTris;
+
+  const subAABB  = computeAABB(subTris);
+  const baseAABB = computeAABB(baseTris);
+  if (!aabbsOverlap(baseAABB, subAABB)) return baseTris;
+
+  const planes = extractConvexPlanes(subTris);
+  if (planes.length < 4) return baseTris;
+
+  const result: Triangle[] = [];
+
+  for (const tri of baseTris) {
+    if (!aabbsOverlap(triAABB(tri), subAABB)) {
+      result.push(tri);
+      continue;
+    }
+
+    let candidates: Triangle[] = [tri];
+    for (const plane of planes) {
+      if (!candidates.length) break;
+      const nextCandidates: Triangle[] = [];
+      for (const frag of candidates) {
+        const { inside, outside } = splitByPlane(frag, plane);
+        result.push(...outside);
+        nextCandidates.push(...inside);
+      }
+      candidates = nextCandidates;
+    }
+  }
+
+  return result;
+}
+
+// ─── Main CSG entry ───────────────────────────────────────────────────────────
+
+async function performCSG(
+  basePositions: Float32Array,
+  baseIndices: Uint32Array,
+  slots: Array<{positions: Float32Array; indices: Uint32Array; rotation: [number,number,number]}>
+): Promise<{vertices: Float32Array; faces: Uint32Array}> {
+  console.log(`🚀 CSG: subtracting ${slots.length} slot(s) from ${basePositions.length/3} verts`);
+  let baseTris = extractTriangles(basePositions, baseIndices);
+  for (let si = 0; si < slots.length; si++) {
+    const subTris = extractTriangles(slots[si].positions, slots[si].indices);
+    console.log(`  Slot ${si+1}/${slots.length}: ${subTris.length} sub-tris`);
+    baseTris = subtractMesh(baseTris, subTris);
+    console.log(`  → ${baseTris.length} tris remaining`);
+  }
+  const {positions, indices} = trianglesToBuffers(baseTris);
+  console.log(`✅ Done: ${positions.length/3} verts, ${indices.length/3} faces`);
+  return {vertices: positions, faces: indices};
+}
+
+// ─── Worker message handler ───────────────────────────────────────────────────
+
+self.onmessage = async (e: MessageEvent<WorkerInput>) => {
+  const {base, slots} = e.data;
+  try {
+    const basePositions = new Float32Array(base.positions);
+    const baseIndices   = base.indices
+      ? new Uint32Array(base.indices)
+      : makeSequentialIndices(base.positions.length / 3);
+
+    const slotsData = slots.map(slot => {
+      const rot = slot.rotation as any;
+      let rotation: [number,number,number];
+      if (Array.isArray(rot))                  rotation = [rot[0]??0, rot[1]??0, rot[2]??0];
+      else if (rot && typeof rot === 'object') rotation = [rot.x??0, rot.y??0, rot.z??0];
+      else                                     rotation = [0, 0, 0];
+      return {
+        positions: new Float32Array(slot.positions),
+        indices:   slot.indices
+          ? new Uint32Array(slot.indices)
+          : makeSequentialIndices(slot.positions.length / 3),
+        rotation,
+      };
+    });
+
+    const result = await performCSG(basePositions, baseIndices, slotsData);
+    self.postMessage({
+      success: true,
+      geometry: {
+        positions: Array.from(result.vertices),
+        indices:   Array.from(result.faces),
+        normals:   null,
+      },
+      stats: {
+        vertices:     result.vertices.length / 3,
+        faces:        result.faces.length / 3,
+        isWatertight: false,
+      },
+    } as WorkerOutput);
+
+  } catch (err: any) {
+    console.error('❌ CSG Worker error:', err);
+    self.postMessage({
+      success: false,
+      error: err?.message ?? 'CSG failed',
+      stack: err?.stack,
+    } as WorkerOutput);
+  }
+};
+
+console.log('👷 CSG Worker ready (pure-JS BSP subtraction)');

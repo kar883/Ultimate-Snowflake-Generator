@@ -1,36 +1,49 @@
-
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+  ],
   
-  server: {
-    // Enable HTTPS for local development (required for Local Font Access API)
-    // https: false, // Removed to resolve TS error. Default is HTTP.
-    
-    headers: {
-      // Enable Permissions Policy for local-fonts (no quotes around self)
-      'Permissions-Policy': 'local-fonts=(self)'
-    },
+  worker: {
+    format: 'es',
+    plugins: () => [react()]
   },
   
-  preview: {
-    headers: {
-      'Permissions-Policy': 'local-fonts=(self)'
-    },
+  optimizeDeps: {
+    exclude: ['pyodide', 'manifold-3d'] // Don't try to bundle Pyodide or manifold-3d - they load WASM
   },
   
-  // Optimize build
   build: {
+    target: 'esnext', // Pyodide requires modern JavaScript
     rollupOptions: {
       output: {
         manualChunks: {
-          'three': ['three'],
-          'opentype': ['opentype.js'],
-        },
-      },
-    },
+          // Keep worker separate
+          'worker': ['./src/csg.worker.ts']
+        }
+      }
+    }
   },
-});
+  
+  server: {
+    headers: {
+      // Comment out COEP headers for development to allow CDN resources
+      // 'Cross-Origin-Opener-Policy': 'same-origin',
+      // 'Cross-Origin-Embedder-Policy': 'require-corp',
+      'Cross-Origin-Resource-Policy': 'cross-origin'
+    },
+    fs: {
+      // Allow serving files from node_modules/manifold-3d
+      allow: ['..']
+    }
+  },
+  
+  assetsInclude: ['**/*.wasm'],
+  
+  define: {
+    global: 'globalThis'
+  }
+})

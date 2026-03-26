@@ -89,9 +89,30 @@ export const InfoTooltip: React.FC<InfoTooltipProps> = ({ label, description, sh
         className={`group relative flex items-center justify-center ${className}`}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={() => setIsVisible(false)}
+        style={{
+          position: 'relative',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center'
+        }}
       >
         {children || (
-          <span className="text-[10px] font-bold uppercase text-slate-500 truncate mr-2 border-b border-dotted border-slate-600 group-hover:text-sky-400 group-hover:border-sky-400 transition-colors cursor-help">
+          <span 
+            className="text-[10px] font-bold uppercase text-slate-500 truncate mr-2 border-b border-dotted border-slate-600 group-hover:text-sky-400 group-hover:border-sky-400 transition-colors cursor-help"
+            style={{
+              fontSize: '10px',
+              fontWeight: 'bold',
+              textTransform: 'uppercase',
+              color: '#64748b',
+              marginRight: '8px',
+              borderBottom: '1px dotted #475569',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              transition: 'all 0.2s',
+              cursor: 'help'
+            }}
+          >
             {label}
           </span>
         )}
@@ -100,16 +121,71 @@ export const InfoTooltip: React.FC<InfoTooltipProps> = ({ label, description, sh
         <div 
           className="fixed z-[9999] pointer-events-none"
           style={{ 
-             top: position.top, 
-             left: position.left,
-             transform: `translateX(calc(-50% + ${position.shift}px)) ${position.placement === 'top' ? 'translateY(-100%)' : 'translateY(0)'}`
+            top: position.top, 
+            left: position.left,
+            transform: `translateX(calc(-50% + ${position.shift}px)) ${position.placement === 'top' ? 'translateY(-100%)' : 'translateY(0)'}`
           }}
         >
-          <div className="bg-slate-800 text-white text-[10px] font-medium p-3 rounded-lg shadow-2xl border border-white/10 backdrop-blur-md text-center w-auto max-w-[200px] min-w-[120px] animate-in fade-in zoom-in-95 duration-150 relative">
-            {description && <p className="leading-relaxed mb-1">{description}</p>}
+          <div 
+            className="bg-slate-800 text-white text-[10px] font-medium p-3 rounded-lg shadow-2xl border border-white/10 backdrop-blur-md text-center w-auto max-w-[200px] min-w-[120px] animate-in fade-in zoom-in-95 duration-150 relative"
+            style={{
+              backgroundColor: '#1e293b',
+              color: 'white',
+              fontSize: '10px',
+              fontWeight: '500',
+              padding: '12px',
+              borderRadius: '8px',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              backdropFilter: 'blur(12px)',
+              textAlign: 'center',
+              width: 'auto',
+              maxWidth: '200px',
+              minWidth: '120px',
+              position: 'relative',
+              animation: 'fadeIn 0.15s ease-out'
+            }}
+          >
+            {description && (
+              <p 
+                className="leading-relaxed mb-1"
+                style={{
+                  lineHeight: '1.5',
+                  marginBottom: '4px',
+                  margin: '0 0 4px 0'
+                }}
+              >
+                {description}
+              </p>
+            )}
             {shortcutText && (
-                <div className="mt-1 pt-1 border-t border-white/10 flex justify-center">
-                    <span className="bg-white/10 px-1.5 py-0.5 rounded text-[9px] font-mono text-sky-300 tracking-wider">{shortcutText}</span>
+                <div 
+                  className="mt-1 pt-1 border-t border-white/10 flex justify-center"
+                  style={{
+                    marginTop: '4px',
+                    paddingTop: '4px',
+                    borderTop: '1px solid rgba(255,255,255,0.1)',
+                    display: 'flex',
+                    justifyContent: 'center'
+                  }}
+                >
+                    <span 
+                      className="bg-white/10 px-1.5 py-0.5 rounded text-[9px] font-mono text-sky-300 tracking-wider"
+                      style={{
+                        backgroundColor: 'rgba(255,255,255,0.1)',
+                        paddingLeft: '6px',
+                        paddingRight: '6px',
+                        paddingTop: '2px',
+                        paddingBottom: '2px',
+                        borderRadius: '4px',
+                        fontSize: '9px',
+                        fontFamily: 'monospace',
+                        color: '#7dd3fc',
+                        letterSpacing: '0.05em'
+                      }}
+                    >
+                      {shortcutText}
+                    </span>
                 </div>
             )}
             <div 
@@ -117,8 +193,16 @@ export const InfoTooltip: React.FC<InfoTooltipProps> = ({ label, description, sh
                   position.placement === 'top' ? 'top-full border-t-slate-800' : 'bottom-full border-b-slate-800'
                 }`}
                 style={{
+                    position: 'absolute',
+                    width: 0,
+                    height: 0,
+                    borderLeft: '4px solid transparent',
+                    borderRight: '4px solid transparent',
+                    borderTop: position.placement === 'top' ? '4px solid #1e293b' : '4px solid transparent',
+                    borderBottom: position.placement === 'bottom' ? '4px solid #1e293b' : '4px solid transparent',
                     left: `calc(50% - ${position.shift}px)`,
-                    transform: 'translateX(-50%)'
+                    transform: 'translateX(-50%)',
+                    ...(position.placement === 'top' ? { top: '100%' } : { bottom: '100%' })
                 }}
             ></div>
           </div>
