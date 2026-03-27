@@ -6,20 +6,16 @@ import SnowflakePreview from './components/SnowflakePreview';
 import Snowflake3D from './components/Snowflake3D';
 import Header from './components/Header';
 import * as THREE_ACTUAL from 'three';
-import { STLExporter } from 'three/examples/jsm/exporters/STLExporter';
-import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader';
-import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
+import { STLExporter } from './stlExporter';
+// import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader';
+// import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
 import opentype from 'opentype.js';
 import JSZip from 'jszip';
 import { GoogleGenAI } from "@google/genai";
 import { /*surgicalSlotRepair,*/ getTopologyReport } from './surgicalSlotRepair';
 // @ts-ignore
-// SLOT-DISABLED: import { postCSGJob } from './csgWorkerManager';
-// SLOT-DISABLED: import { CavalierPathOperations, Polyline } from './cavalierContours';
-// SLOT-DISABLED: import { makeCacheKey, getOrCreateSlotGeometries, clearSlotCache } from './slotGeometryCache';
 // import { fillHolesManifold } from './holeFillingRepair'; // Temporarily commented
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, /*makeSlotKey,*/ getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, /*slotCutCache,*/ makeUnderlineKey } from './geometryCache';
-// SLOT-DISABLED: import { hashLayerContent, makeSlotCutCacheKey, improvedSlotCutCache } from './improvedSlotCache';
 
 const MAX_HISTORY = 50;
 
@@ -39,7 +35,7 @@ const DEFAULT_SHORTCUTS: ShortcutConfig = {
     switchToLetterCtrlTab: { key: '3', altKey: true },
     switchToHubsTab: { key: '4', altKey: true },
     switchToAbstractTab: { key: '5', altKey: true },
-    // SLOT-DISABLED: switchToPlanesTab: { key: '6', altKey: true },
+    switchToPlanesTab: { key: '6', altKey: true },
 };
 
 const useFontCache = () => {
@@ -113,9 +109,8 @@ const useThreeJSCleanup = () => {
 /**
  * Convert Polyline back to THREE.Vector2 array
  */
-function polylineToPoints(polyline: Polyline): THREE_ACTUAL.Vector2[] {
-  return []; // SLOT-DISABLED: CavalierPathOperations removed
-}
+// function polylineToPoints(polyline: Polyline): THREE_ACTUAL.Vector2[] {
+// }
 
 /**
  * Simple path offset by expanding shapes outward
@@ -593,7 +588,6 @@ const seededRandom = (seed: number) => {
   };
 };
 
-// /* SLOT-DISABLED: createSlotGeometries
 // // ============================================================
 // // createSlotGeometries
 // // ============================================================
@@ -845,10 +839,8 @@ const seededRandom = (seed: number) => {
 //   slots.push(createBlade(-drawLength / 2, drawLength, cutThickness, FULL_PUNCH, 90, -angle));
 //   return slots;
 // };
-// END SLOT-DISABLED */
 
 
-// /* SLOT-DISABLED: workerOutputToGeometry/postProcessCutGeometry/fillOpenHoles
 // // ... (unchanged code below)
 // /**
 //  * Parse the WorkerOutput envelope and build a THREE.BufferGeometry.
@@ -1016,9 +1008,7 @@ const seededRandom = (seed: number) => {
 //   return out;
 // }
 
-// END SLOT-DISABLED */
 
-// /* SLOT-DISABLED: applySlotCuts
 // // ─── applySlotCuts ───────────────────────────────────────────────────────────
 
 // const applySlotCuts = async (
@@ -1158,7 +1148,6 @@ const seededRandom = (seed: number) => {
 //       return layerGeo;
 //     });
 // };
-// END SLOT-DISABLED */
 
 
 const createDefaultTextGroup = (text: string, rotation: number, fontSize: number, textX: number): TextGroupConfig => ({
@@ -1181,7 +1170,7 @@ const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isEnabled 
   id,
   name,
   enabled: isEnabled,
-  rotation3D: { x: rx, y: ry },
+  rotation3D: { x: rx, y: ry, z: 0 },
   primary: createDefaultTextGroup("Snow", 0, 36.7, 20), 
   secondary: createDefaultTextGroup("", 30, 20, 10),
   secondaryEnabled: true,
@@ -1193,7 +1182,6 @@ const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isEnabled 
   images: [],
 });
 
-// /* SLOT-DISABLED: calculateOptimalSlots
 // // ============================================================
 // // REPLACE calculateOptimalSlots in App.tsx
 // // (Re-enables automatic 3-plane mode switching)
@@ -1216,7 +1204,6 @@ const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isEnabled 
 //   }
 //   return updatedLayers;
 // };
-// END SLOT-DISABLED */
 
 
 const App: React.FC = () => {
@@ -1253,7 +1240,8 @@ const App: React.FC = () => {
     bevelSegments: 5, 
     slotEnabled: false,
     slotLength: 95, 
-    slotWidth: 4.0, 
+    slotWidth: 4.0,
+    slotMode: '2-plane',
     quality: 'low',
     syncAllLayers: true, // Default ON
     globalStrokeWeight: 0
@@ -1273,6 +1261,8 @@ const App: React.FC = () => {
   const [designDiameter, setDesignDiameter] = useState(0); 
   const [activeTab, setActiveTab] = useState<'global' | 'text' | 'Letter Ctrl' | 'hubs' | 'abstract' | 'planes' | 'images'>('text');
   const [shortcuts, setShortcuts] = useState<ShortcutConfig>(DEFAULT_SHORTCUTS);
+  const [language, setLanguage] = useState<string>('en');
+  const [showTooltips, setShowTooltips] = useState<boolean>(true);
 
   const [history, setHistory] = useState<SnowflakeConfig[]>([initialState]);
   const [historyIndex, setHistoryIndex] = useState(0);
@@ -1426,7 +1416,6 @@ const App: React.FC = () => {
       modelCache3D.clear();
       lastQuality.current = updates.quality!;
     }
-    // SLOT-DISABLED: slot cache busting
     // if ('slotEnabled' in updates || 'slotLength' in updates || ...) {
     //   clearSlotCache(); slotCutCache.clear();
     // }
@@ -1434,7 +1423,6 @@ const App: React.FC = () => {
     setConfig(prev => {
       const next = { ...prev, ...updates };
       
-      // SLOT-DISABLED: auto-switch slot mode block removed
       
       if (debounceTimer.current) {
           clearTimeout(debounceTimer.current);
@@ -1930,24 +1918,27 @@ const App: React.FC = () => {
             // Center the extrusion on Z-axis
             const centerZOffset = -extrudeSettings.depth / 2;
 
-            for (let i = 0; i < textGroup.arms; i++) {
-              const angle = i * angleStep + (textGroup.rotationOffset * Math.PI / 180);
-              const inst = groupGeo.clone();
-              inst.translate(textGroup.textX, textGroup.mirrorOffset / 2, centerZOffset);
-              inst.rotateX(Math.PI); inst.rotateZ(-angle);
-              layerGeometries.push(inst);
-              if (textGroup.mirrorEnabled) {
-                const mirrored = groupGeo.clone();
-                mirrored.translate(textGroup.textX, -textGroup.mirrorOffset / 2, centerZOffset);
-                mirrored.rotateZ(-angle); 
-                layerGeometries.push(mirrored);
-              }
-              if (underlineGeo) {
-                  const uInst = underlineGeo.clone();
-                  uInst.translate(0, 0, centerZOffset);
-                  uInst.rotateX(Math.PI);
-                  uInst.rotateZ(-angle);
-                  layerGeometries.push(uInst);
+            // Only push geometry if it has vertices
+            if (groupGeo.attributes.position?.count > 0) {
+              for (let i = 0; i < textGroup.arms; i++) {
+                const angle = i * angleStep + (textGroup.rotationOffset * Math.PI / 180);
+                const inst = groupGeo.clone();
+                inst.translate(textGroup.textX, textGroup.mirrorOffset / 2, centerZOffset);
+                inst.rotateX(Math.PI); inst.rotateZ(-angle);
+                layerGeometries.push(inst);
+                if (textGroup.mirrorEnabled) {
+                  const mirrored = groupGeo.clone();
+                  mirrored.translate(textGroup.textX, -textGroup.mirrorOffset / 2, centerZOffset);
+                  mirrored.rotateZ(-angle); 
+                  layerGeometries.push(mirrored);
+                }
+                if (underlineGeo && underlineGeo.attributes.position?.count > 0) {
+                    const uInst = underlineGeo.clone();
+                    uInst.translate(0, 0, centerZOffset);
+                    uInst.rotateX(Math.PI);
+                    uInst.rotateZ(-angle);
+                    layerGeometries.push(uInst);
+                }
               }
             }
           }
@@ -2013,9 +2004,13 @@ const App: React.FC = () => {
 
              const hubKey = makeHubKey(layer.id, hub, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight);
              const geo = getOrCreateGeometry(geometryCache.hubs, hubKey, () => new THREE_ACTUAL.ExtrudeGeometry(shape, extrudeSettings));
-             geo.rotateZ(hub.rotationOffset * Math.PI / 180);
-             geo.translate(0, 0, centerZOffset);
-             layerGeometries.push(geo);
+             
+             // Only add to layer geometries if it has vertices
+             if (geo.attributes.position?.count > 0) {
+               geo.rotateZ(hub.rotationOffset * Math.PI / 180);
+               geo.translate(0, 0, centerZOffset);
+               layerGeometries.push(geo);
+             }
          });
       };
 
@@ -2145,19 +2140,23 @@ const App: React.FC = () => {
                        
                        const fractalGeo = new THREE_ACTUAL.ExtrudeGeometry(boldedShapes, extrudeSettings);
                        const angleStep = (Math.PI * 2) / abs.arms;
-                       for(let i=0; i<abs.arms; i++) {
-                           const angle = i * angleStep + (abs.rotationOffset * Math.PI / 180);
-                           const absInst = fractalGeo.clone();
-                           absInst.translate(0, abs.mirrorOffset/2, centerZOffset);
-                           absInst.rotateZ(angle);
-                           layerGeometries.push(absInst);
-                           if (abs.mirrorEnabled) {
-                               const mir = fractalGeo.clone();
-                               mir.scale(1, -1, 1); 
-                               mir.translate(0, -abs.mirrorOffset/2, centerZOffset);
-                               mir.rotateZ(angle);
-                               layerGeometries.push(mir);
-                           }
+                       
+                       // Only push fractal geometries if they have vertices
+                       if (fractalGeo.attributes.position?.count > 0) {
+                         for(let i=0; i<abs.arms; i++) {
+                             const angle = i * angleStep + (abs.rotationOffset * Math.PI / 180);
+                             const absInst = fractalGeo.clone();
+                             absInst.translate(0, abs.mirrorOffset/2, centerZOffset);
+                             absInst.rotateZ(angle);
+                             layerGeometries.push(absInst);
+                             if (abs.mirrorEnabled) {
+                                 const mir = fractalGeo.clone();
+                                 mir.scale(1, -1, 1); 
+                                 mir.translate(0, -abs.mirrorOffset/2, centerZOffset);
+                                 mir.rotateZ(angle);
+                                 layerGeometries.push(mir);
+                             }
+                         }
                        }
                    }
                    return;
@@ -2218,23 +2217,28 @@ const App: React.FC = () => {
                
                const mirroredGeo = getOrCreateGeometry(geometryCache.abstracts, abstractKey + '_mirrored', () => new THREE_ACTUAL.ExtrudeGeometry(finalMirroredShape as any, extrudeSettings));
                const angleStep = (Math.PI * 2) / abs.arms;
-               for(let i=0; i<abs.arms; i++) {
-                   const angle = i * angleStep + (abs.rotationOffset * Math.PI / 180);
-                   const absInst = normalGeo.clone();
-                   absInst.translate(0, abs.mirrorOffset/2, centerZOffset);
-                   absInst.rotateZ(angle);
-                   layerGeometries.push(absInst);
-                   if (abs.mirrorEnabled) {
-                       const mir = mirroredGeo.clone();
-                       mir.translate(0, -abs.mirrorOffset/2, centerZOffset);
-                       mir.rotateZ(angle);
-                       layerGeometries.push(mir);
-                   }
+               
+               // Only push abstract geometries if they have vertices
+               if (normalGeo.attributes.position?.count > 0) {
+                 for(let i=0; i<abs.arms; i++) {
+                     const angle = i * angleStep + (abs.rotationOffset * Math.PI / 180);
+                     const absInst = normalGeo.clone();
+                     absInst.translate(0, abs.mirrorOffset/2, centerZOffset);
+                     absInst.rotateZ(angle);
+                     layerGeometries.push(absInst);
+                     if (abs.mirrorEnabled && mirroredGeo.attributes.position?.count > 0) {
+                         const mir = mirroredGeo.clone();
+                         mir.translate(0, -abs.mirrorOffset/2, centerZOffset);
+                         mir.rotateZ(angle);
+                         layerGeometries.push(mir);
+                     }
+                 }
                }
           });
       };
 
       // ── processImages: extrude imported SVG paths as arm instances ──────
+      /*
       const processImages = (images: ImageConfig[]) => {
         if (!images || images.length === 0) return;
         const centerZOffset = -extrudeSettings.depth / 2;
@@ -2350,19 +2354,33 @@ const App: React.FC = () => {
           }
         });
       };
+      */
 
       await processTextGroup(layer.primary);
       await processTextGroup(layer.secondary);
       processHubs(layer.hubs);
       processAbstracts(layer.abstracts);
-      processImages(layer.images || []);
       
       await updateProgress();
 
       if (layerGeometries.length > 0) {
-        // Merge without boolean (just combine buffers)
-        let layerMerged = BufferGeometryUtils.mergeGeometries(layerGeometries);
-        if (layerMerged) {
+        const layerRotX = layer.rotation3D.x * Math.PI / 180;
+        const layerRotY = layer.rotation3D.y * Math.PI / 180;
+
+        layerGeometries.forEach((geom, idx) => {
+          const finalGeo = geom.clone();
+          finalGeo.rotateX(layerRotX);
+          finalGeo.rotateY(layerRotY);
+
+          if (finalGeo && finalGeo.attributes && finalGeo.attributes.position && finalGeo.attributes.position.count > 0) {
+            const mesh = new THREE_ACTUAL.Mesh(finalGeo);
+            mesh.userData.layerId = layer.id;
+            mesh.name = layer.name;
+            group.add(mesh);
+          } else {
+            console.warn(`⚠️ Skipping empty geometry for layer ${layer.name} geometry index ${idx}`);
+          }
+        });
           // If slots are enabled, we must perform aggressive repair (merging vertices) 
           // to ensure CSG operations (subtraction) work on manifold geometry.
           // However, repairGeometry(..., true) destroys the sharp normals generated by ExtrudeGeometry
@@ -2372,108 +2390,12 @@ const App: React.FC = () => {
            // When producing 3D view we should merge/repair vertices so overlapping
            // geometry fuses correctly. This reduces visual overlaps and prevents
            // floating/non-welded faces in 3D preview and exports.
-           // SLOT-DISABLED: was `if (config.slotEnabled || viewMode === '3d')`
-           if (viewMode === '3d') {
-             layerMerged = BufferGeometryUtils.mergeVertices(layerMerged, 0.0001) as THREE_ACTUAL.BufferGeometry;
-           }
+           // if (viewMode === '3d') {
+           //   layerMerged = BufferGeometryUtils.mergeVertices(layerMerged, 0.0001) as THREE_ACTUAL.BufferGeometry;
+           // }
 
-          layerMerged.rotateX(layer.rotation3D.x * Math.PI / 180);
-          layerMerged.rotateY(layer.rotation3D.y * Math.PI / 180);
+          // Layer geometry has already been added to the scene for each arm instance.
 
-          // SLOT-DISABLED: slot cutting block
-          //           if (config.slotEnabled) {
-          //             // Must match applySlotCuts cache key exactly (includes rx + numPlanes)
-          //             const rxTag2     = Math.round(layer.rotation3D?.x ?? 0);
-          //             const nPTag2     = config.layers.filter(l => l.enabled).length;
-          //             const cacheKey   = makeCacheKey(
-          //               `${layer.id || 'layer'}_rx${rxTag2}_np${nPTag2}`,
-          //               config.slotLength,
-          //               config.slotWidth,
-          //               config.extrusionDepth,
-          //               config.bevelEnabled,
-          //               bevelPerSide,
-          //               config.globalStrokeWeight
-          //             );
-
-          //             const cachedCutGeo = slotCutCache.get(cacheKey);
-          //             if (cachedCutGeo) {
-          //               // Use cached geometry - validate it first
-          //               if (cachedCutGeo.attributes && cachedCutGeo.attributes.position) {
-          //                 layerMerged = cachedCutGeo.clone();
-          //                 console.log('🔍 SLOT DEBUG: Using valid cached geometry for layer:', layer.name);
-          //               } else {
-          //                 console.warn('🔍 SLOT DEBUG: Cached geometry is invalid, regenerating for layer:', layer.name);
-          //                 // Fall through to regenerate
-          //               }
-          //             } else {
-          //               console.log('🔍 SLOT DEBUG: Cache miss - computing slot cuts for layer:', layer.name);
-          //               console.log('🏗️ MESH GEN DEBUG: About to call applySlotCuts - this might take time...');
-          //               // Preserve original geometry for fallback
-          //               const originalGeometry = layerMerged;
-          //               // Compute slot cuts on-demand with timeout protection
-          //               try {
-          //                 console.log('🔍 SLOT DEBUG: About to call applySlotCuts...');
-                
-          //                 // Add timeout protection
-          //                 const slotCutPromise = applySlotCuts(
-          //                   originalGeometry,
-          //                   layer,
-          //                   config.slotLength,
-          //                   config.slotWidth,
-          //                   config.extrusionDepth,
-          //                   config.bevelEnabled,
-          //                   bevelPerSide,
-          //                   config.layers,
-          //                   config.globalStrokeWeight,
-          //                   async () => { await updateProgress(); }
-          //                 );
-                
-          //                 const timeoutPromise = new Promise((_, reject) => {
-          //                   setTimeout(() => reject(new Error('Slot cutting timeout')), 10000); // 10 second timeout
-          //                 });
-                
-          //                 layerMerged = await Promise.race([slotCutPromise, timeoutPromise]) as THREE_ACTUAL.BufferGeometry;
-                
-          //                 // Validate the result before proceeding
-          //                 if (layerMerged && layerMerged.attributes && layerMerged.attributes.position) {
-          //                   console.log('🔍 SLOT DEBUG: applySlotCuts completed successfully for layer:', layer.name);
-          //                   // Cache result for future use - only cache if geometry is valid
-          //                   if (layerMerged && layerMerged.attributes && layerMerged.attributes.position) {
-          //                     slotCutCache.set(cacheKey, layerMerged.clone());
-          //                   } else {
-          //                     console.warn('🔍 SLOT DEBUG: Not caching invalid geometry for layer:', layer.name);
-          //                   }
-          //                 } else {
-          //                   console.error('🔍 SLOT DEBUG: Slot cutting produced invalid geometry, using original for layer:', layer.name);
-          //                   // Don't cache invalid results, fall back to original geometry
-          //                   layerMerged = originalGeometry;
-          //                 }
-          //               } catch (error) {
-          //                 console.error('Slot cutting failed or timed out, using original geometry:', error);
-          //                 // Continue with original geometry if slot cutting fails
-          //               }
-          //             }
-          //             // Topology repaired by postProcessCutGeometry (hole-fill + weld).
-          //             const report = getTopologyReport(layerMerged);
-          //             console.log(`📊 Slot topology [${layer.id}]: verts=${report.vertices} boundary=${report.boundaryEdges} nonManifold=${report.nonManifoldEdges}`);
-          //             if (lIdx === 0) layerMerged.rotateZ(Math.PI);
-          //           }
-          // Final clean up logic:
-          // If slots are enabled, use the repaired geometry (already processed by surgicalSlotRepair in worker).
-          // If slots are DISABLED, use the pristine geometry from mergeGeometries which preserves normals.
-          const finalGeo = layerMerged; // REPAIR DISABLED
-
-          // Only create mesh if geometry is valid
-          if (finalGeo && finalGeo.attributes && finalGeo.attributes.position && finalGeo.attributes.position.count > 0) {
-            const mesh = new THREE_ACTUAL.Mesh(finalGeo);
-            mesh.userData.layerId = layer.id;
-            mesh.name = layer.name;
-            group.add(mesh);
-          } else {
-            console.warn(`⚠️ Skipping empty geometry for layer ${layer.name}`);
-          }
-
-          // SLOT-DISABLED: blade visualizer
           //           // ── SLOT CUTTER VISUALIZER ──────────────────────────────────────
           //           // When slots are enabled, add each blade as a distinct semi-transparent
           //           // colored mesh so blade positions / angles can be inspected visually.
@@ -2517,7 +2439,6 @@ const App: React.FC = () => {
           //           // ── END SLOT CUTTER VISUALIZER ───────────────────────────────────
         }
       }
-    }
     onProgress(1);
     
     // Cache the result before returning
@@ -2550,41 +2471,41 @@ const App: React.FC = () => {
         });
         
         if (flatGeoms.length > 0) {
-            const combinedForCheck = BufferGeometryUtils.mergeGeometries(flatGeoms);
-            if (combinedForCheck) {
+            // const combinedForCheck = BufferGeometryUtils.mergeGeometries(flatGeoms);
+            // if (combinedForCheck) {
                 // Final topology verification before export
-                const report = getTopologyReport(combinedForCheck);
-                console.log(`📊 Final Export Topology Report:`, report);
+                // const report = getTopologyReport(combinedForCheck);
+                // console.log(`📊 Final Export Topology Report:`, report);
                 
-                if (!report.isManifold) {
-                    console.warn(`⚠️ Export has ${report.nonManifoldEdges} non-manifold edges`);
-                    
-                    // Skip aggressive repair to prevent freezing during export
-                    if (report.nonManifoldEdges > 100) {
-                        console.log('🔨 Skipping aggressive repair for export to prevent freezing');
-                        console.log(`📝 Geometry has ${report.nonManifoldEdges} non-manifold edges but is still exportable`);
-                        // const repaired = surgicalSlotRepair(combinedForCheck); // Disabled to prevent freeze
-                        // Update the merged geometry with repaired version
-                        // for (let i = 0; i < flatGeoms.length; i++) {
-                        //     flatGeoms[i] = repaired;
-                        // }
-                    }
-                }
+                // if (!report.isManifold) {
+                //     console.warn(`⚠️ Export has ${report.nonManifoldEdges} non-manifold edges`);
+                //     
+                //     // Skip aggressive repair to prevent freezing during export
+                //     if (report.nonManifoldEdges > 100) {
+                //         console.log('🔨 Skipping aggressive repair for export to prevent freezing');
+                //         console.log(`📝 Geometry has ${report.nonManifoldEdges} non-manifold edges but is still exportable`);
+                //         // const repaired = surgicalSlotRepair(combinedForCheck); // Disabled to prevent freeze
+                //         // Update the merged geometry with repaired version
+                //         // for (let i = 0; i < flatGeoms.length; i++) {
+                //         //     flatGeoms[i] = repaired;
+                //         // }
+                //     }
+                // }
                 
-                const isConnected = checkConnectivity(combinedForCheck);
-                if (!isConnected) {
-                    const confirmExport = window.confirm(
-                        "⚠️ CRITICAL WARNING: Floating Bodies Detected\n\n" +
-                        "The generated mesh contains disconnected parts (floating bodies).\n" +
-                        "This usually happens when letters or rings don't overlap properly.\n\n" +
-                        "This print may fail. Do you still want to export?"
-                    );
-                    if (!confirmExport) {
-                        setExportLoading(false);
-                        return;
-                    }
-                }
-            }
+                // const isConnected = checkConnectivity(combinedForCheck);
+                // if (!isConnected) {
+                //     const confirmExport = window.confirm(
+                //         "⚠️ CRITICAL WARNING: Floating Bodies Detected\n\n" +
+                //         "The generated mesh contains disconnected parts (floating bodies).\n" +
+                //         "This usually happens when letters or rings don't overlap properly.\n\n" +
+                //         "This print may fail. Do you still want to export?"
+                //     );
+                //     if (!confirmExport) {
+                //         setExportLoading(false);
+                //         return;
+                //     }
+                // }
+            // }
         }
 
         const exporter = new STLExporter();
@@ -2592,7 +2513,6 @@ const App: React.FC = () => {
         const blob = new Blob([result], { type: 'application/octet-stream' });
         const qLabel = quality ? `_${quality}` : '';
         downloadBlob(blob, `${config.projectName}${qLabel}.stl`);
-        showNotification('STL export completed successfully!', 'success');
     } catch (e) { 
       console.error("Export Failed", e); 
       handleError(e, 'STL Export');
@@ -2622,7 +2542,6 @@ const App: React.FC = () => {
             const blob = new Blob([result], { type: 'application/octet-stream' });
             const qLabel = quality ? `_${quality}` : '';
             downloadBlob(blob, `${config.projectName}_${layer.name.replace(/\s+/g, '_')}${qLabel}.stl`);
-            showNotification(`Exported ${layer.name} successfully!`, 'success');
         }
     } catch(e) { 
       console.error(e); 
@@ -2636,7 +2555,7 @@ const App: React.FC = () => {
       try {
           const group = await generateMesh(() => {}, quality);
           const zip = new JSZip();
-          const exporter = new STLExporter();
+          // const exporter = new STLExporter();
           
           let anyFloating = false;
           group.children.forEach(child => {
@@ -2655,10 +2574,11 @@ const App: React.FC = () => {
               }
           }
           
+          const exporter = new STLExporter();
           group.children.forEach(child => {
               if (child instanceof THREE_ACTUAL.Mesh) {
                   const result = exporter.parse(child, { binary: true });
-                  const data = result instanceof DataView ? result.buffer : result;
+                  const data = result as ArrayBuffer;
                   const qLabel = quality ? `_${quality}` : '';
                   zip.file(`${config.projectName}_${child.name.replace(/\s+/g, '_')}${qLabel}.stl`, data);
               }
@@ -2667,7 +2587,6 @@ const App: React.FC = () => {
           const content = await zip.generateAsync({ type: 'blob' });
           const qLabel = quality ? `_${quality}` : '';
           downloadBlob(content, `${config.projectName}_All_Planes${qLabel}.zip`);
-          showNotification('ZIP export completed successfully!', 'success');
       } catch(e) { 
         console.error(e); 
         handleError(e, 'ZIP Export');
@@ -3125,8 +3044,7 @@ const App: React.FC = () => {
     switchToLetterCtrlTab: () => setActiveTab('Letter Ctrl'),
     switchToHubsTab: () => setActiveTab('hubs'),
     switchToAbstractTab: () => setActiveTab('abstract'),
-    // SLOT-DISABLED: switchToPlanesTab: () => setActiveTab('planes'),
-    switchToImagesTab: () => setActiveTab('images'),
+    // switchToImagesTab is not defined in ShortcutConfig
     forceUpdate3D: () => {
         setRendered3DIfChanged(config);
         showNotification("3D Model Updated", "info", 1000);
@@ -3150,6 +3068,10 @@ const App: React.FC = () => {
                             shortcuts={shortcuts}
                             onUpdateShortcuts={(s) => setShortcuts(s)}
                             onResetShortcuts={() => setShortcuts(DEFAULT_SHORTCUTS)}
+                            language={language}
+                            onLanguageChange={(lang) => setLanguage(lang)}
+                            showTooltips={showTooltips}
+                            onTooltipsChange={(show) => setShowTooltips(show)}
                         />
                     </div>
                 </div>
@@ -3177,8 +3099,6 @@ const App: React.FC = () => {
                         onFetchFont={handleFetchFont}
                         onFontUpload={handleFontUpload}
                         dynamicFonts={dynamicFonts}
-                        // SLOT-DISABLED: onAutoConfigureSlots
-                        // SLOT-DISABLED: calculateOptimalSlots
                         setViewMode={setViewMode}
                         undo={undo}
                         redo={redo}

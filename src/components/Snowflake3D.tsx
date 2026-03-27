@@ -640,7 +640,6 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   // the bodyMode toggle effect and the mesh load effect without stale closures.
   // const launchBodiesWorkerRef = useRef<(() => void) | null>(null);
 
-  // ── ID Bodies worker DISABLED ────────────────────────────────────
   /*
   const runBodiesWorker = useCallback(() => {
     if (!meshGroupRef.current) return;
@@ -925,7 +924,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
         setTimeout(() => {
           applyAppearance();
           // If body mode is already on, re-run analysis against the new mesh
-          if (bodyMode) launchBodiesWorkerRef.current?.();
+          // if (bodyMode) launchBodiesWorkerRef.current?.();
         }, 50);
       } catch (err) {
         console.error('Snowflake3D: mesh gen failed', err);

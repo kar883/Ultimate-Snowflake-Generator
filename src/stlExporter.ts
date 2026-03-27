@@ -1,0 +1,265 @@
+import * as THREE from 'three';
+
+/**
+ * Simple STL Exporter for Three.js geometries
+ * Exports geometries to binary STL format
+ */
+export class STLExporter {
+  /**
+   * Parse a Three.js object (Group, Mesh, or Geometry) and return binary STL data
+   */
+  parse(object: THREE.Object3D | THREE.BufferGeometry, options?: { binary?: boolean }): ArrayBuffer {
+    const binary = options?.binary !== false;
+
+    let geometry: THREE.BufferGeometry | null = null;
+
+    if (object instanceof THREE.BufferGeometry) {
+      geometry = object;
+    } else if (object instanceof THREE.Mesh) {
+      geometry = object.geometry as THREE.BufferGeometry;
+    } else if (object instanceof THREE.Group) {
+      // Merge all meshes in the group
+      geometry = this.mergeGeometries(object);
+    }
+
+    if (!geometry) {
+      throw new Error('No valid geometry found to export');
+    }
+
+    return this.writeBinary(geometry);
+  }
+
+  /**
+   * Merge all geometries from a group into a single geometry
+   */
+  private mergeGeometries(group: THREE.Group): THREE.BufferGeometry {
+    const geometries: THREE.BufferGeometry[] = [];
+
+    group.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.geometry) {
+        geometries.push(child.geometry as THREE.BufferGeometry);
+      }
+    });
+
+    if (geometries.length === 0) {
+      throw new Error('No geometries found in group');
+    }
+
+    // Merge using BufferGeometry merge approach
+    const merged = new THREE.BufferGeometry();
+    const positions: number[] = [];
+    const indices: number[] = [];
+    let indexOffset = 0;
+
+    geometries.forEach((geom) => {
+      const pos = geom.getAttribute('position');
+      if (pos) {
+        for (let i = 0; i < pos.count; i++) {
+          positions.push(
+            pos.getX(i),
+            pos.getY(i),
+            pos.getZ(i)
+          );
+        }
+
+        if (geom.index) {
+          for (let i = 0; i < geom.index.count; i++) {
+            indices.push((geom.index.getX(i) as number) + indexOffset);
+          }
+        } else {
+          for (let i = 0; i < pos.count; i++) {
+            indices.push(i + indexOffset);
+          }
+        }
+
+        indexOffset += pos.count;
+      }
+    });
+
+    merged.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+    merged.setIndex(new THREE.BufferAttribute(new Uint32Array(indices), 1));
+
+    return merged;
+  }
+
+  /**
+   * Write geometry as ASCII STL
+   */
+  private writeASCII(geometry: THREE.BufferGeometry): string {
+    let output = 'solid geometry\n';
+
+    geometry.computeVertexNormals();
+
+    const position = geometry.getAttribute('position') as THREE.BufferAttribute;
+    const normal = geometry.getAttribute('normal') as THREE.BufferAttribute;
+    const index = geometry.getIndex();
+
+    if (index) {
+      // Indexed geometry
+      for (let i = 0; i < index.count; i += 3) {
+        const a = index.getX(i) as number;
+        const b = index.getX(i + 1) as number;
+        const c = index.getX(i + 2) as number;
+
+        const nx = normal ? normal.getX(a) : 0;
+        const ny = normal ? normal.getY(a) : 0;
+        const nz = normal ? normal.getZ(a) : 0;
+
+        output += this.writeFace(
+          position.getX(a) as number, position.getY(a) as number, position.getZ(a) as number,
+          position.getX(b) as number, position.getY(b) as number, position.getZ(b) as number,
+          position.getX(c) as number, position.getY(c) as number, position.getZ(c) as number,
+          nx, ny, nz
+        );
+      }
+    } else {
+      // Non-indexed geometry
+      for (let i = 0; i < position.count; i += 3) {
+        const nx = normal ? normal.getX(i) : 0;
+        const ny = normal ? normal.getY(i) : 0;
+        const nz = normal ? normal.getZ(i) : 0;
+
+        output += this.writeFace(
+          position.getX(i) as number, position.getY(i) as number, position.getZ(i) as number,
+          position.getX(i + 1) as number, position.getY(i + 1) as number, position.getZ(i + 1) as number,
+          position.getX(i + 2) as number, position.getY(i + 2) as number, position.getZ(i + 2) as number,
+          nx, ny, nz
+        );
+      }
+    }
+
+    output += 'endsolid geometry\n';
+
+    return output;
+  }
+
+  /**
+   * Write face to ASCII STL format
+   */
+  private writeFace(
+    x1: number, y1: number, z1: number,
+    x2: number, y2: number, z2: number,
+    x3: number, y3: number, z3: number,
+    nx: number, ny: number, nz: number
+  ): string {
+    let output = '';
+    output += `  facet normal ${nx} ${ny} ${nz}\n`;
+    output += '    outer loop\n';
+    output += `      vertex ${x1} ${y1} ${z1}\n`;
+    output += `      vertex ${x2} ${y2} ${z2}\n`;
+    output += `      vertex ${x3} ${y3} ${z3}\n`;
+    output += '    endloop\n';
+    output += '  endfacet\n';
+    return output;
+  }
+
+  /**
+   * Write geometry as binary STL
+   */
+  private writeBinary(geometry: THREE.BufferGeometry): ArrayBuffer {
+    geometry.computeVertexNormals();
+
+    const position = geometry.getAttribute('position') as THREE.BufferAttribute;
+    const index = geometry.getIndex();
+
+    let triangles = 0;
+
+    if (index) {
+      triangles = index.count / 3;
+    } else {
+      triangles = position.count / 3;
+    }
+
+    // Header: 80 bytes + triangle count: 4 bytes = 84 bytes total
+    const headerArrayBuffer = new ArrayBuffer(84);
+    const header = new Uint8Array(headerArrayBuffer);
+    const headerText = 'binary STL exported from Three.js';
+
+    for (let i = 0; i < headerText.length && i < 80; i++) {
+      header[i] = headerText.charCodeAt(i);
+    }
+
+    // Write triangle count at offset 80
+    const headerView = new DataView(headerArrayBuffer);
+    headerView.setUint32(80, triangles, true);
+
+    const triangleArrayBuffer = new ArrayBuffer(triangles * 50);
+    const triangleView = new DataView(triangleArrayBuffer);
+
+    let offset = 0;
+
+    const vx: number[] = [];
+    const vy: number[] = [];
+    const vz: number[] = [];
+
+    if (index) {
+      for (let i = 0; i < index.count; i++) {
+        const vertexIndex = index.getX(i) as number;
+        vx.push(position.getX(vertexIndex) as number);
+        vy.push(position.getY(vertexIndex) as number);
+        vz.push(position.getZ(vertexIndex) as number);
+      }
+    } else {
+      for (let i = 0; i < position.count; i++) {
+        vx.push(position.getX(i) as number);
+        vy.push(position.getY(i) as number);
+        vz.push(position.getZ(i) as number);
+      }
+    }
+
+    for (let i = 0; i < triangles; i++) {
+      const a = i * 3;
+      const b = i * 3 + 1;
+      const c = i * 3 + 2;
+
+      // Calculate normal
+      const nx = (vy[b] - vy[a]) * (vz[c] - vz[a]) - (vz[b] - vz[a]) * (vy[c] - vy[a]);
+      const ny = (vz[b] - vz[a]) * (vx[c] - vx[a]) - (vx[b] - vx[a]) * (vz[c] - vz[a]);
+      const nz = (vx[b] - vx[a]) * (vy[c] - vy[a]) - (vy[b] - vy[a]) * (vx[c] - vx[a]);
+
+      const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+      const nnx = len > 0 ? nx / len : 0;
+      const nny = len > 0 ? ny / len : 0;
+      const nnz = len > 0 ? nz / len : 0;
+
+      triangleView.setFloat32(offset, nnx, true);
+      offset += 4;
+      triangleView.setFloat32(offset, nny, true);
+      offset += 4;
+      triangleView.setFloat32(offset, nnz, true);
+      offset += 4;
+
+      triangleView.setFloat32(offset, vx[a], true);
+      offset += 4;
+      triangleView.setFloat32(offset, vy[a], true);
+      offset += 4;
+      triangleView.setFloat32(offset, vz[a], true);
+      offset += 4;
+
+      triangleView.setFloat32(offset, vx[b], true);
+      offset += 4;
+      triangleView.setFloat32(offset, vy[b], true);
+      offset += 4;
+      triangleView.setFloat32(offset, vz[b], true);
+      offset += 4;
+
+      triangleView.setFloat32(offset, vx[c], true);
+      offset += 4;
+      triangleView.setFloat32(offset, vy[c], true);
+      offset += 4;
+      triangleView.setFloat32(offset, vz[c], true);
+      offset += 4;
+
+      // Attribute byte count
+      triangleView.setUint16(offset, 0, true);
+      offset += 2;
+    }
+
+    const combinedArrayBuffer = new ArrayBuffer(headerArrayBuffer.byteLength + triangleArrayBuffer.byteLength);
+    const combinedView = new Uint8Array(combinedArrayBuffer);
+    combinedView.set(new Uint8Array(headerArrayBuffer), 0);
+    combinedView.set(new Uint8Array(triangleArrayBuffer), headerArrayBuffer.byteLength);
+
+    return combinedArrayBuffer;
+  }
+}

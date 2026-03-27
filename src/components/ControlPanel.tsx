@@ -874,8 +874,6 @@ interface ControlPanelProps {
   onFetchFont: (name: string) => Promise<boolean>;
   onFontUpload: (file: File) => void;
   dynamicFonts: Record<string, string>;
-  // SLOT-DISABLED: onAutoConfigureSlots: () => void;
-  // SLOT-DISABLED: calculateOptimalSlots: (layers: LayerConfig[]) => LayerConfig[];
   setViewMode: (mode: '2d' | '3d') => void;
   undo: () => void;
   redo: () => void;
@@ -906,8 +904,6 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   const [fontSearch, setFontSearch] = useState('');
   const [currentStats, setCurrentStats] = useState({ radius: 95, diameter: 190, activeGroupRadius: 95, activeGroupDiameter: 190 });
   const [radiusLocks, setRadiusLocks] = useState({ primary: { locked: true, target: 95 }, secondary: { locked: false, target: 20 } });
-  const [diameterMode, setDiameterMode] = useState<'auto-fit' | 'fixed-size'>('fixed-size');
-  
   const [showTooltips, setShowTooltips] = useState(true);
   
   const fontCache = useRef<Record<string, opentype.Font>>({});
@@ -975,10 +971,10 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   const updateGroupWithLock = useCallback(async (group: 'primary' | 'secondary', updates: Partial<TextGroupConfig>, commitTo3D: boolean = false) => {
     updateGroup(group, updates, commitTo3D);
 
-    // AUTO-FIT: after the group updates, rescale font size to maintain the locked outer radius.
-    // Only fires when diameterMode is 'auto-fit' AND the change is not itself a font-size change
+    // LOCKED: after group updates, rescale font size to maintain the locked outer radius.
+    // Only fires when lock is enabled and the change is not itself a font-size change
     // (to avoid infinite rescale loops).
-    if (diameterMode === 'auto-fit' && !('fontSize' in updates)) {
+    if (radiusLocks[group]?.locked && !('fontSize' in updates)) {
       const targetRad = radiusLocks[group]?.target ?? 95;
       const currentGroup = { ...activeLayer[group], ...updates };
       const safeTextX = isNaN(currentGroup.textX) ? 0 : currentGroup.textX;
@@ -993,7 +989,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
         });
       }
     }
-  }, [updateGroup, diameterMode, radiusLocks, activeLayer, getTextExtent]);
+  }, [updateGroup, radiusLocks, activeLayer, getTextExtent]);
 
   useEffect(() => {
       const calcStats = async () => {
@@ -1032,7 +1028,13 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
       return;
     }
     
-    setRadiusLocks(prev => ({ ...prev, [activeGroup]: { ...prev[activeGroup], target: targetRad } }));
+    setRadiusLocks(prev => ({
+      ...prev,
+      [activeGroup]: {
+        ...prev[activeGroup],
+        target: targetRad,
+      }
+    }));
     
     // Safety check for textX
     const safeTextX = isNaN(groupData.textX) || groupData.textX === null || groupData.textX === undefined ? 0 : groupData.textX;
@@ -1075,6 +1077,12 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
      }
   };
 
+  // const handleFontSizeChange = (newFontSize: number, commit: boolean) => {
+  //   // Font size changes should NEVER trigger radius locking rescaling
+  //   // This ensures the text gets bigger/smaller without affecting outer radius
+  //   updateGroup(activeGroup, { fontSize: newFontSize }, commit);
+  // };
+
   const handleLayerUpdate = (idx: number, updates: Partial<LayerConfig>, commitTo3D: boolean = false) => {
     // Only log layer updates in development mode and reduce frequency
     if (process.env.NODE_ENV === 'development' && Math.random() < 0.1) {
@@ -1087,7 +1095,6 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
     const isEnabled = updates.enabled !== undefined ? updates.enabled : wasEnabled;
     newLayers[idx] = { ...newLayers[idx], ...updates };
     
-    // SLOT-DISABLED: slot-mode auto-switch block removed
     
     // Only log after update in development mode and reduce frequency
     if (process.env.NODE_ENV === 'development' && Math.random() < 0.1) {
@@ -1431,7 +1438,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                 </div>
               </div>
               
-              {renderSlider(t('Font Size'), groupData.fontSize, 10, 200, 1, (v, c) => updateGroupWithLock(activeGroup, { fontSize: v }, c), "px", false, 34)}
+              {/* {renderSlider(t('Font Size'), groupData.fontSize, 10, 200, 1, (v, c) => updateGroupWithLock(activeGroup, { fontSize: v }, c), "px", false, 34)} */}
               
               <div className="space-y-4 pt-4 border-t border-white/5">
                  {renderSlider(t('Arms / Symmetry'), groupData.arms, 2, 24, 1, (v, c) => updateGroup(activeGroup, { arms: v }, c), "", false, 6)}
@@ -1453,25 +1460,28 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                        </div>
                        <div className="flex items-center gap-2">
                           <span className="text-[10px] font-black text-slate-500">(D: <span className="text-white">{currentStats.activeGroupDiameter.toFixed(1)}mm</span>)</span>
-                          <InfoTooltip label={t('Diameter Mode')} description={getDescription('Diameter Mode', t)} className="flex-shrink-0">
-                          <div className="grid grid-cols-2 gap-1 bg-slate-900 p-1 rounded-lg flex-shrink-0">
-                             {(['auto-fit', 'fixed-size'] as const).map(mode => (
-                                <button 
-                                   key={mode} 
-                                   onClick={() => {
-                                     setDiameterMode(mode);
-                                     // Switching TO auto-fit: immediately rescale to current target
-                                     if (mode === 'auto-fit') {
-                                       const targetRad = radiusLocks[activeGroup]?.target ?? 95;
-                                       handleArmRadiusChange(targetRad, true);
-                                     }
-                                   }}
-                                   className={`py-1 text-[8px] font-black uppercase rounded transition-all ${diameterMode === mode ? 'bg-sky-500 text-white' : 'text-slate-500'}`}
-                                >
-                                   {t(mode)}
-                                </button>
-                             ))}
-                          </div>
+                          <InfoTooltip label={t('Outer Radius Lock')} description={t('Lock toggled: when on, keep current outer radius constant while editing other parameters; when off, changes freely update size.')}
+                                       className="flex items-center gap-2">
+                            <button
+                              onClick={() => {
+                                setRadiusLocks(prev => {
+                                  const currentLocked = prev[activeGroup]?.locked || false;
+                                  const currentTarget = prev[activeGroup]?.target || currentStats.activeGroupRadius;
+                                  return {
+                                    ...prev,
+                                    [activeGroup]: {
+                                      ...prev[activeGroup],
+                                      locked: !currentLocked,
+                                      target: currentTarget,
+                                    },
+                                  };
+                                });
+                              }}
+                              className={`w-8 h-8 rounded-lg border border-white/20 flex items-center justify-center transition-all ${radiusLocks[activeGroup]?.locked ? 'bg-sky-500 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                              title={radiusLocks[activeGroup]?.locked ? t('Unlock outer radius') : t('Lock outer radius')}
+                            >
+                              {radiusLocks[activeGroup]?.locked ? '🔒' : '🔓'}
+                            </button>
                           </InfoTooltip>
                           <DeferredNumberInput value={currentArmRadius} min={10} max={500} step={0.1} onChange={(v, c) => handleArmRadiusChange(v, c)} suffix="mm" />
                        </div>
@@ -1488,8 +1498,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                     />
                  </div>
                  {renderSlider(t('Inner Radius'), groupData.textX, -100, 300, 0.1, (v, c) => handleGroupDistChange(v, c), "mm", false, activeGroup === 'primary' ? 20 : 10)}
-                 {renderSlider(t('Boldness'), groupData.thickness, -5, 10, 0.1, (v, c) => updateGroupWithLock(activeGroup, { thickness: v }, c), "mm", false, 0)}
-                 {renderSlider(t('Letter Spacing'), groupData.letterSpacing, -5, 20, 0.1, (v, c) => updateGroupWithLock(activeGroup, { letterSpacing: v }, c), "mm", false, 0)}
+                 {renderSlider(t('Boldness'), groupData.thickness, 0, 10, 0.1, (v, c) => updateGroup(activeGroup, { thickness: v }, c), "mm", false, 0)}
+                 {renderSlider(t('Letter Spacing'), groupData.letterSpacing, -5, 20, 0.1, (v, c) => updateGroup(activeGroup, { letterSpacing: v }, c), "mm", false, 0)}
                  {renderSlider(t('Manual Rotation'), groupData.rotationOffset, -180, 180, 1, (v, c) => updateGroup(activeGroup, { rotationOffset: v }, c), "°", false, activeGroup === 'primary' ? 0 : 30)}
               </div>
 
@@ -1542,7 +1552,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
 
           {activeTab === 'Letter Ctrl' && (
              <div className="space-y-4 animate-in fade-in duration-200">
-                {renderSlider(t('Font Size'), groupData.fontSize, 10, 200, 1, (v, c) => updateGroupWithLock(activeGroup, { fontSize: v }, c), "px", false, 34)}
+                {/* {renderSlider(t('Font Size'), groupData.fontSize, 10, 200, 1, (v, c) => updateGroupWithLock(activeGroup, { fontSize: v }, c), "px", false, 34)} */}
                 <div className="flex space-x-2 overflow-x-auto custom-scrollbar pb-2 h-11" 
                      style={{ 
                        display: 'flex', 
