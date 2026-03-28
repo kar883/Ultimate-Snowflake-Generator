@@ -1,20 +1,235 @@
-# Ultimate Snowflake Generator - Complete User Guide
+# Snowflake Generator - 3D Printing Design Tool
+
+Create custom 3D snowflake designs with text, geometric shapes, and patterns. **All models print flat, no supports needed, as a single connected piece.**
 
 ## Table of Contents
 
-1. [Installation & Setup](#installation--setup)
-2. [Getting Started](#getting-started)
-3. [Main Interface Overview](#main-interface-overview)
-4. [Global Settings Tab](#global-settings-tab)
-5. [Text Configuration Tab](#text-configuration-tab)
-6. [Letter Control Tab](#letter-control-tab)
-7. [Hubs Configuration Tab](#hubs-configuration-tab)
-8. [Abstract Patterns Tab](#abstract-patterns-tab)
-9. [Planes/Layers Tab](#planesLayers-tab)
-10. [Export & File Operations](#export--file-operations)
-11. [Keyboard Shortcuts](#keyboard-shortcuts)
-12. [Troubleshooting](#troubleshooting)
-13. [Tips & Best Practices](#tips--best-practices)
+1. [Installation](#installation) | 2. [Quick Start](#quick-start) | 3. [Global Tab](#global-tab) | 4. [Text Tab](#text-tab) | 5. [Letter Control Tab](#letter-control-tab) | 6. [Hubs Tab](#hubs-tab) | 7. [Abstract Tab](#abstract-tab) | 8. [Images Tab](#images-tab) | 9. [Export](#export) | 10. [Shortcuts](#shortcuts) | 11. [3D Printing Guide](#3d-printing-guide) | 12. [Troubleshooting](#troubleshooting)
+
+---
+
+## Installation
+
+**Installer:** `Snowflake Generator Setup 1.0.0.exe`  
+**Portable:** `Snowflake Generator 1.0.0.exe` (no installation needed)  
+**Archive:** `Snowflake Generator-1.0.0-win.zip`
+
+Download any format and run it.
+
+---
+
+## Quick Start
+
+1. Open app → Left side = controls (6 tabs), Right side = 3D preview
+2. Click & drag to rotate 3D view, scroll to zoom
+3. Modify the default design: Text tab → enter your text → see it instantly
+4. Add visual elements: Hubs tab, Abstract tab, Images tab
+5. Export: Ctrl+E → choose format → ready to 3D print
+
+---
+
+## Global Tab
+
+| Setting | Purpose | 3D Print Tip |
+|---------|---------|-------------|
+| **Project Name** | Filename for exports | Use clear names |
+| **Color** | Preview appearance only | Doesn't affect print |
+| **Extrusion Depth** | Model thickness (mm) | 2-3mm = thin but durable |
+| **Edge Profile** | Fillet (rounded) or Chamfer | Use Fillet for strength |
+| **Preview Quality** | Low/Med/High rendering | Use High for final export |
+
+**⚠️ CRITICAL:** All parts must connect to adjacent elements. Isolated floating parts will fail to print.
+
+---
+
+## Text Tab
+
+Add text that wraps around the snowflake arms.
+
+| Setting | Purpose | 3D Print Tip |
+|---------|---------|-------------|
+| **Text Input** | Words/letters to display | Text must touch hub/abstract |
+| **Font** | 50+ cursive fonts or .ttf/.otf upload | Simple fonts print better |
+| **Outer Radius** | Text spread distance (mm) | Adjust to control size |
+| **Letter Spacing** | Gap between letters (mm) | 1-2mm typical, prevent overlaps |
+| **Boldness** | Line thickness (mm) | **0.3-0.5mm minimum for 3D print** |
+| **Mirror** | Create symmetric second copy | Ensures balanced design |
+| **Underline** | Optional decorative line | Must connect to text |
+
+**Secondary Text:** Enable for inner text ring - must overlap or touch primary text.
+
+---
+
+## Letter Control Tab
+
+Adjust individual characters if they overlap or need repositioning.
+
+| Setting | Purpose |
+|---------|---------|
+| **Character Selector** | Pick which letter to edit |
+| **X / Y Offset** | Move selected character left/right/up/down |
+| **Rotation** | Rotate single character independently |
+| **Scale** | Make one letter bigger or smaller |
+
+---
+
+## Hubs Tab
+
+Geometric shapes at the snowflake center.
+
+| Setting | Purpose | 3D Print Tip |
+|---------|---------|-------------|
+| **Shape Type** | Circle, Polygon (3-12 sides), Star | Circle = easiest to print |
+| **Hub Radius** | Size of the hub (mm) | 5-15mm typical |
+| **Hollow** | Ring (yes) or filled (no) | Hollow looks elegant |
+| **Boldness** | Ring thickness when hollow | 0.3mm minimum for 3D |
+| **Oscillation** | Wavy edge effect | Adds organic look |
+| **Star Ratio** | Point sharpness | 0.5-0.6 for balance |
+
+Click "Add Hub" multiple times for nested geometric layers. Each hub must touch the next (no floating gaps).
+
+---
+
+## Abstract Tab
+
+Decorative patterns (waves, lines, or branching trees) on the arms.
+
+**Shapes** (Simple): Line, Sine wave, Zigzag
+- **Amplitude:** Wave height (mm)
+- **Frequency:** Number of waves
+- **Boldness:** Line thickness
+- **Mirror:** Create symmetric pair
+
+**Fractals** (Complex Branching):
+| Setting | Purpose | For 3D Print |
+|---------|---------|-------------|
+| **Branches Per Node** | How branches split | 2-3 typical |
+| **Recursion Depth** | Branching generations | 3-4 max (avoid slowdown) |
+| **Branch Length** | Size of branches | Scales down automatically |
+| **Length Decay** | Shrinking factor | 0.5-0.8 typical |
+| **Thickness** | Branch line width | 0.3mm minimum |
+
+**Critical:** All abstracts must connect to text or hubs - no isolated floating branches.
+
+---
+
+## Images Tab
+
+Import SVG images to use as repeating arm elements.
+
+| Setting | Purpose | 3D Print Tip |
+|---------|---------|-------------|
+| **Import SVG** | Upload .svg file | Must be solid paths |
+| **Scale** | 1.0 = 1 unit = 1mm | Adjust to fit |
+| **Inner Radius** | Distance from center (mm) | Must reach text/hubs |
+| **Y Offset** | Vertical shift | Align with arms |
+| **Mirror** | Symmetric placement | Both sides mirror |
+| **Rotation** | Angle of image | Orients on arms |
+
+Images repeat on all snowflake arms. Ensure image connects to text or hubs.
+
+---
+
+## Export
+
+**Save Project:** Ctrl+S → saves design settings as .json (instant reload later)
+
+**Export STL:** Ctrl+E → choose format → ready for 3D printer
+
+| Export Type | Use | Output |
+|-------------|-----|--------|
+| **Combined** | Single piece print | 1 .stl file |
+| **All Parts** | Multi-piece assembly | ZIP with multiple .stl |
+
+**Quality Setting (Global tab):** Use **High** for final prints.
+
+---
+
+## Shortcuts
+
+| Action | Shortcut |
+|--------|----------|
+| Undo | Ctrl + Z |
+| Redo | Ctrl + Shift + Z |
+| Save Project | Ctrl + S |
+| Load Project | Ctrl + L |
+| Export STL | Ctrl + E |
+| Force Regenerate | Ctrl + R |
+| **Tab Navigation** | Alt + 1 through 6 |
+| **3D Rotate** | Click & drag |
+| **3D Zoom** | Scroll wheel |
+| **3D Pan** | Right-click & drag |
+
+---
+
+## 3D Printing Guide
+
+### ⚠️ CRITICAL: Model Connectivity
+
+**Your model must have all parts touching each other to print as a single piece.**
+
+Before exporting, verify in the 3D preview:
+- ✓ Text connects to hub (or overlaps slightly)
+- ✓ Hub connects to abstract pattern  
+- ✓ Abstract touches text at outer edge
+- ✓ No floating/isolated elements
+
+If elements are separated:
+1. Reduce text "Outer Radius" to move text inward
+2. Increase hub "Radius" to extend it
+3. Adjust abstract "Inner Radius" so patterns overlap
+4. Increase "Boldness" values to bridge small gaps
+
+### For Successful Printing
+
+| Setting | Value | Why |
+|---------|-------|-----|
+| **Extrusion Depth** | 2-3mm | Thin but durable; no supports needed |
+| **Text Boldness** | 0.3-0.5mm minimum | Thinner = breaks during printing |
+| **Hub/Abstract Boldness** | 0.3mm+ | Too thin = fragile |
+| **Edge Profile** | Fillet (rounded) | Stronger than chamfered edges |
+| **Preview Quality** | High | Ensures detail in export |
+| **All parts** | Connected | Single piece = no assembly |
+
+### Print Flat, No Supports
+
+✓ Models lie flat (lying down horizontally)  
+✓ No overhanging elements - no supports needed  
+✓ 30-60 minute print time typical  
+✓ Minimal post-processing  
+✓ No assembly alignment needed  
+
+### Material Recommendations
+
+- **Resin (SLA/DLP):** Best detail preservation
+- **FDM (PLA/PETG):** Most accessible, use 0.4+ mm boldness
+- **SLS/Nylon:** Strongest results
+
+---
+
+## Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| **White/blank screen on startup** | Right-click .exe → Run as Administrator OR restart computer |
+| **Text not visible** | Check "Visible" in Letter Control tab; increase Outer Radius |
+| **Font won't load** | Try different font from list; custom fonts must be .ttf/.otf |
+| **Design updates slow** | Reduce Quality setting to Low/Med; simplify fractals |
+| **Gaps between elements** | Reduce text Outer Radius; increase hub Radius; check 3D preview |
+| **Export fails** | Reduce Quality; ensure at least one element visible; check disk space |
+
+---
+
+## Support
+
+**Issues:** [GitHub Issues](https://github.com/kar883/Ultimate-Snowflake-Generator/issues)  
+**Repository:** [Ultimate-Snowflake-Generator](https://github.com/kar883/Ultimate-Snowflake-Generator)
+
+---
+
+**Workflow:** Design → Preview → Test export (Low quality) → Final export (High quality) → 3D Print!
+
+All models print **flat without supports** as **single connected pieces**. ❄️
 
 ---
 
