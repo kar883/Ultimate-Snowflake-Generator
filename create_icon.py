@@ -1,0 +1,40 @@
+import struct
+import os
+
+# Create a minimal valid ICO file (1x1 pixel)
+ico_data = bytearray([
+    # ICO Header
+    0x00, 0x00,  # Reserved
+    0x01, 0x00,  # Type (1 = icon)
+    0x01, 0x00,  # Number of images
+    # Image Directory Entry
+    0x01,        # Width
+    0x01,        # Height
+    0x00,        # Color count
+    0x00,        # Reserved
+    0x01, 0x00,  # Color planes
+    0x20, 0x00,  # Bits per pixel (32)
+    0x30, 0x00, 0x00, 0x00,  # Size of image data
+    0x16, 0x00, 0x00, 0x00,  # Offset to image data
+    # BMP Image Data (1x1 32-bit RGBA)
+    0x28, 0x00, 0x00, 0x00,  # BMP header size
+    0x01, 0x00, 0x00, 0x00,  # Width
+    0x02, 0x00, 0x00, 0x00,  # Height (doubled for BMP format)
+    0x01, 0x00,              # Planes
+    0x20, 0x00,              # Bits per pixel
+    0x00, 0x00, 0x00, 0x00,  # Compression
+    0x08, 0x00, 0x00, 0x00,  # Image size
+    0x00, 0x00, 0x00, 0x00,  # X pixels per meter
+    0x00, 0x00, 0x00, 0x00,  # Y pixels per meter
+    0x00, 0x00, 0x00, 0x00,  # Colors used
+    0x00, 0x00, 0x00, 0x00,  # Important colors
+    # Pixel data (BGRA format: blue, green, red, alpha)
+    0xE2, 0x90, 0x4A, 0xFF,  # Pixel 1 (blue-ish)
+    0x00, 0x00, 0x00, 0x00,  # Pixel 2 (transparent)
+])
+
+os.makedirs("build", exist_ok=True)
+with open("build/icon.ico", "wb") as f:
+    f.write(ico_data)
+
+print("✓ Created build/icon.ico")
