@@ -21,7 +21,6 @@ function createWindow() {
       .catch(err => {
         console.error('Failed to load dist/index.html', err);
       });
-    win.webContents.openDevTools();
   }
 }
 
