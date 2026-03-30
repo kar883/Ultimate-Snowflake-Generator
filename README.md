@@ -243,7 +243,6 @@ All models print **flat without supports** as **single connected pieces**. ❄�
 The app supports multiple export formats:
 
 - **STL (3D Printing)**: Binary format for 3D printers
-- **ZIP (Multi-file)**: Bundle multiple STL files
 - **Project Save (JSON)**: Save your configuration for later editing
 - **Project Load (JSON)**: Reload previously saved designs
 
@@ -263,19 +262,6 @@ The app supports multiple export formats:
 - **Use when**: Printing everything as one solid piece
 - **Output**: Single `.stl` file
 - **Filename**: `[ProjectName].stl`
-- **Pros**: Single file to manage, monolithic print
-- **Cons**: Can't disassemble, larger print job
-
-#### Export Base Plane Only
-- **What it does**: Saves only the base layer (horizontal snowflake)
-- **Use when**: Just want the primary snowflake, no supports
-- **Output**: Single `.stl` file
-- **Filename**: `[ProjectName]_base.stl`
-
-#### Export Cross Plane Only
-- **What it does**: Saves only the vertical cross layer
-- **Use when**: Printing support structure separately
-- **Output**: Single `.stl` file
 
 ### Save Project (JSON)
 - **What it does**: Saves all your settings to a `.json` file
@@ -283,7 +269,7 @@ The app supports multiple export formats:
 - **How to use**:
   1. Click "Save Project" button
   2. Choose location and filename
-  3. File saves all configuration, text, fonts, layer setup
+  3. File saves all configuration, text, fonts, 
 - **Reloading**: Open saved file through "Load Project"
 - **File size**: Tiny (under 50KB), quick to save/load
 - **Shareable**: Can share `.json` files with others to recreate design
@@ -425,32 +411,8 @@ MySnowflake/
 **Solutions**:
 1. Click "Force Regenerate" (Ctrl + R)
 2. Wait 2-5 seconds for geometry to compute
-3. Check if layer is enabled (Planes tab)
-4. Zoom out to see full snowflake
-5. Refresh browser or restart application
-
-#### STL Export Won't Work
-
-**Problem**: Export button does nothing or throws error
-
-**Solutions**:
-1. Check at least one layer is enabled
-2. Verify project has text or mesh visible
-3. Reduce quality setting (Medium instead of High)
-4. Try exporting individual layer instead of combined
-5. Check disk space (need at least 100 MB free)
-
-#### Slot Cuts Not Appearing
-
-**Problem**: Enabled slots but no cuts visible in 3D
-
-**Solutions**:
-1. Ensure "Slot Enabled" is checked in Global tab
-2. Verify slot width matches material thickness
-3. Check "Slot Length" is reasonable (30+ mm)
-4. Ensure you have 2+ layers with different rotations
-5. Try "Force Regenerate" (Ctrl + R)
-6. Check slot mode is correct (2-plane or 3-plane)
+3. Zoom out to see full snowflake
+4. Refresh browser or restart application
 
 #### Performance Issues
 
@@ -497,12 +459,6 @@ MySnowflake/
 - **Star**: Bold, striking center piece
 - **Polygon**: Matches arm count (6-arm snowflake use 6-sided polygon)
 
-#### Creating Depth with Layers
-- **Layer 1 (Base)**: Main snowflake, boldest design
-- **Layer 2 (Cross)**: Similar but rotated 90°
-- **Layer 3 (Optional)**: Rotated 45° for added support
-- Make each layer slightly different for interesting assembly
-
 #### Font Selection
 - **Elegant**: Great Vibes, Tangerine (formal/sophisticated)
 - **Modern**: Pacifico, Fredoka (contemporary look)
@@ -516,40 +472,6 @@ MySnowflake/
 
 1. **Set Quality**: Use "High" for final prints
 2. **Test with Low**: Export "Low" first to preview structure
-3. **Check Tolerances**: 
-   - Text boldness: 0.3-0.5 mm minimum
-   - Slot width: Match material + 0.2-0.3 mm tolerance
-4. **Verify Layer Count**: Ensure right number of layers
-5. **Check Rotations**: Verify layers are correctly oriented
-
-#### Print Material Considerations
-
-**Resin Printing** (SLA/DLP):
-- Excellent for detail
-- Fine boldness OK (0.2 mm+)
-- Hollow hubs work well
-- Supports needed for overhangs
-
-**FDM Printing** (PLA/PETG):
-- Best with 0.4+ mm boldness
-- Solid hubs easier than hollow
-- Simpler slots easier to print
-- May need rotating layer supports
-
-**SLS/Nylon Printing**:
-- Excellent detail and strength
-- Good for thin features
-- Can do fine overhangs
-- Hollow hubs recommended
-
-#### Assembly Preparation
-
-If exporting multi-layer:
-1. Export all planes to ZIP
-2. Print each layer (note which is which)
-3. Check tolerances after first layer prints
-4. Adjust slot width if too tight/loose
-5. Use small file for test print before full-size
 
 ### Performance Optimization
 
@@ -589,14 +511,6 @@ If exporting multi-layer:
 2. Add Hexagon hub (radius 15 mm, hollow)
 3. Add Star hub (radius 25 mm, ratio 0.4)
 4. Result: Elaborate, professional center piece
-
-#### Layer Assembly Trick
-1. Layer 1: Modern sans-serif text
-2. Layer 2: Cursive secondary text (rotated 90°)
-3. Layer 3: Small hub decorations (rotated 45°)
-4. All print separately, assemble at different angles
-5. Creates visually complex final model
-
 ---
 
 ## Additional Resources
@@ -638,9 +552,7 @@ If exporting multi-layer:
 4. **Text**: Set your text and font in Text tab
 5. **Decorate**: Add hubs and patterns in respective tabs
 6. **Preview**: Rotate 3D model to see result
-7. **Layers**: Add cross/tilt layers in Planes tab
-8. **Test**: Export "Low" quality to preview
-9. **Print**: Export "High" quality STL for 3D printer
-10. **Assembly**: Follow slot cuts to assemble printed pieces
+7. **Test**: Export "Low" quality to preview
+8. **Print**: Export "High" quality STL for 3D printer
 
 **Happy snowflake creating!** 🎄❄️
