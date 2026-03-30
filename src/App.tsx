@@ -1275,6 +1275,38 @@ const App: React.FC = () => {
   const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d'); 
   const [dynamicFonts, setDynamicFonts] = useState<Record<string, string>>(FONT_TTF_URLS);
   
+  // Load fonts as CSS @font-face rules for dropdown display
+  useEffect(() => {
+    const style = document.createElement('style');
+    let cssText = '';
+    
+    CURSIVE_FONTS.forEach(font => {
+      const fontUrl = FONT_TTF_URLS[font.name];
+      if (fontUrl) {
+        // Add @font-face rule for each Google Font
+        cssText += `
+          @font-face {
+            font-family: '${font.family}';
+            src: url('${fontUrl}') format('truetype');
+            font-weight: normal;
+            font-style: normal;
+          }
+        `;
+      }
+    });
+    
+    if (cssText) {
+      style.textContent = cssText;
+      document.head.appendChild(style);
+    }
+    
+    return () => {
+      if (style.parentNode) {
+        style.parentNode.removeChild(style);
+      }
+    };
+  }, []);
+  
   const svgRef = useRef<SVGSVGElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const csgEvaluator = useRef(null); // No longer needed on main thread for cutting
