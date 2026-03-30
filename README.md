@@ -14,14 +14,12 @@ Create custom 3D snowflake designs with text, geometric shapes, and patterns. **
 Run `Snowflake Generator Setup 1.0.0.exe` - automatic installation to Program Files, creates Start Menu shortcuts
 
 **Option 2 - Portable (No Installation):**
-Download `Snowflake Generator-1.0.0-win.zip`, extract folder, run `Snowflake Generator 1.0.0.exe` directly - no installation needed
-
-**Option 3 - From Source (Developers):**
-```bash
-git clone https://github.com/kar883/Ultimate-Snowflake-Generator.git
-npm install
-npm run dev
-```
+1. Download `Snowflake Generator-1.0.0-win.zip`
+2. Extract the ZIP file to your desired location
+3. Navigate to the extracted folder → `dist-electron` subfolder
+4. Double-click `Snowflake Generator 1.0.0.exe` to launch
+   - No installation needed, runs directly from the folder
+   - Safe to copy folder elsewhere or to USB drive
 
 ---
 
