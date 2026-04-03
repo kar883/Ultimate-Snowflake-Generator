@@ -6,9 +6,24 @@ import opentype from 'opentype.js';
 import { InfoTooltip } from './Tooltip';
 import { modelCache2D, hashConfig } from '../geometryCache';
 import { useSvgRotationWorker } from '../hooks/useSvgRotationWorker';
+import { useTranslation } from '../translations';
+
+// Helper function to get translated description
+const getDescription = (key: string, t?: (key: string) => string): string => {
+  const DESCRIPTIONS: Record<string, string> = {
+    "Reset View": "Reset the 2D view to fit the content.",
+    "Undo": "Revert the last change made to the design.",
+    "Redo": "Re-apply a change that was undone.",
+  };
+  
+  if (!t) return DESCRIPTIONS[key] || key;
+  const translatedKey = `${key}_desc`;
+  const translated = t(translatedKey);
+  return translated !== translatedKey ? translated : (DESCRIPTIONS[key] || key);
+};
 
 interface SnowflakePreviewProps {
-  config: SnowflakeConfig; 
+  config: SnowflakeConfig;
   globalColor: string;
   globalBevel: boolean;
   globalBevelAmount: number;
@@ -34,9 +49,10 @@ const seededRandom = (seed: number) => {
   };
 };
 
-const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({ 
+const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   config, globalColor, globalBevel, globalBevelAmount, slotEnabled, slotLength, slotWidth, svgRef, dynamicFonts, undo, redo, canUndo, canRedo, calculatedDiameter, shortcuts
 }) => {
+  const { t } = useTranslation(config.language || 'en');
   // Use a ref for the font cache so loading a font never triggers an infinite
   // re-render loop (the old useState caused: load font → setFonts → effect re-fires
   // → tries to load font again → repeat).  A lightweight forceUpdate counter is
@@ -49,15 +65,15 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   const [containerSize, setContainerSize] = useState({ width: 800, height: 800 });
   const [cachedSvgContent, setCachedSvgContent] = useState<string | null>(null);
   const [isGeneratingSvg, setIsGeneratingSvg] = useState(false);
-  
+
   // SVG rotation worker disabled for performance - using simple CSS transform instead
   // const { rotatedPaths, isRotating, rotateSvg } = useSvgRotationWorker();
-  
+
   const modelDiameter = calculatedDiameter || 200;
 
   const isDragging = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
-  
+
   const hasUserInteracted = useRef(false);
 
   const enabledLayers = useMemo(() => config.layers.filter(l => l.enabled), [config.layers]);
@@ -70,17 +86,17 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
 
   const fitView = useCallback(() => {
     if (containerSize.width === 0 || containerSize.height === 0) return;
-    
+
     const count = enabledLayers.length;
     const effectiveCount = Math.max(1, count);
 
     const totalWidth = (Math.max(0, effectiveCount - 1) * layerSpacing) + Math.max(300, modelDiameter);
-    const totalHeight = Math.max(350, modelDiameter + 100); 
-    
+    const totalHeight = Math.max(350, modelDiameter + 100);
+
     const fitScaleX = (containerSize.width * 0.9) / totalWidth;
     const fitScaleY = (containerSize.height * 0.9) / totalHeight;
-    const newScale = Math.min(1.5, fitScaleX, fitScaleY); 
-    
+    const newScale = Math.min(1.5, fitScaleX, fitScaleY);
+
     setViewTransform(prev => {
         if (Math.abs(prev.scale - newScale) > 0.1 || Math.abs(prev.x) > 1 || Math.abs(prev.y) > 1) {
             return { x: 0, y: 0, scale: newScale };
@@ -100,7 +116,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
       const loadFontIfNeeded = (family: string) => {
         const name = family.replace(/'/g, '').split(',')[0].trim();
         // Skip if already loaded or currently loading
-        if (fontsRef.current[name]) return;
+        if (fontsRef.current[name] || (fontsRef.current as any)[`__loading_${name}`]) return;
         // Mark as in-flight with a sentinel so concurrent calls don't double-load
         (fontsRef.current as any)[`__loading_${name}`] = true;
         opentype.load(dynamicFonts[name] || FONT_TTF_URLS[name], (e, f) => {
@@ -134,7 +150,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
 
   const handleWheel = (e: React.WheelEvent) => {
     e.stopPropagation();
-    hasUserInteracted.current = true; 
+    hasUserInteracted.current = true;
     const scaleFactor = 1.1;
     const direction = e.deltaY > 0 ? 1 / scaleFactor : scaleFactor;
     setViewTransform(prev => ({ ...prev, scale: Math.max(0.1, Math.min(10, prev.scale * direction)) }));
@@ -147,7 +163,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!isDragging.current) return;
-    hasUserInteracted.current = true; 
+    hasUserInteracted.current = true;
     const dx = e.clientX - lastPos.current.x;
     const dy = e.clientY - lastPos.current.y;
     setViewTransform(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
@@ -183,8 +199,8 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
                  instances.push(<g key={`u-${i}`} transform={`rotate(${angle})`}><line x1={startX} y1={topY} x2={endX} y2={topY} stroke={color} strokeWidth={t} strokeLinecap="round" /><line x1={startX} y1={botY} x2={endX} y2={botY} stroke={color} strokeWidth={t} strokeLinecap="round" /></g>);
              } else {
                 let d = `M ${startX} ${topY} L ${endX} ${topY}`;
-                if (u.capType === 'square') { const cx = endX + u.capWidth; d += ` L ${cx} ${topY} L ${cx} ${botY} L ${endX} ${botY}`; } 
-                else if (u.capType === 'round') { const ry = Math.abs(topY - botY) / 2; const rx = u.capWidth; d += ` A ${rx} ${ry} 0 0 1 ${endX} ${botY}`; } 
+                if (u.capType === 'square') { const cx = endX + u.capWidth; d += ` L ${cx} ${topY} L ${cx} ${botY} L ${endX} ${botY}`; }
+                else if (u.capType === 'round') { const ry = Math.abs(topY - botY) / 2; const rx = u.capWidth; d += ` A ${rx} ${ry} 0 0 1 ${endX} ${botY}`; }
                 else if (u.capType === 'chevron') { const cx = endX + u.capWidth; d += ` L ${cx} 0 L ${endX} ${botY}`; }
                 d += ` L ${startX} ${botY}`;
                 instances.push(<g key={`u-${i}`} transform={`rotate(${angle})`}><path d={d} fill="none" stroke={color} strokeWidth={t} strokeLinecap="butt" strokeLinejoin="miter" /></g>);
@@ -196,33 +212,96 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
 
   const renderTextGroup = (group: TextGroupConfig, color: string) => {
     if (!group.enabled) return null;
+
     let textPaths = null;
+
     if (group.text) {
-        const fontName = group.fontFamily.replace(/'/g, '').split(',')[0].trim();
-        const font = fonts[fontName];
-        if (font) {
-            let d = "";
-            const scale = group.fontSize / font.unitsPerEm;
-            const glyphs = font.stringToGlyphs(group.text);
-            let currentX = 0;
-            glyphs.forEach((glyph, i) => {
-                const offset = group.charOffsets[i] || { x: 0, y: 0 };
-                const path = glyph.getPath(currentX + offset.x, offset.y, group.fontSize);
-                d += path.toPathData(2) + " ";
-                currentX += (glyph.advanceWidth * scale) + group.letterSpacing;
-            });
-            const angleStep = 360 / group.arms;
-            const instances = [];
-            for (let i = 0; i < group.arms; i++) {
-                const angle = i * angleStep + group.rotationOffset;
-                // Calculate total stroke weight (global + text group specific) to match 3D rendering
-                const strokeWidth = (config.globalStrokeWeight || 0) + (group.thickness || 0);
-                instances.push(<g key={`arm-${i}`} transform={`rotate(${angle}) translate(${group.textX}, ${group.mirrorOffset / 2})`}><path d={d} fill={color} stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" /></g>);
-                if (group.mirrorEnabled) { instances.push(<g key={`arm-mirror-${i}`} transform={`rotate(${angle}) translate(${group.textX}, ${-group.mirrorOffset / 2}) scale(1, -1)`}><path d={d} fill={color} stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" /></g>); }
+      const fontName = group.fontFamily.replace(/'/g, '').split(',')[0].trim();
+      const font = fonts[fontName];
+
+      const buildSvgInstances = (pathData: string | null, fallback = false) => {
+        const angleStep = 360 / group.arms;
+        const instances = [] as React.ReactNode[];
+        for (let i = 0; i < group.arms; i++) {
+          const angle = i * angleStep + group.rotationOffset;
+          const transform = `rotate(${angle}) translate(${group.textX}, ${group.mirrorOffset / 2}) ${fallback ? '' : ''}`;
+
+          if (fallback) {
+            instances.push(
+              <g key={`arm-fallback-${i}`} transform={transform}>
+                <text
+                  x={0}
+                  y={0}
+                  fill={color}
+                  stroke={color}
+                  strokeWidth={0.5}
+                  fontSize={group.fontSize}
+                  fontFamily={group.fontFamily}
+                  dominantBaseline="middle"
+                  textAnchor="start"
+                >
+                  {group.text}
+                </text>
+              </g>
+            );
+            if (group.mirrorEnabled) {
+              instances.push(
+                <g key={`arm-mirror-fallback-${i}`} transform={`rotate(${angle}) translate(${group.textX}, ${-group.mirrorOffset / 2}) scale(1, -1)`}>
+                  <text
+                    x={0}
+                    y={0}
+                    fill={color}
+                    stroke={color}
+                    strokeWidth={0.5}
+                    fontSize={group.fontSize}
+                    fontFamily={group.fontFamily}
+                    dominantBaseline="middle"
+                    textAnchor="start"
+                  >
+                    {group.text}
+                  </text>
+                </g>
+              );
             }
-            textPaths = <g>{instances}</g>;
+          } else if (pathData) {
+            const strokeWidth = Math.max(0.5, (config.globalStrokeWeight || 0) + (group.thickness || 0));
+            instances.push(
+              <g key={`arm-${i}`} transform={transform}>
+                <path d={pathData} fill={color} stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" />
+              </g>
+            );
+            if (group.mirrorEnabled) {
+              instances.push(
+                <g key={`arm-mirror-${i}`} transform={`rotate(${angle}) translate(${group.textX}, ${-group.mirrorOffset / 2}) scale(1, -1)`}>
+                  <path d={pathData} fill={color} stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" />
+                </g>
+              );
+            }
+          }
         }
+        return <g>{instances}</g>;
+      };
+
+      if (font) {
+        let d = '';
+        const scale = group.fontSize / font.unitsPerEm;
+        const glyphs = font.stringToGlyphs(group.text);
+        let currentX = 0;
+
+        glyphs.forEach((glyph, i) => {
+          const offset = group.charOffsets[i] || { x: 0, y: 0 };
+          const path = glyph.getPath(currentX + offset.x, offset.y, group.fontSize);
+          d += path.toPathData(2) + ' ';
+          currentX += (glyph.advanceWidth * scale) + group.letterSpacing;
+        });
+
+        textPaths = buildSvgInstances(d, false);
+      } else {
+        console.warn(`SnowflakePreview: font '${fontName}' not loaded yet, using fallback text rendering.`);
+        textPaths = buildSvgInstances(null, true);
+      }
     }
+
     return <g>{renderUnderline(group, color)}{textPaths}</g>;
   };
 
@@ -244,7 +323,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
         d += "Z";
         if (hub.hollow) {
             let holeD = "";
-            for (let i = finalSides; i >= 0; i--) { 
+            for (let i = finalSides; i >= 0; i--) {
                 const angle = (i / finalSides) * Math.PI * 2;
                 let r = hub.outerRadius - hub.wallThickness;
                 if (hub.shape === 'star') r = (i % 2 === 0) ? r : r * hub.starRatio;
@@ -261,9 +340,9 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
 
   const renderImages = useCallback((images: ImageConfig[], color: string) => {
     if (!images || images.length === 0) return null;
-    
+
     const enabledImages = images.filter(img => img.enabled && img.svgPaths.length > 0);
-    
+
     return enabledImages.map((img, idx) => {
       const angleStep = 360 / img.arms;
       const instances: React.ReactNode[] = [];
@@ -320,7 +399,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
           );
         }
       }
-      
+
       return (
         <g key={`img-${idx}`}>
           {instances}
@@ -381,7 +460,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
                   const endLeftX = endX + perpX * halfNW; const endLeftY = endY + perpY * halfNW;
                   const startLeftX = x + perpX * halfW; const startLeftY = y + perpY * halfW;
                   let d = `M ${startRightX} ${startRightY} L ${endRightX} ${endRightY}`;
-                  const isTip = (depth <= 1); 
+                  const isTip = (depth <= 1);
                   if (abs.roundedTips && isTip) { d += ` A ${halfNW} ${halfNW} 0 0 1 ${endLeftX} ${endLeftY}`; } else { d += ` L ${endLeftX} ${endLeftY}`; }
                   d += ` L ${startLeftX} ${startLeftY} Z`;
                   polygons.push(d);
@@ -389,7 +468,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
                   if (r > 0.05) { polygons.push(`M ${x - r} ${y} A ${r} ${r} 0 1 0 ${x + r} ${y} A ${r} ${r} 0 1 0 ${x - r} ${y} Z`); }
                   const rawBranchCount = abs.branchesPerNode || 2; const baseCount = Math.floor(rawBranchCount); const extraProb = rawBranchCount - baseCount;
                   const spread = (abs.branchAngle || 45) * Math.PI / 180;
-                  const nextLenBase = length * (decay); 
+                  const nextLenBase = length * (decay);
                   const isAlt = abs.branchPattern === 'alternating';
                   const count = isAlt ? 1 : (baseCount + (rng() < extraProb ? 1 : 0));
                   for(let i=0; i<count; i++) {
@@ -434,7 +513,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
           for(let i=0; i<=steps; i++) {
               const x = abs.innerRadius + (i/steps) * (abs.outerRadius - abs.innerRadius); const normX = x - abs.innerRadius; let y = 0;
               if (abs.type === 'sine') y = Math.sin(normX * abs.frequency) * abs.amplitude;
-              else if (abs.type === 'zigzag') { const period = (Math.PI * 2) / abs.frequency; const phase = (normX % period) / period; y = (phase < 0.5 ? phase * 4 - 1 : (1 - phase) * 4 - 1) * abs.amplitude; } 
+              else if (abs.type === 'zigzag') { const period = (Math.PI * 2) / abs.frequency; const phase = (normX % period) / period; y = (phase < 0.5 ? phase * 4 - 1 : (1 - phase) * 4 - 1) * abs.amplitude; }
               else if (abs.type === 'line') { y = 0; }
               points.push({x, y});
           }
@@ -460,7 +539,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
     const numPlanes = enabledLayers.length;
     const adjLength = slotLength + (layer.slotLengthAdjustment || 0);
     const adjWidth = slotWidth + (layer.slotWidthOffset || 0);
-    const visualExtension = (modelDiameter / 2) + 20; 
+    const visualExtension = (modelDiameter / 2) + 20;
     const drawLength = Math.max(adjLength, visualExtension);
     if (numPlanes === 2) {
       const angle = rotationOffset; const angleRad = angle * Math.PI / 180;
@@ -488,9 +567,10 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
 
   const centerX = containerSize.width / 2;
   const centerY = containerSize.height / 2;
+  const hasEnabledLayers = enabledLayers.length > 0;
 
   return (
-    <div 
+    <div
       className="relative w-full h-full bg-slate-900/40 overflow-hidden select-none"
       onWheel={handleWheel}
       onMouseDown={handleMouseDown}
@@ -509,6 +589,11 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
            <path d="M 100 0 L 0 0 0 100" fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="1"/>
         </pattern>
         <rect width="100%" height="100%" fill="url(#grid)" />
+        {!hasEnabledLayers && (
+          <text x="50%" y="50%" textAnchor="middle" fill="rgba(255,255,255,0.7)" fontSize="20" dominantBaseline="middle">
+            No 2D content enabled (enable layer or add elements)
+          </text>
+        )}
         <g transform={`translate(${centerX + viewTransform.x}, ${centerY + viewTransform.y}) scale(${viewTransform.scale})`}>
           {enabledLayers.map((layer, index) => {
             const offsetX = (index - (enabledLayers.length - 1) / 2) * layerSpacing;
@@ -534,7 +619,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
         </g>
       </svg>
       <div className="absolute bottom-8 right-8 z-20">
-         <InfoTooltip label="Reset View" placement="left" description="Reset the 2D view to fit the content.">
+         <InfoTooltip label={t('Reset View')} description={getDescription('Reset View', t)} placement="left">
              <button onClick={handleResetView} className="p-6 bg-slate-900/80 hover:bg-sky-500 text-white rounded-[2rem] border border-white/10 shadow-2xl backdrop-blur-xl transition-all active:scale-90 group">
                 <svg className="w-6 h-6 group-hover:scale-110 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>
              </button>
@@ -542,10 +627,10 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
       </div>
       <div className="absolute bottom-4 left-4 flex gap-2 items-center flex-col-reverse items-start">
         {(canUndo || canRedo) && (<div className="flex gap-2 mb-2">
-            <InfoTooltip label="Undo" shortcut={shortcuts?.undo}>
+            <InfoTooltip label={t('Undo')} description={getDescription('Undo', t)} shortcut={shortcuts?.undo}>
                 <button onClick={undo} disabled={!canUndo} className="p-2 bg-slate-800/80 rounded-lg text-white disabled:opacity-30 hover:bg-sky-500 transition-all shadow-lg border border-white/5"><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>
             </InfoTooltip>
-            <InfoTooltip label="Redo" shortcut={shortcuts?.redo}>
+            <InfoTooltip label={t('Redo')} description={getDescription('Redo', t)} shortcut={shortcuts?.redo}>
                 <button onClick={redo} disabled={!canRedo} className="p-2 bg-slate-800/80 rounded-lg text-white disabled:opacity-30 hover:bg-sky-500 transition-all shadow-lg border border-white/5"><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10h-10a8 8 0 00-8 8v2M21 10l-6 6m6-6l-6-6" /></svg></button>
             </InfoTooltip>
         </div>)}

@@ -7,7 +7,7 @@ export interface Translations {
   hubs: string;
   abstract: string;
   planes: string;
-  
+
   // Control labels
   'Project Name': string;
   'Model Color': string;
@@ -98,6 +98,7 @@ export interface Translations {
   'Rounded Tips': string;
   'Cut Slots': string;
   'Export STL': string;
+  'Mode': string;
   'Export All Planes': string;
   'Combined STL': string;
   'Zip All STLs': string;
@@ -150,12 +151,7 @@ export interface Translations {
   'star': string;
   'Chevron': string;
   'Outer Diameter': string;
-  'Visible_desc': string;
-  'Hidden_desc': string;
-  'Delete_desc': string;
-  'Delete Hub_desc': string;
-  'Reset View_desc': string;
-  
+
   // Descriptions
   'Project Name_desc': string;
   'Model Color_desc': string;
@@ -168,12 +164,76 @@ export interface Translations {
   'Reset on Shuffle_desc': string;
   'Tooltips_desc': string;
   'Language_desc': string;
-  
+  'Reset View_desc': string;
+  'Export_desc': string;
+  'Profile Shape_desc': string;
+  'Bevel Amount_desc': string;
+  'Fillet Detail_desc': string;
+  'Enable Half-Lap Slots_desc': string;
+  'Slot Length_desc': string;
+  'Slot Clearance_desc': string;
+  'Slot Mode_desc': string;
+  'Phrase Content_desc': string;
+  'Arms / Symmetry_desc': string;
+  'Outer Radius_desc': string;
+  'Radius Lock_desc': string;
+  'Inner Radius_desc': string;
+  'Letter Spacing_desc': string;
+  'Boldness_desc': string;
+  'Manual Rotation_desc': string;
+  'Offset X_desc': string;
+  'Offset Y_desc': string;
+  'Hub Shape_desc': string;
+  'Hub Radius_desc': string;
+  'Hub Boldness_desc': string;
+  'Shape Arms_desc': string;
+  'Frequency_desc': string;
+  'Amplitude_desc': string;
+  'Abstract Boldness_desc': string;
+  'Abstract Outer Radius_desc': string;
+  'Rot X_desc': string;
+  'Rot Y_desc': string;
+  'Sync All Planes_desc': string;
+  'Export STL_desc': string;
+  'Export All Planes_desc': string;
+  'Auto-Configure Assembly Slots_desc': string;
+  'Export Resolution_desc': string;
+  'Hub Sides_desc': string;
+  'Oscillation Enable_desc': string;
+  'Oscillation Amplitude_desc': string;
+  'Oscillation Frequency_desc': string;
+  'Hollow_desc': string;
+  'Visible_desc': string;
+  'Hidden_desc': string;
+  'Delete_desc': string;
+  'Delete Hub_desc': string;
+  'Mirror Effect_desc': string;
+  'Mirror Offset_desc': string;
+  'Star Ratio_desc': string;
+  'Rotation_desc': string;
+  'Undo_desc': string;
+  'Redo_desc': string;
+  'Auto Slots_desc': string;
+  'ZIP All_desc': string;
+  'Add Hub_desc': string;
+  'Add Abstract_desc': string;
+  'Font Search_desc': string;
+  'System Fonts_desc': string;
+  'Upload Font_desc': string;
+  'Layer Name_desc': string;
+  'Layer Visible_desc': string;
+  'Font Family_desc': string;
+  'Font Size_desc': string;
+  'Primary Group_desc': string;
+  'Secondary Group_desc': string;
+  'Fillet_desc': string;
+  'Chamfer_desc': string;
+
   // Quality levels
   low: string;
   med: string;
   high: string;
-  
+
   // Common UI
   reset: string;
   cancel: string;
@@ -184,7 +244,7 @@ export interface Translations {
   'Save Changes': string;
   'ON': string;
   'OFF': string;
-  
+
   // Shortcut actions
   switchToGlobalTab: string;
   switchToTextTab: string;
@@ -202,7 +262,7 @@ export interface Translations {
   loadProject: string;
   undo: string;
   redo: string;
-  
+
   // Languages
   'English': string;
   'Español': string;
@@ -210,7 +270,7 @@ export interface Translations {
   'Deutsch': string;
   '中文': string;
   '日本語': string;
-  
+
   // Layer names
   'Base Plane': string;
   'Cross Plane': string;
@@ -226,7 +286,7 @@ export const translations: Record<string, Translations> = {
     hubs: 'Hub',
     abstract: 'Abstract',
     planes: 'Planes',
-    
+
     // Control labels
     'Project Name': 'Project Name',
     'Model Color': 'Model Color',
@@ -375,7 +435,7 @@ export const translations: Record<string, Translations> = {
     '2D Formats': '2D Formats',
     'SVG Vector': 'SVG Vector',
     'DXF (CAD)': 'DXF (CAD)',
-    
+
     // Descriptions
     'Project Name_desc': 'The filename used when saving or exporting your design.',
     'Model Color_desc': 'The base color applied to the 3D mesh and 2D preview.',
@@ -388,12 +448,71 @@ export const translations: Record<string, Translations> = {
     'Reset on Shuffle_desc': 'Starts over from scratch and generates a completely new model.',
     'Tooltips_desc': 'Show helpful tooltips when hovering over controls.',
     'Language_desc': 'Select the interface language.',
-    
+    'Export_desc': 'Export the current design in the selected format.',
+    'Profile Shape_desc': 'Choose Fillet for rounded edges or Chamfer for flat, angled edges.',
+    'Bevel Amount_desc': 'The distance the bevel extends from the edges.',
+    'Fillet Detail_desc': 'How many segments are used to smooth the rounded edge. Higher means smoother curves.',
+    'Enable Half-Lap Slots_desc': 'Cuts slots into the planes so they can physically slide together (interlock).',
+    'Slot Length_desc': 'The depth of the cut-out slot.',
+    'Slot Clearance_desc': 'How wide the slot is. Usually set slightly larger than the thickness of the material.',
+    'Slot Mode_desc': 'Choose between 2-plane (90°) or 3-plane (120°) interlocking configurations.',
+    'Phrase Content_desc': 'The text used to generate the snowflake\'s symmetrical arms. Leave blank for AI to randomly choose a word.',
+    'Arms / Symmetry_desc': 'The number of times the text or shape repeats around the center.',
+    'Outer Radius_desc': 'The measurement from the origin point to the outer most edge of the model.',
+    'Radius Lock_desc': 'Forces the design to stay within your target size. When locked, changing fonts or spacing will move words inward or outward to maintain this exact size.',
+    'Inner Radius_desc': 'The distance between the center of the snowflake and the start of the text.',
+    'Letter Spacing_desc': 'Adjusts the space between individual characters. Negative values can make cursive letters overlap and fuse together.',
+    'Boldness_desc': 'Adds additional thickness to the font\'s lines.',
+    'Manual Rotation_desc': 'Rotates the entire group of text around the snowflake\'s center.',
+    'Offset X_desc': 'Moves the selected character horizontally within the text string.',
+    'Offset Y_desc': 'Moves the selected character vertically within the text string.',
+    'Hub Shape_desc': 'Changes the geometry of the central ring (Circle, Star, or Polygon).',
+    'Hub Radius_desc': 'The distance from the center to the edge of the hub ring.',
+    'Hub Boldness_desc': 'The thickness of the hub ring when \'Hollow\' is enabled.',
+    'Shape Arms_desc': 'Number of procedural arms for the abstract pattern.',
+    'Frequency_desc': 'How rapidly the wave pattern oscillates along its length.',
+    'Amplitude_desc': 'The height of the waves in the abstract pattern.',
+    'Abstract Boldness_desc': 'The line weight of the procedural abstract shape.',
+    'Abstract Outer Radius_desc': 'How far the abstract shape extends from the center.',
+    'Rot X_desc': '3D rotation around the X-axis for this specific plane.',
+    'Rot Y_desc': '3D rotation around the Y-axis for this specific plane.',
+    'Sync All Planes_desc': 'Applies Text and Design changes to all planes simultaneously.',
+    'Export STL_desc': 'Export the current 3D design as a combined single mesh body. Ideal for 3D printing.',
+    'Export All Planes_desc': 'Export each plane individually and package them into a single ZIP file.',
+    'Auto-Configure Assembly Slots_desc': 'Automatically calculate and cut interlocking slots for physical assembly.',
+    'Export Resolution_desc': 'Sets the detail level for the exported STL file.',
+    'Hub Sides_desc': 'The number of sides for the polygon hub or points for the star hub.',
+    'Oscillation Enable_desc': 'Toggles sine-wave deformation on the hub geometry. Only available for Circular hubs.',
+    'Oscillation Amplitude_desc': 'The height of the sine waves applied to the hub\'s radius.',
+    'Oscillation Frequency_desc': 'The number of wave peaks around the hub\'s circumference.',
+    'Hollow_desc': 'Toggles whether the hub shape is a solid filled shape or a ring.',
+    'Mirror Effect_desc': 'Reflects the text or shape to create perfect symmetry within each arm.',
+    'Mirror Offset_desc': 'The distance between the original shape and its mirrored copy.',
+    'Star Ratio_desc': 'Determines the sharpness of the star points. Lower values make thinner points.',
+    'Rotation_desc': 'Rotates the element around its own center or the group center.',
+    'Undo_desc': 'Revert the last change made to the design.',
+    'Redo_desc': 'Re-apply a change that was undone.',
+    'Auto Slots_desc': 'Automatically detects intersecting planes and configures slots for physical assembly.',
+    'ZIP All_desc': 'Bundles all individual plane STLs into a single downloadable ZIP file.',
+    'Add Hub_desc': 'Adds a new central geometric hub to the current plane.',
+    'Add Abstract_desc': 'Adds a new procedural abstract shape to the current plane.',
+    'Font Search_desc': 'Filter the available cursive fonts by name.',
+    'System Fonts_desc': 'Load a font installed on your local computer (Requires Chrome/Edge).',
+    'Upload Font_desc': 'Upload a .ttf or .otf file to use a custom font.',
+    'Layer Name_desc': 'Rename this plane for easier organization.',
+    'Layer Visible_desc': 'Toggle the visibility of this entire plane in the 3D model.',
+    'Font Family_desc': 'Select the typeface for the text.',
+    'Font Size_desc': 'Adjust the size of the text.',
+    'Primary Group_desc': 'Primary text group for the main content.',
+    'Secondary Group_desc': 'Secondary text group for additional content.',
+    'Fillet_desc': 'Rounded edge profile.',
+    'Chamfer_desc': 'Flat, angled edge profile.',
+
     // Quality levels
     low: 'Low',
     med: 'Med',
     high: 'High',
-    
+
     // Common UI
     reset: 'Reset',
     cancel: 'Cancel',
@@ -404,7 +523,7 @@ export const translations: Record<string, Translations> = {
     'Save Changes': 'Save Changes',
     'ON': 'ON',
     'OFF': 'OFF',
-    
+
     // Shortcut actions
     switchToGlobalTab: 'Switch to Global Tab',
     switchToTextTab: 'Switch to Text Tab',
@@ -422,7 +541,7 @@ export const translations: Record<string, Translations> = {
     loadProject: 'Load Project',
     undo: 'Undo',
     redo: 'Redo',
-    
+
     // Languages
     'English': 'English',
     'Español': 'Español',
@@ -430,13 +549,13 @@ export const translations: Record<string, Translations> = {
     'Deutsch': 'Deutsch',
     '中文': '中文',
     '日本語': '日本語',
-    
+
     // Layer names
     'Base Plane': 'Base Plane',
     'Cross Plane': 'Cross Plane',
     'Tilt Plane': 'Tilt Plane'
   },
-  
+
   es: {
     // Tab labels
     global: 'Global',
@@ -445,7 +564,7 @@ export const translations: Record<string, Translations> = {
     hubs: 'Centro',
     abstract: 'Abstracto',
     planes: 'Planos',
-    
+
     // Control labels
     'Project Name': 'Nombre del Proyecto',
     'Model Color': 'Color del Modelo',
@@ -594,7 +713,7 @@ export const translations: Record<string, Translations> = {
     '2D Formats': 'Formatos 2D',
     'SVG Vector': 'Vector SVG',
     'DXF (CAD)': 'DXF (CAD)',
-    
+
     // Descriptions
     'Project Name_desc': 'El nombre de archivo usado al guardar o exportar tu diseño.',
     'Model Color_desc': 'El color base aplicado al modelo 3D y vista previa 2D.',
@@ -607,12 +726,12 @@ export const translations: Record<string, Translations> = {
     'Reset on Shuffle_desc': 'Comienza desde cero y genera un modelo completamente nuevo.',
     'Tooltips_desc': 'Mostrar tooltips útiles al pasar el cursor sobre los controles.',
     'Language_desc': 'Seleccionar el idioma de la interfaz.',
-    
+
     // Quality levels
     low: 'Bajo',
     med: 'Med',
     high: 'Alto',
-    
+
     // Common UI
     reset: 'Reiniciar',
     cancel: 'Cancelar',
@@ -623,7 +742,7 @@ export const translations: Record<string, Translations> = {
     'Save Changes': 'Guardar Cambios',
     'ON': 'ENCENDIDO',
     'OFF': 'APAGADO',
-    
+
     // Shortcut actions
     switchToGlobalTab: 'Cambiar a Pestaña Global',
     switchToTextTab: 'Cambiar a Pestaña Texto',
@@ -641,7 +760,7 @@ export const translations: Record<string, Translations> = {
     loadProject: 'Cargar Proyecto',
     undo: 'Deshacer',
     redo: 'Rehacer',
-    
+
     // Languages
     'English': 'English',
     'Español': 'Español',
@@ -649,13 +768,13 @@ export const translations: Record<string, Translations> = {
     'Deutsch': 'Deutsch',
     '中文': '中文',
     '日本語': '日本語',
-    
+
     // Layer names
     'Base Plane': 'Plano Base',
     'Cross Plane': 'Plano Cruzado',
     'Tilt Plane': 'Plano Inclinado'
   },
-  
+
   fr: {
     // Tab labels
     global: 'Global',
@@ -664,7 +783,7 @@ export const translations: Record<string, Translations> = {
     hubs: 'Centre',
     abstract: 'Abstrait',
     planes: 'Plans',
-    
+
     // Control labels
     'Project Name': 'Nom du Projet',
     'Model Color': 'Couleur du Modèle',
@@ -813,7 +932,7 @@ export const translations: Record<string, Translations> = {
     '2D Formats': 'Formats 2D',
     'SVG Vector': 'Vecteur SVG',
     'DXF (CAD)': 'DXF (CAD)',
-    
+
     // Descriptions
     'Project Name_desc': 'Le nom de fichier utilisé lors de la sauvegarde ou exportation de votre design.',
     'Model Color_desc': 'La couleur de base appliquée au maillage 3D et à l\'aperçu 2D.',
@@ -826,12 +945,12 @@ export const translations: Record<string, Translations> = {
     'Reset on Shuffle_desc': 'Recommence à zéro et génère un modèle complètement nouveau.',
     'Tooltips_desc': 'Afficher des tooltips utiles en survolant les contrôles.',
     'Language_desc': 'Sélectionner la langue de l\'interface.',
-    
+
     // Quality levels
     low: 'Bas',
     med: 'Moyen',
     high: 'Élevé',
-    
+
     // Common UI
     reset: 'Réinitialiser',
     cancel: 'Annuler',
@@ -842,7 +961,7 @@ export const translations: Record<string, Translations> = {
     'Save Changes': 'Sauvegarder les Changements',
     'ON': 'MARCHE',
     'OFF': 'ARRÊT',
-    
+
     // Shortcut actions
     switchToGlobalTab: 'Basculer vers l\'Onglet Global',
     switchToTextTab: 'Basculer vers l\'Onglet Texte',
@@ -860,7 +979,7 @@ export const translations: Record<string, Translations> = {
     loadProject: 'Charger Projet',
     undo: 'Annuler',
     redo: 'Refaire',
-    
+
     // Languages
     'English': 'English',
     'Español': 'Español',
@@ -868,13 +987,13 @@ export const translations: Record<string, Translations> = {
     'Deutsch': 'Deutsch',
     '中文': '中文',
     '日本語': '日本語',
-    
+
     // Layer names
     'Base Plane': 'Plan de Base',
     'Cross Plane': 'Plan Croisé',
     'Tilt Plane': 'Plan Incliné'
   },
-  
+
   de: {
     // Tab labels
     global: 'Global',
@@ -883,7 +1002,7 @@ export const translations: Record<string, Translations> = {
     hubs: 'Mitte',
     abstract: 'Abstrakt',
     planes: 'Ebenen',
-    
+
     // Control labels
     'Project Name': 'Projektname',
     'Model Color': 'Modellfarbe',
@@ -1032,7 +1151,7 @@ export const translations: Record<string, Translations> = {
     '2D Formats': '2D-Formate',
     'SVG Vector': 'SVG-Vektor',
     'DXF (CAD)': 'DXF (CAD)',
-    
+
     // Descriptions
     'Project Name_desc': 'Der Dateiname beim Speichern oder Exportieren Ihres Designs.',
     'Model Color_desc': 'Die Grundfarbe auf das 3D-Modell und 2D-Vorschau angewendet.',
@@ -1045,12 +1164,12 @@ export const translations: Record<string, Translations> = {
     'Reset on Shuffle_desc': 'Startet von vorne und generiert ein völlig neues Modell.',
     'Tooltips_desc': 'Nützliche Tooltips beim Überfahren von Steuerelementen anzeigen.',
     'Language_desc': 'Oberflächensprache auswählen.',
-    
+
     // Quality levels
     low: 'Niedrig',
     med: 'Mittel',
     high: 'Hoch',
-    
+
     // Common UI
     reset: 'Zurücksetzen',
     cancel: 'Abbrechen',
@@ -1061,7 +1180,7 @@ export const translations: Record<string, Translations> = {
     'Save Changes': 'Änderungen speichern',
     'ON': 'EIN',
     'OFF': 'AUS',
-    
+
     // Shortcut actions
     switchToGlobalTab: 'Zu Global-Tab wechseln',
     switchToTextTab: 'Zu Text-Tab wechseln',
@@ -1079,7 +1198,7 @@ export const translations: Record<string, Translations> = {
     loadProject: 'Projekt laden',
     undo: 'Rückgängig',
     redo: 'Wiederherstellen',
-    
+
     // Languages
     'English': 'English',
     'Español': 'Español',
@@ -1087,13 +1206,13 @@ export const translations: Record<string, Translations> = {
     'Deutsch': 'Deutsch',
     '中文': '中文',
     '日本語': '日本語',
-    
+
     // Layer names
     'Base Plane': 'Basis-Ebene',
     'Cross Plane': 'Kreuz-Ebene',
     'Tilt Plane': 'Geneigte-Ebene'
   },
-  
+
   zh: {
     // Tab labels
     global: '全局',
@@ -1102,7 +1221,7 @@ export const translations: Record<string, Translations> = {
     hubs: '中心',
     abstract: '抽象',
     planes: '平面',
-    
+
     // Control labels
     'Project Name': '项目名称',
     'Model Color': '模型颜色',
@@ -1251,7 +1370,7 @@ export const translations: Record<string, Translations> = {
     '2D Formats': '2D格式',
     'SVG Vector': 'SVG矢量',
     'DXF (CAD)': 'DXF (CAD)',
-    
+
     // Descriptions
     'Project Name_desc': '保存或导出设计时使用的文件名。',
     'Model Color_desc': '应用于3D网格和2D预览的基础颜色。',
@@ -1264,12 +1383,12 @@ export const translations: Record<string, Translations> = {
     'Reset on Shuffle_desc': '从头开始生成一个全新的模型。',
     'Tooltips_desc': '悬停在控件上时显示有用的工具提示。',
     'Language_desc': '选择界面语言。',
-    
+
     // Quality levels
     low: '低',
     med: '中',
     high: '高',
-    
+
     // Common UI
     reset: '重置',
     cancel: '取消',
@@ -1280,7 +1399,7 @@ export const translations: Record<string, Translations> = {
     'Save Changes': '保存更改',
     'ON': '开',
     'OFF': '关',
-    
+
     // Shortcut actions
     switchToGlobalTab: '切换到全局标签页',
     switchToTextTab: '切换到文本标签页',
@@ -1298,7 +1417,7 @@ export const translations: Record<string, Translations> = {
     loadProject: '加载项目',
     undo: '撤销',
     redo: '重做',
-    
+
     // Languages
     'English': 'English',
     'Español': 'Español',
@@ -1306,13 +1425,13 @@ export const translations: Record<string, Translations> = {
     'Deutsch': 'Deutsch',
     '中文': '中文',
     '日本語': '日本語',
-    
+
     // Layer names
     'Base Plane': '基础平面',
     'Cross Plane': '交叉平面',
     'Tilt Plane': '倾斜平面'
   },
-  
+
   ja: {
     // Tab labels
     global: 'グローバル',
@@ -1321,7 +1440,7 @@ export const translations: Record<string, Translations> = {
     hubs: 'ハブ',
     abstract: '抽象',
     planes: '平面',
-    
+
     // Control labels
     'Project Name': 'プロジェクト名',
     'Model Color': 'モデルカラー',
@@ -1352,6 +1471,10 @@ export const translations: Record<string, Translations> = {
     'Radius Lock': '半径ロック',
     'Radius Locked': '半径がロックされています',
     'Radius Unlocked': '半径がロック解除されています',
+    'Export Layer': 'レイヤーをエクスポート',
+    '2D Formats': '2D形式',
+    'SVG Vector': 'SVGベクター',
+    'DXF (CAD)': 'DXF (CAD)',
     'Inner Radius': '内半径',
     'Outer Radius': '外半径',
     'Diameter Mode': '直径モード',
@@ -1466,7 +1589,7 @@ export const translations: Record<string, Translations> = {
     'Delete_desc': 'デザインからこの要素を削除します。',
     'Delete Hub_desc': '現在の平面からこのハブを削除します。',
     'Reset View_desc': 'ビューをリセットしてコンテンツに合わせます。',
-    
+
     // Descriptions
     'Project Name_desc': 'デザインを保存またはエクスポートする際に使用されるファイル名。',
     'Model Color_desc': '3Dメッシュと2Dプレビューに適用されるベースカラー。',
@@ -1479,12 +1602,12 @@ export const translations: Record<string, Translations> = {
     'Reset on Shuffle_desc': '最初から始めて完全に新しいモデルを生成します。',
     'Tooltips_desc': 'コントロールの上にカーソルを置いたときに役立つツールチップを表示します。',
     'Language_desc': 'インターフェース言語を選択します。',
-    
+
     // Quality levels
     low: '低',
     med: '中',
     high: '高',
-    
+
     // Common UI
     reset: 'リセット',
     cancel: 'キャンセル',
@@ -1495,7 +1618,7 @@ export const translations: Record<string, Translations> = {
     'Save Changes': '変更を保存',
     'ON': 'オン',
     'OFF': 'オフ',
-    
+
     // Shortcut actions
     switchToGlobalTab: 'グローバルタブに切り替え',
     switchToTextTab: 'テキストタブに切り替え',
@@ -1513,7 +1636,7 @@ export const translations: Record<string, Translations> = {
     loadProject: 'プロジェクトを読み込み',
     undo: '元に戻す',
     redo: 'やり直し',
-    
+
     // Languages
     'English': 'English',
     'Español': 'Español',
@@ -1521,7 +1644,7 @@ export const translations: Record<string, Translations> = {
     'Deutsch': 'Deutsch',
     '中文': '中文',
     '日本語': '日本語',
-    
+
     // Layer names
     'Base Plane': '基準平面',
     'Cross Plane': '交差平面',
@@ -1535,6 +1658,6 @@ export const useTranslation = (language: string) => {
     const lang = translations[language] || translations.en;
     return lang[key as keyof Translations] || key;
   };
-  
+
   return { t };
 };

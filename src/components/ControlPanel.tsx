@@ -9,9 +9,9 @@ import { clearGeometryCache } from '../geometryCache';
 import opentype from 'opentype.js';
 
 const Toggle: React.FC<{
-  label: string; 
-  checked: boolean; 
-  onChange: (checked: boolean) => void; 
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
   activeColor?: string;
   className?: string;
 }> = ({ label, checked, onChange, activeColor = "text-sky-400", className = "" }) => {
@@ -37,11 +37,11 @@ const Toggle: React.FC<{
           {label}
         </span>
       )}
-      <input 
-        type="checkbox" 
-        className="hidden" 
-        checked={localChecked} 
-        onChange={handleChange} 
+      <input
+        type="checkbox"
+        className="hidden"
+        checked={localChecked}
+        onChange={handleChange}
       />
     </label>
   );
@@ -57,14 +57,14 @@ const SlotModeToggle: React.FC<{
       {t('Mode')}:
     </span>
     <div className="flex bg-slate-900 p-1 rounded-lg gap-1">
-      <button 
-        onClick={() => onChange('2-plane')} 
+      <button
+        onClick={() => onChange('2-plane')}
         className={`px-3 py-1 text-[9px] font-black uppercase rounded ${mode === '2-plane' ? 'bg-sky-500 text-white' : 'text-slate-500'}`}
       >
         2-Plane
       </button>
-      <button 
-        onClick={() => onChange('3-plane')} 
+      <button
+        onClick={() => onChange('3-plane')}
         className={`px-3 py-1 text-[9px] font-black uppercase rounded ${mode === '3-plane' ? 'bg-sky-500 text-white' : 'text-slate-500'}`}
       >
         3-Plane
@@ -77,6 +77,8 @@ const DESCRIPTIONS: Record<string, string> = {
   "Project Name": "The filename used when saving or exporting your design.",
   "Model Color": "The base color applied to the 3D mesh and 2D preview.",
   "Edge Profile": "Adds rounded or slanted edges to the 3D model for a more realistic look.",
+  "Reset View": "Reset the 2D view to fit the content.",
+  "Export": "Export the current design in the selected format.",
   "Extrusion Depth": "The thickness of the snowflake planes in millimeters.",
   "Global Boldness": "Makes all text, abstracts, hubs, and underlines appear bolder. Higher values make them thicker. Note: 3D boldness may not work properly with all fonts - some complex or decorative fonts may not render correctly.",
   "Preview Resolution": "Controls the geometric detail of the 3D preview. Lower is faster, higher is smoother.",
@@ -229,7 +231,7 @@ interface ExportMenuProps {
   t?: (key: string) => string;
 }
 
-const ExportMenu: React.FC<ExportMenuProps> = ({ 
+const ExportMenu: React.FC<ExportMenuProps> = ({
   label, onExportSTL, onExport2D, isLoading, disabled, className, baseColor = "bg-sky-600", direction = 'up', show2D = false, shortcut, t
 }) => {
   const [quality, setQuality] = useState<DesignQuality>('med');
@@ -243,7 +245,7 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as Node;
       if (
-        containerRef.current && !containerRef.current.contains(target) && 
+        containerRef.current && !containerRef.current.contains(target) &&
         dropdownRef.current && !dropdownRef.current.contains(target)
       ) {
         setIsOpen(false);
@@ -286,8 +288,8 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
 
   return (
     <div ref={containerRef} className={`relative flex rounded-lg shadow-lg ${disabled ? 'opacity-50 pointer-events-none' : ''} ${className}`}>
-      <InfoTooltip label={label} description={`Export the current design. Currently set to ${formatLabel}.`} shortcut={shortcut} className="flex-1">
-        <button 
+      <InfoTooltip label={label} description={getDescription('Export', t)} shortcut={shortcut} className="flex-1">
+        <button
           onClick={handleMainClick}
           className={`w-full h-full px-3 py-1.5 rounded-l-lg text-[10px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 ${baseColor} hover:brightness-110 text-white`}
         >
@@ -299,7 +301,7 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
           )}
         </button>
       </InfoTooltip>
-      <button 
+      <button
         onClick={() => setIsOpen(!isOpen)}
         className={`px-2 rounded-r-lg flex items-center justify-center transition-all border-l border-black/10 ${baseColor} hover:brightness-110 text-white`}
       >
@@ -309,7 +311,7 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
       </button>
 
       {isOpen && createPortal(
-        <div 
+        <div
            ref={dropdownRef}
            className="fixed z-[9999] bg-slate-800 border border-white/10 rounded-lg shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 flex flex-col p-1.5 gap-1"
            style={{
@@ -365,7 +367,8 @@ const AiRandomizerMenu: React.FC<{
   progress: number;
   className?: string;
   t?: (key: string) => string;
-}> = ({ onGenerate, isLoading, progress, className, t }) => {
+  onOpenShortcutsModal?: (tab: 'shortcuts' | 'apikey' | 'aiscope', message?: string) => void;
+}> = ({ onGenerate, isLoading, progress, className, t, onOpenShortcutsModal }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [lastMode, setLastMode] = useState<'3d' | '2d' | 'fractal' | null>(null);
   const [resetOnRefresh, setResetOnRefresh] = useState(false);
@@ -470,7 +473,22 @@ const AiRandomizerMenu: React.FC<{
           className="fixed z-[9999] bg-slate-800 border border-white/10 rounded-lg shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 flex flex-col p-1 gap-0.5"
           style={{ top: position.top, left: position.left, width: Math.max(position.width, 190), transform: 'translateY(-100%) translateY(-4px)' }}
         >
-          <div className="px-2 py-1 text-[8px] font-black uppercase text-slate-500 tracking-wider">Select Generation Mode</div>
+          <div className="px-2 py-1 text-[8px] font-black uppercase text-slate-500 tracking-wider flex items-center justify-between">
+            <span>Select Generation Mode</span>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsOpen(false);
+                onOpenShortcutsModal?.('aiscope');
+              }}
+              className="p-0.5 hover:bg-white/10 rounded transition-colors"
+              title="AI Settings"
+            >
+              <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"/>
+              </svg>
+            </button>
+          </div>
           {([
             { mode: '3d' as const,      label: '3D Printing Safe',      sub: 'Contiguous, sturdy parts' },
             { mode: '2d' as const,      label: '2D / Laser',            sub: 'Aesthetic, may float' },
@@ -502,14 +520,14 @@ interface DeferredNumberInputProps {
 const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, max, step, onChange, className, disabled, suffix }) => {
   const decimals = step < 1 ? (step < 0.1 ? 2 : 1) : 0;
   const safeValue = typeof value === 'number' && !isNaN(value) ? value : (min || 0);
-  
+
   const [localValue, setLocalValue] = useState<string>(safeValue.toFixed(decimals));
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentValueRef = useRef(safeValue);
   const isDirty = useRef(false);
 
-  useEffect(() => { 
+  useEffect(() => {
     const safe = typeof value === 'number' && !isNaN(value) ? value : (min || 0);
     setLocalValue(safe.toFixed(decimals));
     currentValueRef.current = safe;
@@ -552,30 +570,30 @@ const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, m
           isDirty.current = false;
       }
       setLocalValue(clamped.toFixed(decimals));
-    } else { 
-      setLocalValue(value.toFixed(decimals)); 
+    } else {
+      setLocalValue(value.toFixed(decimals));
     }
   };
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => { 
-    setLocalValue(e.target.value); 
-    const parsed = parseFloat(e.target.value); 
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setLocalValue(e.target.value);
+    const parsed = parseFloat(e.target.value);
     if (!isNaN(parsed)) {
         isDirty.current = true;
-        onChange(Math.max(min, Math.min(max, parsed)), false); 
+        onChange(Math.max(min, Math.min(max, parsed)), false);
     }
   };
-  
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => { 
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
         commit();
         (e.target as HTMLInputElement).blur();
-    } else if (e.key === 'Escape') { 
-        setLocalValue(value.toFixed(decimals)); 
+    } else if (e.key === 'Escape') {
+        setLocalValue(value.toFixed(decimals));
         isDirty.current = false;
-    } 
+    }
   };
-  
+
   useEffect(() => {
       return () => {
           if (timeoutRef.current) clearTimeout(timeoutRef.current);
@@ -587,7 +605,7 @@ const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, m
   const largeStep = step * 10;
 
   return (
-    <div className={`relative flex items-center bg-slate-900 border border-white/10 rounded-lg h-6 w-28 overflow-hidden select-none ${className} ${disabled ? 'opacity-50 pointer-events-none' : ''}`} 
+    <div className={`relative flex items-center bg-slate-900 border border-white/10 rounded-lg h-6 w-28 overflow-hidden select-none ${className} ${disabled ? 'opacity-50 pointer-events-none' : ''}`}
          style={{
            position: 'relative',
            display: 'flex',
@@ -602,7 +620,7 @@ const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, m
            opacity: disabled ? 0.5 : 1,
            pointerEvents: disabled ? 'none' : 'auto'
          }}>
-      <div className="flex flex-col border-r border-white/10 h-full w-6 bg-slate-800/50" 
+      <div className="flex flex-col border-r border-white/10 h-full w-6 bg-slate-800/50"
            style={{
              display: 'flex',
              flexDirection: 'column',
@@ -611,11 +629,11 @@ const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, m
              width: '24px',
              backgroundColor: 'rgba(30,41,59,0.5)'
            }}>
-        <button 
-          className="flex-1 hover:bg-sky-500 hover:text-white text-slate-400 flex items-center justify-center transition-colors active:bg-sky-600" 
-          onMouseDown={() => startAdjust(largeStep)} 
-          onMouseUp={stopAdjust} 
-          onMouseLeave={stopAdjust} 
+        <button
+          className="flex-1 hover:bg-sky-500 hover:text-white text-slate-400 flex items-center justify-center transition-colors active:bg-sky-600"
+          onMouseDown={() => startAdjust(largeStep)}
+          onMouseUp={stopAdjust}
+          onMouseLeave={stopAdjust}
           tabIndex={-1}
           style={{
             flex: 1,
@@ -629,11 +647,11 @@ const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, m
         >
           <svg viewBox="0 0 24 24" width="8" height="8" fill="currentColor" style={{ width: '8px', height: '8px' }}><path d="M12 4l-8 8h16z"/></svg>
         </button>
-        <button 
-          className="flex-1 hover:bg-sky-500 hover:text-white text-slate-400 flex items-center justify-center transition-colors border-t border-white/5 active:bg-sky-600" 
-          onMouseDown={() => startAdjust(-largeStep)} 
-          onMouseUp={stopAdjust} 
-          onMouseLeave={stopAdjust} 
+        <button
+          className="flex-1 hover:bg-sky-500 hover:text-white text-slate-400 flex items-center justify-center transition-colors border-t border-white/5 active:bg-sky-600"
+          onMouseDown={() => startAdjust(-largeStep)}
+          onMouseUp={stopAdjust}
+          onMouseLeave={stopAdjust}
           tabIndex={-1}
           style={{
             flex: 1,
@@ -650,17 +668,17 @@ const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, m
         </button>
       </div>
       <div className="flex-1 relative h-full" style={{ flex: 1, position: 'relative', height: '100%' }}>
-        <input 
-          type="number" 
-          value={localValue} 
-          step={step} 
-          min={min} 
-          max={max} 
-          onChange={handleChange} 
-          onBlur={commit} 
-          onKeyDown={handleKeyDown} 
-          disabled={disabled} 
-          className="w-full h-full bg-transparent text-center text-[10px] font-black text-sky-400 focus:outline-none focus:bg-slate-800/50 px-1 appearance-none" 
+        <input
+          type="number"
+          value={localValue}
+          step={step}
+          min={min}
+          max={max}
+          onChange={handleChange}
+          onBlur={commit}
+          onKeyDown={handleKeyDown}
+          disabled={disabled}
+          className="w-full h-full bg-transparent text-center text-[10px] font-black text-sky-400 focus:outline-none focus:bg-slate-800/50 px-1 appearance-none"
           style={{
             width: '100%',
             height: '100%',
@@ -674,7 +692,7 @@ const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, m
             appearance: 'none'
           }}
         />
-        {suffix && <div className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none" 
+        {suffix && <div className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none"
                      style={{
                        position: 'absolute',
                        right: '4px',
@@ -682,7 +700,7 @@ const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, m
                        transform: 'translateY(-50%)',
                        pointerEvents: 'none'
                      }}>
-          <span className="text-[8px] font-black uppercase text-slate-600" 
+          <span className="text-[8px] font-black uppercase text-slate-600"
                 style={{
                   fontSize: '8px',
                   fontWeight: '900',
@@ -702,11 +720,11 @@ const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, m
              width: '24px',
              backgroundColor: 'rgba(30,41,59,0.5)'
            }}>
-        <button 
-          className="flex-1 hover:bg-sky-500 hover:text-white text-slate-400 flex items-center justify-center transition-colors active:bg-sky-600" 
-          onMouseDown={() => startAdjust(smallStep)} 
-          onMouseUp={stopAdjust} 
-          onMouseLeave={stopAdjust} 
+        <button
+          className="flex-1 hover:bg-sky-500 hover:text-white text-slate-400 flex items-center justify-center transition-colors active:bg-sky-600"
+          onMouseDown={() => startAdjust(smallStep)}
+          onMouseUp={stopAdjust}
+          onMouseLeave={stopAdjust}
           tabIndex={-1}
           style={{
             flex: 1,
@@ -720,11 +738,11 @@ const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, m
         >
           <svg viewBox="0 0 24 24" width="8" height="8" fill="currentColor" style={{ width: '8px', height: '8px' }}><path d="M12 4l-8 8h16z"/></svg>
         </button>
-        <button 
-          className="flex-1 hover:bg-sky-500 hover:text-white text-slate-400 flex items-center justify-center transition-colors border-t border-white/5 active:bg-sky-600" 
-          onMouseDown={() => startAdjust(-smallStep)} 
-          onMouseUp={stopAdjust} 
-          onMouseLeave={stopAdjust} 
+        <button
+          className="flex-1 hover:bg-sky-500 hover:text-white text-slate-400 flex items-center justify-center transition-colors border-t border-white/5 active:bg-sky-600"
+          onMouseDown={() => startAdjust(-smallStep)}
+          onMouseUp={stopAdjust}
+          onMouseLeave={stopAdjust}
           tabIndex={-1}
           style={{
             flex: 1,
@@ -750,7 +768,7 @@ interface DeferredTextInputProps {
   placeholder?: string;
   className?: string;
   defaultValue?: string;
-  label?: string; 
+  label?: string;
   t?: (key: string) => string; // Add translation function
 }
 
@@ -769,9 +787,9 @@ const DeferredTextInput: React.FC<DeferredTextInputProps> = ({ value, onChange, 
          <div className="flex justify-between items-center" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <InfoTooltip label={label} description={getDescription(label, t)} />
             {showRevert && (
-               <button 
-                 onClick={() => { onChange(defaultValue || '', true); setLocalValue(defaultValue || ''); }} 
-                 className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center" 
+               <button
+                 onClick={() => { onChange(defaultValue || '', true); setLocalValue(defaultValue || ''); }}
+                 className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center"
                  title={t('reset')}
                  style={{
                    width: '16px',
@@ -791,12 +809,12 @@ const DeferredTextInput: React.FC<DeferredTextInputProps> = ({ value, onChange, 
             )}
          </div>
       )}
-      <input 
-        type="text" 
-        value={localValue} 
-        onChange={handleChange} 
-        onBlur={commit} 
-        onKeyDown={handleKeyDown} 
+      <input
+        type="text"
+        value={localValue}
+        onChange={handleChange}
+        onBlur={commit}
+        onKeyDown={handleKeyDown}
         placeholder={placeholder}
         className={`w-full bg-slate-900 border border-white/10 rounded-lg px-3 text-xs font-black text-white placeholder-slate-600 focus:border-sky-500 focus:ring-1 focus:ring-sky-500 outline-none transition-all ${heightClass}`}
         style={{
@@ -824,9 +842,9 @@ const ControlRow: React.FC<{ label: string; children: React.ReactNode; onReset?:
             <div className="flex items-center" style={{ display: 'flex', alignItems: 'center' }}>
                 <InfoTooltip label={label} description={getDescription(label, t || ((k) => k))} />
                 {isModified && onReset && (
-                  <button 
-                    onClick={onReset} 
-                    className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" 
+                  <button
+                    onClick={onReset}
+                    className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1"
                     title={t ? t('reset') : 'Reset'}
                     style={{
                       width: '16px',
@@ -880,23 +898,26 @@ interface ControlPanelProps {
   canUndo: boolean;
   canRedo: boolean;
   shortcuts?: ShortcutConfig;
+  onUpdateShortcuts?: (config: ShortcutConfig) => void;
+  onResetShortcuts?: () => void;
+  onOpenShortcutsModal?: (tab: 'shortcuts' | 'apikey' | 'aiscope', message?: string) => void;
   activeTab: 'global' | 'text' | 'Letter Ctrl' | 'hubs' | 'abstract' | 'planes' | 'images';
   onTabChange: (tab: 'global' | 'text' | 'Letter Ctrl' | 'hubs' | 'abstract' | 'planes' | 'images') => void;
 }
 
-const ControlPanel: React.FC<ControlPanelProps> = ({ 
-  config, onUpdate, updateGroup, updateCharOffset, updateHubs, updateAbstracts, updateImages, onAiPolish, aiLoading, aiProgress, onExportSTL, onExportLayerSTL, onExportAllLayersZip, onExport2D, exportLoading, onFetchFont, onFontUpload, dynamicFonts, /* SLOT-DISABLED: onAutoConfigureSlots, calculateOptimalSlots, */ setViewMode, undo, redo, canUndo, canRedo, shortcuts, activeTab, onTabChange
+const ControlPanel: React.FC<ControlPanelProps> = ({
+  config, onUpdate, updateGroup, updateCharOffset, updateHubs, updateAbstracts, updateImages, onAiPolish, aiLoading, aiProgress, onExportSTL, onExportLayerSTL, onExportAllLayersZip, onExport2D, exportLoading, onFetchFont, onFontUpload, dynamicFonts, /* SLOT-DISABLED: onAutoConfigureSlots, calculateOptimalSlots, */ setViewMode, undo, redo, canUndo, canRedo, shortcuts, onUpdateShortcuts, onResetShortcuts, onOpenShortcutsModal, activeTab, onTabChange
 }) => {
   const { t } = useTranslation(config.language || 'en');
   const tabContentRef = useRef<HTMLDivElement>(null);
   const isInitialLoad = useRef(true);
-  
+
   useEffect(() => {
     isInitialLoad.current = false;
   }, []);
-  
+
   const [activeGroup, setActiveGroup] = useState<'primary' | 'secondary'>('primary');
-  
+
   const [selectedCharIndex, setSelectedCharIndex] = useState(0);
   const [selectedHubIndex, setSelectedHubIndex] = useState(0);
   const [selectedAbstractIndex, setSelectedAbstractIndex] = useState(0);
@@ -905,11 +926,11 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   const [currentStats, setCurrentStats] = useState({ radius: 95, diameter: 190, activeGroupRadius: 95, activeGroupDiameter: 190 });
   const [radiusLocks, setRadiusLocks] = useState({ primary: { locked: true, target: 95 }, secondary: { locked: false, target: 20 } });
   const [showTooltips, setShowTooltips] = useState(true);
-  
+
   const fontCache = useRef<Record<string, opentype.Font>>({});
 
   const activeLayer = config.layers[config.activeLayerIndex];
-  
+
   // Safe Guard against invalid activeLayerIndex
   if (!activeLayer) return null;
 
@@ -971,10 +992,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   const updateGroupWithLock = useCallback(async (group: 'primary' | 'secondary', updates: Partial<TextGroupConfig>, commitTo3D: boolean = false) => {
     updateGroup(group, updates, commitTo3D);
 
-    // LOCKED: after group updates, rescale font size to maintain the locked outer radius.
-    // Only fires when lock is enabled and the change is not itself a font-size change
-    // (to avoid infinite rescale loops).
-    if (radiusLocks[group]?.locked && !('fontSize' in updates)) {
+    // Don't rescale when font family is changing — font hasn't loaded yet
+    if (radiusLocks[group]?.locked && !('fontSize' in updates) && !('fontFamily' in updates)) {
       const targetRad = radiusLocks[group]?.target ?? 95;
       const currentGroup = { ...activeLayer[group], ...updates };
       const safeTextX = isNaN(currentGroup.textX) ? 0 : currentGroup.textX;
@@ -999,23 +1018,23 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
       activeLayer.abstracts.forEach(a => { if (a.enabled) maxRad = Math.max(maxRad, a.outerRadius + a.thickness / 2); });
       const pExtent = await getTextExtent(activeLayer.primary);
       const sExtent = await getTextExtent(activeLayer.secondary);
-      
+
       // Safety checks for extent calculations
       const safePExtent = isNaN(pExtent) || pExtent === null || pExtent === undefined ? 0 : pExtent;
       const safeSExtent = isNaN(sExtent) || sExtent === null || sExtent === undefined ? 0 : sExtent;
-      
+
       maxRad = Math.max(maxRad, activeLayer.primary.enabled ? activeLayer.primary.textX + safePExtent : 0, (activeLayer.secondaryEnabled && activeLayer.secondary.enabled) ? activeLayer.secondary.textX + safeSExtent : 0);
       const activeGroupExtent = await getTextExtent(activeLayer[activeGroup]);
-      
+
       // Safety check for active group extent
       const safeActiveGroupExtent = isNaN(activeGroupExtent) || activeGroupExtent === null || activeGroupExtent === undefined ? 0 : activeGroupExtent;
       const safeTextX = isNaN(activeLayer[activeGroup].textX) || activeLayer[activeGroup].textX === null || activeLayer[activeGroup].textX === undefined ? 0 : activeLayer[activeGroup].textX;
       const activeGroupRad = activeLayer[activeGroup].enabled ? safeTextX + safeActiveGroupExtent : 0;
-      
+
       // Safety check for final values
       const safeMaxRad = isNaN(maxRad) || maxRad === null || maxRad === undefined ? 0 : maxRad;
       const safeActiveGroupRad = isNaN(activeGroupRad) || activeGroupRad === null || activeGroupRad === undefined ? 0 : activeGroupRad;
-      
+
       setCurrentStats({ radius: safeMaxRad, diameter: safeMaxRad * 2, activeGroupRadius: safeActiveGroupRad, activeGroupDiameter: safeActiveGroupRad * 2 });
     };
     calcStats();
@@ -1027,7 +1046,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
       console.warn('handleArmRadiusChange called with invalid targetRad:', targetRad);
       return;
     }
-    
+
     setRadiusLocks(prev => ({
       ...prev,
       [activeGroup]: {
@@ -1035,12 +1054,12 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
         target: targetRad,
       }
     }));
-    
+
     // Safety check for textX
     const safeTextX = isNaN(groupData.textX) || groupData.textX === null || groupData.textX === undefined ? 0 : groupData.textX;
     const neededWidth = targetRad - safeTextX;
-    
-    if (neededWidth < 1) return; 
+
+    if (neededWidth < 1) return;
     getTextExtent(groupData).then(currentWidth => {
        if (currentWidth > 0.1) {
           const ratio = neededWidth / currentWidth;
@@ -1058,11 +1077,11 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
        console.warn('handleGroupDistChange called with invalid newTextX:', newTextX);
        return;
      }
-     
+
      if (currentLockState.locked) {
         const targetRadius = currentLockState.target;
         const neededWidth = targetRadius - newTextX;
-        if (neededWidth < 1) return; 
+        if (neededWidth < 1) return;
         getTextExtent(groupData).then(currentWidth => {
            if (currentWidth > 0.1) {
               const ratio = neededWidth / currentWidth;
@@ -1089,55 +1108,55 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
       console.log(`🔄 Layer toggle: idx=${idx}, updates=`, updates);
       console.log(`🔄 Before update:`, config.layers.map(l => ({name: l.name, enabled: l.enabled, id: l.id})));
     }
-    
+
     const newLayers = [...config.layers];
     const wasEnabled = newLayers[idx].enabled;
     const isEnabled = updates.enabled !== undefined ? updates.enabled : wasEnabled;
     newLayers[idx] = { ...newLayers[idx], ...updates };
-    
-    
+
+
     // Only log after update in development mode and reduce frequency
     if (process.env.NODE_ENV === 'development' && Math.random() < 0.1) {
       console.log(`🔄 After update:`, newLayers.map(l => ({name: l.name, enabled: l.enabled, id: l.id})));
     }
-    
+
     onUpdate({ layers: newLayers }, commitTo3D);
   };
 
   const updateAbstractConfig = (updates: Partial<AbstractConfig>, commitTo3D: boolean = false) => {
-    const newAbstracts = activeLayer.abstracts.map((abs, i) => 
+    const newAbstracts = activeLayer.abstracts.map((abs, i) =>
         i === selectedAbstractIndex ? { ...abs, ...updates } : abs
     );
     updateAbstracts(newAbstracts, commitTo3D);
   };
 
   const updateHubConfig = (updates: Partial<HubConfig>, commitTo3D: boolean = false) => {
-    const newHubs = activeLayer.hubs.map((hub, i) => 
+    const newHubs = activeLayer.hubs.map((hub, i) =>
         i === selectedHubIndex ? { ...hub, ...updates } : hub
     );
     updateHubs(newHubs, commitTo3D);
   };
 
   const renderSlider = (
-    label: string, 
-    value: number | undefined, 
-    min: number, 
-    max: number, 
-    step: number, 
-    onChange: (v: number, committed: boolean) => void, 
-    suffix: string = "", 
-    disabled = false, 
+    label: string,
+    value: number | undefined,
+    min: number,
+    max: number,
+    step: number,
+    onChange: (v: number, committed: boolean) => void,
+    suffix: string = "",
+    disabled = false,
     defaultValue?: number,
     extraLabel?: React.ReactNode
   ) => {
     const safeValue = typeof value === 'number' && !isNaN(value) ? value : (defaultValue ?? min);
     const showRevert = defaultValue !== undefined && Math.abs(safeValue - defaultValue) > 0.01;
-    
+
     return (
-      <div className={`space-y-2 ${disabled ? 'opacity-50 pointer-events-none' : ''}`} 
-           style={{ 
-             display: 'flex', 
-             flexDirection: 'column', 
+      <div className={`space-y-2 ${disabled ? 'opacity-50 pointer-events-none' : ''}`}
+           style={{
+             display: 'flex',
+             flexDirection: 'column',
              gap: '8px',
              opacity: disabled ? 0.5 : 1,
              pointerEvents: disabled ? 'none' : 'auto'
@@ -1147,9 +1166,9 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
             <InfoTooltip label={label} description={getDescription(label, t)} />
             {extraLabel}
             {showRevert && (
-              <button 
-                onClick={() => onChange(defaultValue!, true)} 
-                className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center ml-2" 
+              <button
+                onClick={() => onChange(defaultValue!, true)}
+                className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center ml-2"
                 title="Reset to Default"
                 style={{
                   width: '16px',
@@ -1173,15 +1192,15 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
           </div>
           <DeferredNumberInput value={safeValue} min={min} max={max} step={step} onChange={onChange} disabled={disabled} suffix={suffix} />
         </div>
-        <input 
-            type="range" 
-            min={min} 
-            max={max} 
-            step={step} 
-            value={safeValue} 
-            onChange={(e) => onChange(Math.max(min, Math.min(max, parseFloat(e.target.value))), false)} 
+        <input
+            type="range"
+            min={min}
+            max={max}
+            step={step}
+            value={safeValue}
+            onChange={(e) => onChange(Math.max(min, Math.min(max, parseFloat(e.target.value))), false)}
             onMouseUp={(e) => onChange(Math.max(min, Math.min(max, parseFloat((e.target as HTMLInputElement).value))), true)}
-            className="w-full h-1 bg-slate-800 rounded-lg accent-sky-500 cursor-pointer" 
+            className="w-full h-1 bg-slate-800 rounded-lg accent-sky-500 cursor-pointer"
             style={{
               width: '100%',
               height: '4px',
@@ -1197,14 +1216,19 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
     );
   };
 
-  const filteredFonts = CURSIVE_FONTS.filter(f => f.name.toLowerCase().includes(fontSearch.toLowerCase()));
+  const filteredFonts = [
+    ...CURSIVE_FONTS,
+    ...Object.keys(dynamicFonts)
+      .filter(name => !CURSIVE_FONTS.some(f => f.name === name))
+      .map(name => ({ name, family: name }))
+  ].filter(f => f.name.toLowerCase().includes(fontSearch.toLowerCase()));
   const currentArmRadius = currentStats.activeGroupRadius;
-  const TAB_LABELS: Record<string, string> = { 
-    'global': t('global'), 
-    'text': t('text'), 
-    'Letter Ctrl': t('Letter Ctrl'), 
-    'hubs': t('hubs'), 
-    'abstract': t('abstract'), 
+  const TAB_LABELS: Record<string, string> = {
+    'global': t('global'),
+    'text': t('text'),
+    'Letter Ctrl': t('Letter Ctrl'),
+    'hubs': t('hubs'),
+    'abstract': t('abstract'),
     'planes': t('planes'),
     'images': 'Images'
   };
@@ -1239,8 +1263,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                  const btnInactive = 'bg-slate-800 text-slate-400 border-white/10 hover:bg-slate-700 hover:text-white';
                  return (
                  <InfoTooltip key={tab} label={TAB_LABELS[tab]} shortcut={shortcuts?.[TAB_SHORTCUTS[tab]]} placement="bottom" className="h-full">
-                     <button 
-                       onClick={() => onTabChange(tab)} 
+                     <button
+                       onClick={() => onTabChange(tab)}
                        className={`${isActive ? btnActive : btnInactive} w-full`}
                        style={{
                          width: '100%',
@@ -1275,9 +1299,9 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                               <div className="flex items-center" style={{ display: 'flex', alignItems: 'center' }}>
                                   <InfoTooltip label={t('Model Color')} description={getDescription('Model Color', t)} />
                                   {config.color !== '#38bdf8' && (
-                                      <button 
-                                        onClick={() => onUpdate({ color: '#38bdf8' })} 
-                                        className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" 
+                                      <button
+                                        onClick={() => onUpdate({ color: '#38bdf8' })}
+                                        className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1"
                                         title={t('reset')}
                                         style={{
                                           width: '16px',
@@ -1299,11 +1323,11 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                               </div>
                           </div>
                       </div>
-                      <input 
-                        type="color" 
-                        value={config.color} 
-                        onChange={(e) => onUpdate({ color: e.target.value })} 
-                        className="w-full h-8 bg-slate-900 border border-white/10 rounded-lg cursor-pointer p-0.5" 
+                      <input
+                        type="color"
+                        value={config.color}
+                        onChange={(e) => onUpdate({ color: e.target.value })}
+                        className="w-full h-8 bg-slate-900 border border-white/10 rounded-lg cursor-pointer p-0.5"
                         style={{
                           width: '100%',
                           height: '32px',
@@ -1323,9 +1347,9 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                         {(['low', 'med', 'high'] as const).map(q => {
                           const isActive = config.quality === q;
                           return (
-                            <button 
-                              key={q} 
-                              onClick={() => onUpdate({ quality: q }, true)} 
+                            <button
+                              key={q}
+                              onClick={() => onUpdate({ quality: q }, true)}
                               className={`py-1 text-[9px] font-black uppercase rounded transition-all ${isActive ? 'bg-sky-500 text-white' : 'text-slate-500'}`}
                               style={{
                                 padding: '4px',
@@ -1368,11 +1392,11 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                </div>
              </div>
           )}
-          
+
           {(activeTab === 'text' || activeTab === 'Letter Ctrl') && (
              <div className="grid grid-cols-2 gap-2 mb-2">
                 <InfoTooltip label={t('Primary Group')} description={getDescription('Primary Group', t)} className="w-full">
-                <div 
+                <div
                   onClick={() => setActiveGroup('primary')}
                   className={`p-2 rounded-xl border transition-all cursor-pointer w-full ${activeGroup === 'primary' ? 'bg-slate-800/80 border-sky-500/50 shadow-lg shadow-sky-500/10' : 'bg-slate-900/50 border-white/5 hover:bg-slate-800/50'}`}
                 >
@@ -1387,7 +1411,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                 </div>
                 </InfoTooltip>
                 <InfoTooltip label={t('Secondary Group')} description={getDescription('Secondary Group', t)} className="w-full">
-                <div 
+                <div
                   onClick={() => setActiveGroup('secondary')}
                   className={`p-2 rounded-xl border transition-all cursor-pointer w-full ${activeGroup === 'secondary' ? 'bg-slate-800/80 border-sky-500/50 shadow-lg shadow-sky-500/10' : 'bg-slate-900/50 border-white/5 hover:bg-slate-800/50'}`}
                 >
@@ -1406,20 +1430,20 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
 
           {activeTab === 'text' && (
             <div className="space-y-0 animate-in fade-in duration-200">
-              <DeferredTextInput 
-                label={t('Phrase Content')} 
-                value={groupData.text} 
-                onChange={(v, c) => updateGroupWithLock(activeGroup, { text: v }, c)} 
-                placeholder={t('Leave blank for AI Randomizer to choose a word')} 
+              <DeferredTextInput
+                label={t('Phrase Content')}
+                value={groupData.text}
+                onChange={(v, c) => updateGroupWithLock(activeGroup, { text: v }, c)}
+                placeholder={t('Leave blank for AI Randomizer to choose a word')}
                 t={t}
-                defaultValue={activeGroup === 'primary' ? 'Snow' : ''} 
+                defaultValue={activeGroup === 'primary' ? 'Snow' : ''}
               />
-              
+
               <div className="space-y-1">
                 <div className="flex gap-2 h-9">
                   <InfoTooltip label={t('Font Search')} description={getDescription('Font Search', t)} className="flex-1 h-full"><input type="text" placeholder={t('Search Fonts...')} value={fontSearch} onChange={(e) => setFontSearch(e.target.value)} className="w-full h-full bg-slate-900 border border-white/10 rounded-lg px-3 text-xs font-bold text-white placeholder-slate-600 focus:border-sky-500 outline-none" /></InfoTooltip>
                   <InfoTooltip label={t('System Fonts')} description={getDescription('System Fonts', t)} className="h-full">
-                    <SystemFontButton 
+                    <SystemFontButton
                         onFontLoaded={(name, buffer) => { const blob = new Blob([buffer], { type: 'font/ttf' }); const file = new File([blob], name + ".ttf", { type: "font/ttf" }); onFontUpload(file); }}
                         className="h-full px-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:opacity-50 text-white text-[10px] font-black uppercase rounded-lg transition-all border border-white/10 flex items-center justify-center whitespace-nowrap"
                         compact={true}
@@ -1434,12 +1458,12 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                   </InfoTooltip>
                 </div>
                 <div className="grid grid-cols-2 gap-1 max-h-32 overflow-y-auto custom-scrollbar bg-slate-900 p-1 rounded-lg border border-white/5">
-                  {filteredFonts.map(font => (<button key={font.name} onClick={() => updateGroupWithLock(activeGroup, { fontFamily: font.name }, true)} className={`text-left px-2 py-1.5 rounded text-lg truncate transition-all ${groupData.fontFamily === font.name ? 'bg-sky-600 text-white' : 'text-slate-400 hover:bg-white/5'}`} style={{ fontFamily: font.family }}>{font.name}</button>))}
+                  {filteredFonts.map(font => (<button key={font.name} onClick={() => updateGroupWithLock(activeGroup, { fontFamily: font.family }, false)} className={`text-left px-2 py-1.5 rounded text-lg truncate transition-all ${groupData.fontFamily === font.family ? 'bg-sky-600 text-white' : 'text-slate-400 hover:bg-white/5'}`} style={{ fontFamily: font.family }}>{font.name}</button>))}
                 </div>
               </div>
-              
+
               {/* {renderSlider(t('Font Size'), groupData.fontSize, 10, 200, 1, (v, c) => updateGroupWithLock(activeGroup, { fontSize: v }, c), "px", false, 34)} */}
-              
+
               <div className="space-y-4 pt-4 border-t border-white/5">
                  {renderSlider(t('Arms / Symmetry'), groupData.arms, 2, 24, 1, (v, c) => updateGroup(activeGroup, { arms: v }, c), "", false, 6)}
                  <div className="space-y-2">
@@ -1447,9 +1471,9 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                        <div className="flex items-center">
                           <InfoTooltip label={t('Outer Radius')} description={getDescription('Outer Radius', t)} />
                           {currentArmRadius !== 95 && (
-                            <button 
-                              onClick={() => handleArmRadiusChange(95, true)} 
-                              className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" 
+                            <button
+                              onClick={() => handleArmRadiusChange(95, true)}
+                              className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1"
                               title={t('reset')}
                             >
                               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1486,15 +1510,15 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                           <DeferredNumberInput value={currentArmRadius} min={10} max={500} step={0.1} onChange={(v, c) => handleArmRadiusChange(v, c)} suffix="mm" />
                        </div>
                     </div>
-                    <input 
-                       type="range" 
-                       min={10} 
-                       max={500} 
-                       step={0.1} 
-                       value={currentArmRadius} 
-                       onChange={(e) => handleArmRadiusChange(parseFloat(e.target.value), false)} 
-                       onMouseUp={(e) => handleArmRadiusChange(parseFloat((e.target as HTMLInputElement).value), true)} 
-                       className="w-full h-1 bg-slate-800 rounded-lg accent-sky-500 cursor-pointer" 
+                    <input
+                       type="range"
+                       min={10}
+                       max={500}
+                       step={0.1}
+                       value={currentArmRadius}
+                       onChange={(e) => handleArmRadiusChange(parseFloat(e.target.value), false)}
+                       onMouseUp={(e) => handleArmRadiusChange(parseFloat((e.target as HTMLInputElement).value), true)}
+                       className="w-full h-1 bg-slate-800 rounded-lg accent-sky-500 cursor-pointer"
                     />
                  </div>
                  {renderSlider(t('Inner Radius'), groupData.textX, -100, 300, 0.1, (v, c) => handleGroupDistChange(v, c), "mm", false, activeGroup === 'primary' ? 20 : 10)}
@@ -1528,8 +1552,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                              <ControlRow label={t('Cap Style')} onReset={() => updateGroup(activeGroup, { underline: { ...groupData.underline, capType: 'none' } }, true)} isModified={groupData.underline.capType !== 'none'} t={t}>
                                  <div className="grid grid-cols-4 gap-1 bg-slate-900 p-1 rounded-lg">
                                      {(['none', 'square', 'round', 'chevron'] as const).map(cap => (
-                                         <button 
-                                            key={cap} 
+                                         <button
+                                            key={cap}
                                             onClick={() => updateGroup(activeGroup, { underline: { ...groupData.underline, capType: cap } }, true)}
                                             className={`py-1 text-[9px] font-black uppercase rounded transition-all ${groupData.underline.capType === cap ? 'bg-sky-600 text-white' : 'text-slate-500'}`}
                                          >
@@ -1553,18 +1577,18 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
           {activeTab === 'Letter Ctrl' && (
              <div className="space-y-4 animate-in fade-in duration-200">
                 {/* {renderSlider(t('Font Size'), groupData.fontSize, 10, 200, 1, (v, c) => updateGroupWithLock(activeGroup, { fontSize: v }, c), "px", false, 34)} */}
-                <div className="flex space-x-2 overflow-x-auto custom-scrollbar pb-2 h-11" 
-                     style={{ 
-                       display: 'flex', 
-                       gap: '8px', 
-                       overflowX: 'auto', 
-                       paddingBottom: '8px', 
-                       height: '44px' 
+                <div className="flex space-x-2 overflow-x-auto custom-scrollbar pb-2 h-11"
+                     style={{
+                       display: 'flex',
+                       gap: '8px',
+                       overflowX: 'auto',
+                       paddingBottom: '8px',
+                       height: '44px'
                      }}>
                     {groupData.text.split('').map((char, i) => (
-                      <button 
-                        key={i} 
-                        onClick={() => setSelectedCharIndex(i)} 
+                      <button
+                        key={i}
+                        onClick={() => setSelectedCharIndex(i)}
                         className={`min-w-[40px] h-9 rounded-lg text-lg font-bold border transition-all ${selectedCharIndex === i ? 'bg-sky-600 border-sky-500 text-white shadow-lg' : 'bg-slate-800 border-white/5 text-slate-400'}`}
                         style={{
                           minWidth: '40px',
@@ -1585,7 +1609,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                       </button>
                     ))}
                 </div>
-                <div className="bg-slate-800/30 p-3 rounded-xl border border-white/5 space-y-4" 
+                <div className="bg-slate-800/30 p-3 rounded-xl border border-white/5 space-y-4"
                      style={{
                        backgroundColor: 'rgba(30,41,59,0.3)',
                        padding: '12px',
@@ -1595,7 +1619,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                        flexDirection: 'column',
                        gap: '16px'
                      }}>
-                  <p className="text-[9px] font-black uppercase text-slate-500 border-b border-white/5 pb-2 mb-2" 
+                  <p className="text-[9px] font-black uppercase text-slate-500 border-b border-white/5 pb-2 mb-2"
                      style={{
                        fontSize: '9px',
                        fontWeight: '900',
@@ -1612,14 +1636,14 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                 </div>
              </div>
           )}
-          
+
           {activeTab === 'hubs' && (
              <div className="space-y-4 animate-in fade-in duration-200" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <div className="grid grid-cols-4 gap-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
                    {activeLayer.hubs.map((hub, i) => (
-                     <button 
-                       key={hub.id} 
-                       onClick={() => setSelectedHubIndex(i)} 
+                     <button
+                       key={hub.id}
+                       onClick={() => setSelectedHubIndex(i)}
                        className={`h-8 rounded-lg text-xs font-bold uppercase border transition-all ${selectedHubIndex === i ? 'bg-sky-600 border-sky-500 text-white' : 'bg-slate-800 border-white/5 text-slate-400'}`}
                        style={{
                          height: '32px',
@@ -1639,25 +1663,25 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                      </button>
                    ))}
                    <InfoTooltip label={t('Add Hub')} description={getDescription('Add Hub', t)}>
-                     <button 
-                       onClick={() => { 
-                         const newHub: HubConfig = { 
-                           id: `hub-${Date.now()}`, 
-                           enabled: true, 
-                           shape: 'circle', 
-                           sides: 6, 
-                           outerRadius: 20, 
-                           hollow: true, 
-                           wallThickness: 0.5, 
-                           starRatio: 0.5, 
-                           rotationOffset: 0, 
-                           oscillationEnabled: false, 
-                           oscillationAmplitude: 5, 
-                           oscillationFrequency: 6 
-                         }; 
-                         updateHubs([...activeLayer.hubs, newHub], false); 
-                         setSelectedHubIndex(activeLayer.hubs.length); 
-                       }} 
+                     <button
+                       onClick={() => {
+                         const newHub: HubConfig = {
+                           id: `hub-${Date.now()}`,
+                           enabled: true,
+                           shape: 'circle',
+                           sides: 6,
+                           outerRadius: 20,
+                           hollow: true,
+                           wallThickness: 0.5,
+                           starRatio: 0.5,
+                           rotationOffset: 0,
+                           oscillationEnabled: false,
+                           oscillationAmplitude: 5,
+                           oscillationFrequency: 6
+                         };
+                         updateHubs([...activeLayer.hubs, newHub], false);
+                         setSelectedHubIndex(activeLayer.hubs.length);
+                       }}
                        className="w-full h-8 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs font-bold uppercase transition-all hover:bg-emerald-500 hover:text-white"
                        style={{
                          width: '100%',
@@ -1679,21 +1703,21 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                 </div>
                 {activeLayer.hubs.length > 0 && activeLayer.hubs[selectedHubIndex] && (
                    <div className="space-y-5" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                     <div className="flex justify-between items-center border-b border-white/5 pb-2" 
-                          style={{ 
-                            display: 'flex', 
-                            justifyContent: 'space-between', 
-                            alignItems: 'center', 
-                            borderBottom: '1px solid rgba(255,255,255,0.05)', 
-                            paddingBottom: '8px' 
+                     <div className="flex justify-between items-center border-b border-white/5 pb-2"
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            borderBottom: '1px solid rgba(255,255,255,0.05)',
+                            paddingBottom: '8px'
                           }}>
-                          <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest" 
-                                style={{ 
-                                  fontSize: '10px', 
-                                  fontWeight: '900', 
-                                  color: '#64748b', 
-                                  textTransform: 'uppercase', 
-                                  letterSpacing: '0.1em' 
+                          <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest"
+                                style={{
+                                  fontSize: '10px',
+                                  fontWeight: '900',
+                                  color: '#64748b',
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.1em'
                                 }}>
                             {t('Hub Properties')}
                           </span>
@@ -1717,21 +1741,21 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                          <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-lg">{(['circle', 'polygon', 'star'] as const).map(s => (<InfoTooltip key={s} label={t(s)} description={getDescription(s, t)} className="flex-1"><button onClick={() => updateHubConfig({ shape: s }, true)} className={`w-full py-1 text-[9px] font-black uppercase rounded transition-all ${activeLayer.hubs[selectedHubIndex].shape === s ? 'bg-sky-600 text-white' : 'text-slate-500'}`}>{t(s)}</button></InfoTooltip>))}</div>
                      </ControlRow>
                      {renderSlider(
-                        t('Hub Radius'), 
-                        activeLayer.hubs[selectedHubIndex].outerRadius, 
-                        1, 
-                        200, 
-                        0.1, 
-                        (v, c) => updateHubConfig({ outerRadius: v }, c), 
-                        "mm", 
-                        false, 
+                        t('Hub Radius'),
+                        activeLayer.hubs[selectedHubIndex].outerRadius,
+                        1,
+                        200,
+                        0.1,
+                        (v, c) => updateHubConfig({ outerRadius: v }, c),
+                        "mm",
+                        false,
                         20,
                         <span className="text-[10px] font-black text-slate-500 ml-2">(D: <span className="text-white">{(activeLayer.hubs[selectedHubIndex].outerRadius * 2).toFixed(1)}mm</span>)</span>
                      )}
                      {activeLayer.hubs[selectedHubIndex].hollow && renderSlider(t('Boldness'), activeLayer.hubs[selectedHubIndex].wallThickness, 0.5, 20, 0.1, (v, c) => updateHubConfig({ wallThickness: v }, c), "mm", false, 0.5)}
                      {activeLayer.hubs[selectedHubIndex].shape !== 'circle' && renderSlider(t('Hub Sides'), activeLayer.hubs[selectedHubIndex].sides, 3, 24, 1, (v, c) => updateHubConfig({ sides: v }, c), "", false, 6)}
                      {activeLayer.hubs[selectedHubIndex].shape === 'star' && renderSlider(t('Star Ratio'), activeLayer.hubs[selectedHubIndex].starRatio, 0.1, 0.9, 0.05, (v, c) => updateHubConfig({ starRatio: v }, c), "", false, 0.5)}
-                     
+
                      {activeLayer.hubs[selectedHubIndex].shape === 'circle' ? (
                        <>
                           {renderSlider(t('Rotation'), activeLayer.hubs[selectedHubIndex].rotationOffset, -180, 180, 1, (v, c) => updateHubConfig({ rotationOffset: v }, c), "°", false, 0)}
@@ -1758,16 +1782,16 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
              <div className="space-y-4 animate-in fade-in duration-200">
                <div className="flex gap-2 mb-2">
                   <InfoTooltip label={t('Add Shape')} description={getDescription('Add Shape', t)} className="flex-1">
-                      <button 
-                          onClick={() => { const newAbs: AbstractConfig = { id: `abs-${Date.now()}`, enabled: true, type: 'sine', arms: 6, rotationOffset: 0, innerRadius: 20, outerRadius: 60, amplitude: 5, frequency: 0.4, thickness: 0.5, mirrorEnabled: true, mirrorOffset: 0 }; updateAbstracts([...activeLayer.abstracts, newAbs], false); setSelectedAbstractIndex(activeLayer.abstracts.length); }} 
+                      <button
+                          onClick={() => { const newAbs: AbstractConfig = { id: `abs-${Date.now()}`, enabled: true, type: 'sine', arms: 6, rotationOffset: 0, innerRadius: 20, outerRadius: 60, amplitude: 5, frequency: 0.4, thickness: 0.5, mirrorEnabled: true, mirrorOffset: 0 }; updateAbstracts([...activeLayer.abstracts, newAbs], false); setSelectedAbstractIndex(activeLayer.abstracts.length); }}
                           className="w-full h-8 rounded-lg bg-sky-500/10 text-sky-400 border border-sky-500/20 text-xs font-bold uppercase transition-all hover:bg-sky-500 hover:text-white"
                       >
                           {t('+ Shape')}
                       </button>
                   </InfoTooltip>
                   <InfoTooltip label={t('Add Fractal')} description={getDescription('Add Fractal', t)} className="flex-1">
-                      <button 
-                          onClick={() => { const newAbs: AbstractConfig = { id: `fract-${Date.now()}`, enabled: true, type: 'fractal', arms: 6, rotationOffset: 0, innerRadius: 20, outerRadius: 60, amplitude: 5, frequency: 0.4, thickness: 0.5, mirrorEnabled: false, mirrorOffset: 0, trunkLength: 20, branchesPerNode: 2, recursionDepth: 4, minBranchLength: 5, branchPattern: 'symmetric', branchAngle: 45, initialLength: 30, lengthDecay: 0.8, randomSeed: 1234, angleVariation: 0, lengthVariation: 0, thicknessDecay: 0.8 }; updateAbstracts([...activeLayer.abstracts, newAbs], false); setSelectedAbstractIndex(activeLayer.abstracts.length); }} 
+                      <button
+                          onClick={() => { const newAbs: AbstractConfig = { id: `fract-${Date.now()}`, enabled: true, type: 'fractal', arms: 6, rotationOffset: 0, innerRadius: 20, outerRadius: 60, amplitude: 5, frequency: 0.4, thickness: 0.5, mirrorEnabled: false, mirrorOffset: 0, trunkLength: 20, branchesPerNode: 2, recursionDepth: 4, minBranchLength: 5, branchPattern: 'symmetric', branchAngle: 45, initialLength: 30, lengthDecay: 0.8, randomSeed: 1234, angleVariation: 0, lengthVariation: 0, thicknessDecay: 0.8 }; updateAbstracts([...activeLayer.abstracts, newAbs], false); setSelectedAbstractIndex(activeLayer.abstracts.length); }}
                           className="w-full h-8 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs font-bold uppercase transition-all hover:bg-emerald-500 hover:text-white"
                       >
                           {t('+ Fractal')}
@@ -1779,14 +1803,14 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                  {activeLayer.abstracts.map((abs, i) => {
                     const isFractal = abs.type === 'fractal';
                     const isSelected = selectedAbstractIndex === i;
-                    const activeClass = isFractal 
-                        ? 'bg-emerald-600 border-emerald-500 text-white' 
+                    const activeClass = isFractal
+                        ? 'bg-emerald-600 border-emerald-500 text-white'
                         : 'bg-sky-600 border-sky-500 text-white';
-                    
+
                     return (
-                        <button 
-                            key={abs.id} 
-                            onClick={() => setSelectedAbstractIndex(i)} 
+                        <button
+                            key={abs.id}
+                            onClick={() => setSelectedAbstractIndex(i)}
                             className={`h-8 rounded-lg text-xs font-bold uppercase border transition-all ${isSelected ? activeClass : 'bg-slate-800 border-white/5 text-slate-400 hover:bg-slate-700'}`}
                         >
                             {isFractal ? `${t('Fractal')} ${i + 1}` : `${t('Shape')} ${i + 1}`}
@@ -1808,7 +1832,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                   <Toggle label="" checked={activeLayer.abstracts[selectedAbstractIndex].mirrorEnabled} onChange={(c) => updateAbstractConfig({ mirrorEnabled: c }, true)} />
                               </div>
                           </ControlRow>
-                          
+
                           {activeLayer.abstracts[selectedAbstractIndex].type === 'fractal' && (
                               <>
                                 <div className="w-px h-4 bg-white/10 mx-1"></div>
@@ -1830,7 +1854,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                             <InfoTooltip label={t('Delete')}><button onClick={() => { const newAbs = [...activeLayer.abstracts]; newAbs.splice(selectedAbstractIndex, 1); updateAbstracts(newAbs, true); setSelectedAbstractIndex(prev => Math.max(0, prev - 1)); }} className="text-[9px] font-black uppercase text-rose-400 hover:text-rose-300">{t('Delete')}</button></InfoTooltip>
                           </div>
                     </div>
-                    
+
                     {activeLayer.abstracts[selectedAbstractIndex].enabled && (
                       <>
                         {activeLayer.abstracts[selectedAbstractIndex].type !== 'fractal' && (
@@ -1844,19 +1868,19 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                         {renderSlider(activeLayer.abstracts[selectedAbstractIndex].type === 'fractal' ? t('Tree Arms') : t('Shape Arms'), activeLayer.abstracts[selectedAbstractIndex].arms, 1, 24, 1, (v, c) => updateAbstractConfig({ arms: v }, c), "", false, 6)}
                         {renderSlider(t('Inner Radius'), activeLayer.abstracts[selectedAbstractIndex].innerRadius, 0, 150, 0.1, (v, c) => updateAbstractConfig({ innerRadius: v }, c), "mm", false, 20)}
                         {renderSlider(
-                            t('Outer Radius'), 
-                            activeLayer.abstracts[selectedAbstractIndex].outerRadius, 
-                            10, 
-                            300, 
-                            0.1, 
-                            (v, c) => updateAbstractConfig({ outerRadius: v }, c), 
-                            "mm", 
-                            false, 
+                            t('Outer Radius'),
+                            activeLayer.abstracts[selectedAbstractIndex].outerRadius,
+                            10,
+                            300,
+                            0.1,
+                            (v, c) => updateAbstractConfig({ outerRadius: v }, c),
+                            "mm",
+                            false,
                             60,
                             <span className="text-[10px] font-black text-slate-500 ml-2">(D: <span className="text-white">{(activeLayer.abstracts[selectedAbstractIndex].outerRadius * 2).toFixed(1)}mm</span>)</span>
                         )}
                         {renderSlider(t('Boldness'), activeLayer.abstracts[selectedAbstractIndex].thickness, 0.5, 10, 0.1, (v, c) => updateAbstractConfig({ thickness: v }, c), "mm", false, 0.5)}
-                        
+
                         {activeLayer.abstracts[selectedAbstractIndex].type === 'fractal' && (
                             <div className="space-y-4 pt-2">
                                 <div className="space-y-2">
@@ -1868,7 +1892,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                     {renderSlider(t('Branches Per Node'), activeLayer.abstracts[selectedAbstractIndex].branchesPerNode ?? 2, 1, 12, 0.1, (v, c) => updateAbstractConfig({ branchesPerNode: v }, c), "", false, 2)}
                                     {renderSlider(t('Recursion Depth'), activeLayer.abstracts[selectedAbstractIndex].recursionDepth ?? 4, 1, 6, 1, (v, c) => updateAbstractConfig({ recursionDepth: v }, c), "", false, 4)}
                                     {renderSlider(t('Min Branch Length'), activeLayer.abstracts[selectedAbstractIndex].minBranchLength ?? 5, 1, 50, 1, (v, c) => updateAbstractConfig({ minBranchLength: v }, c), "mm", false, 5)}
-                                    
+
                                     <ControlRow label={t('Branch Pattern')} onReset={() => updateAbstractConfig({ branchPattern: 'symmetric' }, true)} isModified={activeLayer.abstracts[selectedAbstractIndex].branchPattern !== 'symmetric'} t={t}>
                                         <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-lg">
                                             {(['symmetric', 'alternating', 'random'] as const).map(p => (
@@ -1900,9 +1924,9 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                 {renderSlider(t('Frequency'), activeLayer.abstracts[selectedAbstractIndex].frequency, 0.01, 1, 0.01, (v, c) => updateAbstractConfig({ frequency: v }, c), "", false, 0.4)}
                             </>
                         )}
-                        
+
                         {renderSlider(t('Rotation'), activeLayer.abstracts[selectedAbstractIndex].rotationOffset, -180, 180, 1, (v, c) => updateAbstractConfig({ rotationOffset: v }, c), "°", false, 0)}
-                        
+
                         <div className="space-y-4 pt-4 border-t border-white/5">
                            {activeLayer.abstracts[selectedAbstractIndex].mirrorEnabled && renderSlider(t('Mirror Offset'), activeLayer.abstracts[selectedAbstractIndex].mirrorOffset, -200, 200, 0.1, (v, c) => updateAbstractConfig({ mirrorOffset: v }, c), "mm", false, 0)}
                         </div>
@@ -2127,17 +2151,17 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                       <div key={layer.id} className={`p-2 rounded-lg border transition-all ${config.activeLayerIndex === idx ? 'bg-sky-900/20 border-sky-500/30' : 'bg-slate-800/30 border-white/5'}`}>
                          <div className="flex items-center gap-2 w-full">
                             <InfoTooltip label={t('Active Plane Selector')} description={getDescription('Active Plane Selector', t)}>
-                              <input 
-                                type="radio" 
-                                checked={config.activeLayerIndex === idx} 
-                                onChange={() => onUpdate({ activeLayerIndex: idx })} 
-                                className="w-3 h-3 accent-sky-500 cursor-pointer shrink-0" 
+                              <input
+                                type="radio"
+                                checked={config.activeLayerIndex === idx}
+                                onChange={() => onUpdate({ activeLayerIndex: idx })}
+                                className="w-3 h-3 accent-sky-500 cursor-pointer shrink-0"
                               />
                             </InfoTooltip>
-                            <DeferredTextInput 
-                              value={layer.name} 
-                              onChange={(v) => handleLayerUpdate(idx, { name: v })} 
-                              className="w-28 h-7 text-[10px]" 
+                            <DeferredTextInput
+                              value={layer.name}
+                              onChange={(v) => handleLayerUpdate(idx, { name: v })}
+                              className="w-28 h-7 text-[10px]"
                               placeholder={t('Layer Name')}
                               t={t}
                             />
@@ -2147,13 +2171,13 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                     <div className={`w-7 h-4 rounded-full border transition-colors relative ${layer.enabled ? 'bg-emerald-600/20 border-emerald-500/50' : 'bg-slate-800 border-white/10'}`}>
                                       <div className={`absolute top-0.5 left-0.5 w-2 h-2 rounded-full transition-all ${layer.enabled ? `bg-emerald-400 translate-x-3` : 'bg-slate-500 translate-x-0'}`} />
                                     </div>
-                                    <input 
-                                      type="checkbox" 
-                                      className="hidden" 
-                                      checked={layer.enabled} 
+                                    <input
+                                      type="checkbox"
+                                      className="hidden"
+                                      checked={layer.enabled}
                                       onChange={(e) => {
                                         handleLayerUpdate(idx, { enabled: e.target.checked }, true);
-                                      }} 
+                                      }}
                                     />
                                   </label>
                                 </div>
@@ -2208,7 +2232,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
         <div className="p-2 bg-slate-900/80 border-t border-white/10 shrink-0 flex flex-col gap-2">
 
             {/* AI Randomizer section */}
-            <AiRandomizerMenu onGenerate={onAiPolish} isLoading={aiLoading} progress={aiProgress} className="w-full" t={t} />
+            <AiRandomizerMenu onGenerate={onAiPolish} isLoading={aiLoading} progress={aiProgress} className="w-full" t={t} onOpenShortcutsModal={onOpenShortcutsModal} />
 
             {/* Export button — full width, format + quality in dropdown */}
             <ExportMenu
