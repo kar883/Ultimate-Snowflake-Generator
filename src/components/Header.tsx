@@ -10,6 +10,7 @@ interface HeaderProps {
   canInstall?: boolean;
   onSaveConfig?: () => void;
   onLoadConfig?: () => void;
+  onResetSettings?: () => void;
   shortcuts?: ShortcutConfig;
   onUpdateShortcuts?: (config: ShortcutConfig) => void;
   onResetShortcuts?: () => void;
@@ -20,13 +21,14 @@ interface HeaderProps {
   onTooltipsChange?: (show: boolean) => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ 
-  projectName = "MySnowflake", 
-  onProjectNameChange, 
-  onInstall, 
-  canInstall, 
-  onSaveConfig, 
+const Header: React.FC<HeaderProps> = ({
+  projectName = "MySnowflake",
+  onProjectNameChange,
+  onInstall,
+  canInstall,
+  onSaveConfig,
   onLoadConfig,
+  onResetSettings,
   shortcuts,
   onUpdateShortcuts,
   onResetShortcuts,
@@ -79,11 +81,22 @@ const Header: React.FC<HeaderProps> = ({
             </div>
           </div>
         </div>
-        
+
         {/* Right Side: Inline Controls */}
         <div className="flex items-center gap-2">
+          {/* Reset Button */}
+          <button
+            onClick={onResetSettings}
+            className="w-9 h-9 flex items-center justify-center rounded-lg bg-orange-600/20 hover:bg-orange-600/30 text-orange-400 hover:text-orange-300 border border-orange-500/20 transition-all"
+            title="Reset all settings to defaults"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </button>
+
           {/* Settings Button */}
-          <button 
+          <button
             onClick={() => setShowSettings(true)}
             className="w-9 h-9 flex items-center justify-center rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white border border-white/5 transition-all"
             title="Settings & Shortcuts"
@@ -113,32 +126,32 @@ const Header: React.FC<HeaderProps> = ({
 
           {/* Buttons Group */}
           {canInstall && (
-            <button 
-              onClick={onInstall} 
+            <button
+              onClick={onInstall}
               className="h-9 px-4 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-[10px] font-black uppercase tracking-wider transition-all shadow-lg"
             >
               Install
             </button>
           )}
-          <button 
-            onClick={onSaveConfig} 
+          <button
+            onClick={onSaveConfig}
             className="h-9 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-[10px] font-black uppercase tracking-wider border border-white/5 transition-all"
           >
             Save
           </button>
-          <button 
-            onClick={onLoadConfig} 
+          <button
+            onClick={onLoadConfig}
             className="h-9 px-4 bg-slate-800 hover:bg-slate-700 text-sky-400 hover:text-sky-300 rounded-lg text-[10px] font-black uppercase tracking-wider border border-white/5 transition-all"
           >
             Load
           </button>
         </div>
       </div>
-      
+
       {shortcuts && onUpdateShortcuts && onResetShortcuts && (
-          <ShortcutsModal 
-            isOpen={showSettings} 
-            onClose={() => setShowSettings(false)} 
+          <ShortcutsModal
+            isOpen={showSettings}
+            onClose={() => setShowSettings(false)}
             config={shortcuts}
             onSave={onUpdateShortcuts}
             onReset={onResetShortcuts}

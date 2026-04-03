@@ -32,7 +32,7 @@ export interface AbstractConfig {
   thickness: number;
   mirrorEnabled: boolean;
   mirrorOffset: number;
-  
+
   // Fractal specific properties
   trunkLength?: number;
   branchesPerNode?: number;
@@ -169,6 +169,7 @@ export interface SnowflakeConfig {
   quality: DesignQuality;
   syncAllLayers: boolean;
   globalStrokeWeight: number;
+  freeFloatingCheck: boolean;
 }
 
 export interface FontOption {
@@ -195,6 +196,7 @@ export interface ShortcutConfig {
   exportTiltPlaneSTL: ShortcutDef;
   saveProject: ShortcutDef;
   loadProject: ShortcutDef;
+  resetSettings: ShortcutDef;
   switchToGlobalTab: ShortcutDef;
   switchToTextTab: ShortcutDef;
   switchToLetterCtrlTab: ShortcutDef;

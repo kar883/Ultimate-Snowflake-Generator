@@ -2,6 +2,7 @@ import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { SnowflakeConfig, TextGroupConfig, HubConfig, CharOffset, LayerConfig, AbstractConfig, DesignQuality, UnderlineConfig, ShortcutConfig, ImageConfig, createDefaultImage } from './types';
 import { CURSIVE_FONTS, FONT_TTF_URLS, BOLD_FONT_URLS, BOLD_FONT_THRESHOLD } from './constants';
 import { useFontPreloader } from './utils/fontPreloader';
+import { resetSettingsToDefaults, createDefaultLayer, createDefaultTextGroup } from './defaults';
 import ControlPanel from './components/ControlPanel';
 import SnowflakePreview from './components/SnowflakePreview';
 import Snowflake3D from './components/Snowflake3D';
@@ -27,18 +28,19 @@ const DEFAULT_SHORTCUTS: ShortcutConfig = {
     redo: { key: 'z', ctrlKey: true, shiftKey: true },
     toggleView: { key: '1', ctrlKey: true },
     forceRegenerate: { key: 'r', ctrlKey: true },
-    exportCombinedSTL: { key: 'e', ctrlKey: true },
+    exportCombinedSTL: { key: 's', ctrlKey: true, shiftKey: true },
+    exportBasePlaneSTL: { key: 's', ctrlKey: true, altKey: true },
+    exportCrossPlaneSTL: { key: 'x', ctrlKey: true, altKey: true },
+    exportTiltPlaneSTL: { key: 't', ctrlKey: true, altKey: true },
     saveProject: { key: 's', ctrlKey: true },
-    loadProject: { key: 'l', ctrlKey: true },
-    exportBasePlaneSTL: { key: 'a', ctrlKey: true },
-    exportCrossPlaneSTL: { key: 'd', ctrlKey: true },
-    exportTiltPlaneSTL: { key: 's', ctrlKey: true, shiftKey: true },
-    switchToGlobalTab: { key: '1', altKey: true },
-    switchToTextTab: { key: '2', altKey: true },
-    switchToLetterCtrlTab: { key: '3', altKey: true },
-    switchToHubsTab: { key: '4', altKey: true },
-    switchToAbstractTab: { key: '5', altKey: true },
-    switchToPlanesTab: { key: '6', altKey: true },
+    loadProject: { key: 'o', ctrlKey: true },
+    resetSettings: { key: 'r', ctrlKey: true, shiftKey: true },
+    switchToGlobalTab: { key: 'g', ctrlKey: true },
+    switchToTextTab: { key: 't', ctrlKey: true },
+    switchToLetterCtrlTab: { key: 'l', ctrlKey: true },
+    switchToHubsTab: { key: 'h', ctrlKey: true },
+    switchToAbstractTab: { key: 'a', ctrlKey: true },
+    switchToPlanesTab: { key: 'p', ctrlKey: true },
 };
 
 const useFontCache = (getPreloadedFont?: (fontName: string) => opentype.Font | null, isPreloadedFont?: (fontName: string) => boolean) => {
@@ -1163,38 +1165,6 @@ const seededRandom = (seed: number) => {
 //     });
 // };
 
-
-const createDefaultTextGroup = (text: string, rotation: number, fontSize: number, textX: number): TextGroupConfig => ({
-  enabled: true,
-  text,
-  fontFamily: CURSIVE_FONTS[0].family,
-  arms: 6,
-  textX,
-  letterSpacing: 0,
-  thickness: 0,
-  fontSize,
-  mirrorEnabled: true,
-  mirrorOffset: 0,
-  rotationOffset: rotation,
-  charOffsets: Array.from({ length: text.length }, () => ({ x: 0, y: 0 })),
-  underline: { enabled: false, thickness: 1.5, startXOffset: 0, length: 50, yOffset: -5, capType: 'none', capWidth: 10 }
-});
-
-const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isEnabled = false): LayerConfig => ({
-  id,
-  name,
-  enabled: isEnabled,
-  rotation3D: { x: rx, y: ry, z: 0 },
-  primary: createDefaultTextGroup("Snow", 0, 36.7, 20),
-  secondary: createDefaultTextGroup("", 30, 20, 10),
-  secondaryEnabled: true,
-  abstracts: [],
-  hubs: [],
-  slotType: 'none',
-  slotLengthAdjustment: 0,
-  slotWidthOffset: 0,
-  images: [],
-});
 
 // // ============================================================
 // // REPLACE calculateOptimalSlots in App.tsx
@@ -2841,6 +2811,16 @@ const App: React.FC = () => {
     fileInputRef.current?.click();
   };
 
+  const handleResetSettings = () => {
+    const resetConfig = resetSettingsToDefaults(config);
+    setConfig(resetConfig);
+    setConfig3D(resetConfig);
+    setRendered3DIfChanged(resetConfig);
+    setHistory([resetConfig]);
+    setHistoryIndex(0);
+    showNotification('All settings reset to defaults!', 'success');
+  };
+
   const handleFileLoad = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -3595,6 +3575,7 @@ const App: React.FC = () => {
     exportTiltPlaneSTL: () => handleExportLayerSTL(2),
     saveProject: handleSaveProject,
     loadProject: handleLoadProject,
+    resetSettings: handleResetSettings,
     switchToGlobalTab: () => setActiveTab('global'),
     switchToTextTab: () => setActiveTab('text'),
     switchToLetterCtrlTab: () => setActiveTab('Letter Ctrl'),
@@ -3621,6 +3602,7 @@ const App: React.FC = () => {
                             onProjectNameChange={(n) => handleUpdateConfig({ projectName: n })}
                             onSaveConfig={handleSaveProject}
                             onLoadConfig={handleLoadProject}
+                            onResetSettings={handleResetSettings}
                             shortcuts={shortcuts}
                             onUpdateShortcuts={(s) => setShortcuts(s)}
                             onResetShortcuts={() => setShortcuts(DEFAULT_SHORTCUTS)}
