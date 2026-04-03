@@ -7,7 +7,6 @@ import SnowflakePreview from './components/SnowflakePreview';
 import Snowflake3D from './components/Snowflake3D';
 import Header from './components/Header';
 import ShortcutsModal from './components/ShortcutsModal';
-import FontPreloadIndicator from './components/FontPreloadIndicator';
 import * as THREE_ACTUAL from 'three';
 import { STLExporter } from './stlExporter';
 // import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader';
@@ -1295,21 +1294,16 @@ const App: React.FC = () => {
   const [dynamicFonts, setDynamicFonts] = useState<Record<string, string>>(FONT_TTF_URLS);
 
   // Font preloader hook
-  const { preloadAllFonts, getFont, isFontLoaded, getProgress } = useFontPreloader();
+  const { preloadAllFonts, getFont, isFontLoaded } = useFontPreloader();
 
-  // Preload all fonts when app starts
+  // Preload all fonts when app starts (silent background loading)
   useEffect(() => {
     const preloadFonts = async () => {
       try {
-        console.log('Starting font preloading...');
-        const result = await preloadAllFonts();
-        console.log('Font preloading completed:', result);
-        
-        if (result.failed.length > 0) {
-          console.warn('Some fonts failed to preload:', result.failed);
-        }
+        await preloadAllFonts();
       } catch (error) {
-        console.error('Font preloading failed:', error);
+        // Silent failure - fonts will load on-demand if preloading fails
+        console.debug('Font preloading failed, fonts will load on-demand:', error);
       }
     };
 
@@ -3728,9 +3722,6 @@ const App: React.FC = () => {
                     </div>
                 ))}
             </div>
-
-            {/* Font Preload Indicator */}
-            <FontPreloadIndicator />
         </div>
     );
   };
