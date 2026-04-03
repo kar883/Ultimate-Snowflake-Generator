@@ -262,6 +262,7 @@ export interface Translations {
   loadProject: string;
   undo: string;
   redo: string;
+  resetApp: string;
 
   // Languages
   'English': string;
@@ -541,6 +542,7 @@ export const translations: Record<string, Translations> = {
     loadProject: 'Load Project',
     undo: 'Undo',
     redo: 'Redo',
+    resetApp: 'Reset App',
 
     // Languages
     'English': 'English',
@@ -819,6 +821,7 @@ export const translations: Record<string, Translations> = {
     loadProject: 'Cargar Proyecto',
     undo: 'Deshacer',
     redo: 'Rehacer',
+    resetApp: 'Restablecer Aplicación',
 
     // Languages
     'English': 'English',
@@ -1097,6 +1100,7 @@ export const translations: Record<string, Translations> = {
     loadProject: 'Charger Projet',
     undo: 'Annuler',
     redo: 'Refaire',
+    resetApp: 'Réinitialiser App',
 
     // Languages
     'English': 'English',
@@ -1375,6 +1379,7 @@ export const translations: Record<string, Translations> = {
     loadProject: 'Projekt laden',
     undo: 'Rückgängig',
     redo: 'Wiederherstellen',
+    resetApp: 'App Zurücksetzen',
 
     // Languages
     'English': 'English',
@@ -1653,6 +1658,7 @@ export const translations: Record<string, Translations> = {
     loadProject: '加载项目',
     undo: '撤销',
     redo: '重做',
+    resetApp: '重置应用',
 
     // Languages
     'English': 'English',
@@ -1931,6 +1937,7 @@ export const translations: Record<string, Translations> = {
     loadProject: 'プロジェクトを読み込み',
     undo: '元に戻す',
     redo: 'やり直し',
+    resetApp: 'アプリをリセット',
 
     // Languages
     'English': 'English',

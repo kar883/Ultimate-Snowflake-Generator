@@ -308,9 +308,9 @@ const translateShortcutAction = (action: keyof ShortcutConfig, t: (key: string) 
     exportTiltPlaneSTL:   t('exportTiltPlaneSTL')   || 'Export Tilt Plane STL',
     saveProject:          t('saveProject')          || 'Save Project',
     loadProject:          t('loadProject')          || 'Load Project',
-    resetSettings:        t('resetSettings')        || 'Reset Settings',
     undo:                 t('undo')                 || 'Undo',
     redo:                 t('redo')                 || 'Redo',
+    resetApp:             t('resetApp')             || 'Reset App',
   };
   return actionTranslations[action] || action.replace(/([A-Z])/g, ' $1').trim();
 };

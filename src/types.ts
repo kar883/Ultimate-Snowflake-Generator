@@ -196,11 +196,11 @@ export interface ShortcutConfig {
   exportTiltPlaneSTL: ShortcutDef;
   saveProject: ShortcutDef;
   loadProject: ShortcutDef;
-  resetSettings: ShortcutDef;
   switchToGlobalTab: ShortcutDef;
   switchToTextTab: ShortcutDef;
   switchToLetterCtrlTab: ShortcutDef;
   switchToHubsTab: ShortcutDef;
   switchToAbstractTab: ShortcutDef;
   switchToPlanesTab: ShortcutDef;
+  resetApp: ShortcutDef;
 }

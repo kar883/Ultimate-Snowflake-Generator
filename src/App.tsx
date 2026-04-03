@@ -2,7 +2,6 @@ import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { SnowflakeConfig, TextGroupConfig, HubConfig, CharOffset, LayerConfig, AbstractConfig, DesignQuality, UnderlineConfig, ShortcutConfig, ImageConfig, createDefaultImage } from './types';
 import { CURSIVE_FONTS, FONT_TTF_URLS, BOLD_FONT_URLS, BOLD_FONT_THRESHOLD } from './constants';
 import { useFontPreloader } from './utils/fontPreloader';
-import { createDefaultLayer, createDefaultTextGroup, createDefaultConfig } from './defaults';
 import ControlPanel from './components/ControlPanel';
 import SnowflakePreview from './components/SnowflakePreview';
 import Snowflake3D from './components/Snowflake3D';
@@ -28,19 +27,19 @@ const DEFAULT_SHORTCUTS: ShortcutConfig = {
     redo: { key: 'z', ctrlKey: true, shiftKey: true },
     toggleView: { key: '1', ctrlKey: true },
     forceRegenerate: { key: 'r', ctrlKey: true },
-    exportCombinedSTL: { key: 's', ctrlKey: true, shiftKey: true },
-    exportBasePlaneSTL: { key: 's', ctrlKey: true, altKey: true },
-    exportCrossPlaneSTL: { key: 'x', ctrlKey: true, altKey: true },
-    exportTiltPlaneSTL: { key: 't', ctrlKey: true, altKey: true },
+    exportCombinedSTL: { key: 'e', ctrlKey: true },
     saveProject: { key: 's', ctrlKey: true },
-    loadProject: { key: 'o', ctrlKey: true },
-    resetSettings: { key: 'r', ctrlKey: true, shiftKey: true },
-    switchToGlobalTab: { key: 'g', ctrlKey: true },
-    switchToTextTab: { key: 't', ctrlKey: true },
-    switchToLetterCtrlTab: { key: 'l', ctrlKey: true },
-    switchToHubsTab: { key: 'h', ctrlKey: true },
-    switchToAbstractTab: { key: 'a', ctrlKey: true },
-    switchToPlanesTab: { key: 'p', ctrlKey: true },
+    loadProject: { key: 'l', ctrlKey: true },
+    exportBasePlaneSTL: { key: 'a', ctrlKey: true },
+    exportCrossPlaneSTL: { key: 'd', ctrlKey: true },
+    exportTiltPlaneSTL: { key: 's', ctrlKey: true, shiftKey: true },
+    switchToGlobalTab: { key: '1', altKey: true },
+    switchToTextTab: { key: '2', altKey: true },
+    switchToLetterCtrlTab: { key: '3', altKey: true },
+    switchToHubsTab: { key: '4', altKey: true },
+    switchToAbstractTab: { key: '5', altKey: true },
+    switchToPlanesTab: { key: '6', altKey: true },
+    resetApp: { key: 'r', ctrlKey: true, shiftKey: true },
 };
 
 const useFontCache = (getPreloadedFont?: (fontName: string) => opentype.Font | null, isPreloadedFont?: (fontName: string) => boolean) => {
@@ -1165,6 +1164,38 @@ const seededRandom = (seed: number) => {
 //     });
 // };
 
+
+const createDefaultTextGroup = (text: string, rotation: number, fontSize: number, textX: number): TextGroupConfig => ({
+  enabled: true,
+  text,
+  fontFamily: CURSIVE_FONTS[0].family,
+  arms: 6,
+  textX,
+  letterSpacing: 0,
+  thickness: 0,
+  fontSize,
+  mirrorEnabled: true,
+  mirrorOffset: 0,
+  rotationOffset: rotation,
+  charOffsets: Array.from({ length: text.length }, () => ({ x: 0, y: 0 })),
+  underline: { enabled: false, thickness: 1.5, startXOffset: 0, length: 50, yOffset: -5, capType: 'none', capWidth: 10 }
+});
+
+const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isEnabled = false): LayerConfig => ({
+  id,
+  name,
+  enabled: isEnabled,
+  rotation3D: { x: rx, y: ry, z: 0 },
+  primary: createDefaultTextGroup("Snow", 0, 36.7, 20),
+  secondary: createDefaultTextGroup("", 30, 20, 10),
+  secondaryEnabled: true,
+  abstracts: [],
+  hubs: [],
+  slotType: 'none',
+  slotLengthAdjustment: 0,
+  slotWidthOffset: 0,
+  images: [],
+});
 
 // // ============================================================
 // // REPLACE calculateOptimalSlots in App.tsx
@@ -2811,80 +2842,38 @@ const App: React.FC = () => {
     fileInputRef.current?.click();
   };
 
-  const handleResetSettings = () => {
-    // Get proper default configuration
-    const defaultConfig = createDefaultConfig();
-    
-    // Create reset config based on defaults but preserve user customizations
-    const resetConfig: SnowflakeConfig = {
-      ...defaultConfig,
-      // Preserve current project name and basic structure
-      projectName: config.projectName,
-      activeLayerIndex: config.activeLayerIndex,
-      // Preserve layer structure but explicitly reset all settings to defaults
-      layers: config.layers.map((layer, index) => {
-        const defaultLayer = defaultConfig.layers[index] || defaultConfig.layers[0];
-        return {
-          // Start with all default settings
-          ...defaultLayer,
-          // Preserve layer identity and basic properties
-          id: layer.id,
-          name: layer.name,
-          enabled: layer.enabled,
-          rotation3D: layer.rotation3D,
-          slotType: layer.slotType,
-          slotLengthAdjustment: layer.slotLengthAdjustment,
-          slotWidthOffset: layer.slotWidthOffset,
-          images: layer.images, // Preserve user-added images
-          // Explicitly reset all text settings to defaults
-          primary: {
-            ...defaultLayer.primary,
-            text: layer.primary.text, // Preserve user's text content
-            // All other text settings reset to defaults
-            enabled: defaultLayer.primary.enabled,
-            fontFamily: defaultLayer.primary.fontFamily,
-            arms: defaultLayer.primary.arms,
-            textX: defaultLayer.primary.textX, // Reset outer radius
-            letterSpacing: defaultLayer.primary.letterSpacing,
-            thickness: defaultLayer.primary.thickness, // Reset boldness
-            fontSize: defaultLayer.primary.fontSize,
-            mirrorEnabled: defaultLayer.primary.mirrorEnabled, // Reset mirror
-            mirrorOffset: defaultLayer.primary.mirrorOffset,
-            rotationOffset: defaultLayer.primary.rotationOffset,
-            charOffsets: defaultLayer.primary.charOffsets,
-            underline: defaultLayer.primary.underline
-          },
-          secondary: {
-            ...defaultLayer.secondary,
-            text: layer.secondary.text, // Preserve user's text content
-            // All other text settings reset to defaults
-            enabled: defaultLayer.secondary.enabled,
-            fontFamily: defaultLayer.secondary.fontFamily,
-            arms: defaultLayer.secondary.arms,
-            textX: defaultLayer.secondary.textX, // Reset outer radius
-            letterSpacing: defaultLayer.secondary.letterSpacing,
-            thickness: defaultLayer.secondary.thickness, // Reset boldness
-            fontSize: defaultLayer.secondary.fontSize,
-            mirrorEnabled: defaultLayer.secondary.mirrorEnabled, // Reset mirror
-            mirrorOffset: defaultLayer.secondary.mirrorOffset,
-            rotationOffset: defaultLayer.secondary.rotationOffset,
-            charOffsets: defaultLayer.secondary.charOffsets,
-            underline: defaultLayer.secondary.underline
-          },
-          secondaryEnabled: defaultLayer.secondaryEnabled,
-          // Reset hubs and abstracts to defaults (empty)
-          abstracts: defaultLayer.abstracts,
-          hubs: defaultLayer.hubs
-        };
-      })
-    };
-    
-    setConfig(resetConfig);
-    setConfig3D(resetConfig);
-    setRendered3DIfChanged(resetConfig);
-    setHistory([resetConfig]);
-    setHistoryIndex(0);
-    showNotification('All settings reset to defaults!', 'success');
+  const handleResetApp = () => {
+    // Show confirmation dialog
+    if (window.confirm('Are you sure you want to reset all settings to defaults?\n\nThis will restore all variables, tabs, and configurations to their initial state.\n\nYour shortcut preferences will be preserved.')) {
+      // Store current shortcuts to preserve them
+      const currentShortcuts = shortcuts;
+      const currentLanguage = language;
+      const currentShowTooltips = showTooltips;
+      
+      // Reset all configs to initial state
+      const freshConfig = { ...initialState };
+      setConfig(freshConfig);
+      setConfig3D(freshConfig);
+      setRendered3DConfig(freshConfig);
+      
+      // Reset history
+      setHistory([freshConfig]);
+      setHistoryIndex(0);
+      
+      // Reset other states
+      setActiveTab('text');
+      setDesignDiameter(0);
+      
+      // Clear caches
+      clearGeometryCache();
+      
+      // Restore shortcuts and settings (preserve user preferences)
+      setShortcuts(currentShortcuts);
+      setLanguage(currentLanguage);
+      setShowTooltips(currentShowTooltips);
+      
+      showNotification('All settings have been reset to defaults!', 'success');
+    }
   };
 
   const handleFileLoad = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -3641,13 +3630,13 @@ const App: React.FC = () => {
     exportTiltPlaneSTL: () => handleExportLayerSTL(2),
     saveProject: handleSaveProject,
     loadProject: handleLoadProject,
-    resetSettings: handleResetSettings,
     switchToGlobalTab: () => setActiveTab('global'),
     switchToTextTab: () => setActiveTab('text'),
     switchToLetterCtrlTab: () => setActiveTab('Letter Ctrl'),
     switchToHubsTab: () => setActiveTab('hubs'),
     switchToAbstractTab: () => setActiveTab('abstract'),
     // switchToImagesTab is not defined in ShortcutConfig
+    resetApp: handleResetApp,
     forceUpdate3D: () => {
         setRendered3DIfChanged(config);
         showNotification("3D Model Updated", "info", 1000);
@@ -3668,7 +3657,7 @@ const App: React.FC = () => {
                             onProjectNameChange={(n) => handleUpdateConfig({ projectName: n })}
                             onSaveConfig={handleSaveProject}
                             onLoadConfig={handleLoadProject}
-                            onResetSettings={handleResetSettings}
+                            onResetApp={handleResetApp}
                             shortcuts={shortcuts}
                             onUpdateShortcuts={(s) => setShortcuts(s)}
                             onResetShortcuts={() => setShortcuts(DEFAULT_SHORTCUTS)}

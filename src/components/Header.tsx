@@ -10,7 +10,7 @@ interface HeaderProps {
   canInstall?: boolean;
   onSaveConfig?: () => void;
   onLoadConfig?: () => void;
-  onResetSettings?: () => void;
+  onResetApp?: () => void;
   shortcuts?: ShortcutConfig;
   onUpdateShortcuts?: (config: ShortcutConfig) => void;
   onResetShortcuts?: () => void;
@@ -28,7 +28,7 @@ const Header: React.FC<HeaderProps> = ({
   canInstall,
   onSaveConfig,
   onLoadConfig,
-  onResetSettings,
+  onResetApp,
   shortcuts,
   onUpdateShortcuts,
   onResetShortcuts,
@@ -86,11 +86,11 @@ const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center gap-2">
           {/* Reset Button */}
           <button
-            onClick={onResetSettings}
+            onClick={onResetApp}
             className="w-9 h-9 flex items-center justify-center rounded-lg bg-orange-600/20 hover:bg-orange-600/30 text-orange-400 hover:text-orange-300 border border-orange-500/20 transition-all"
-            title="Reset all settings to defaults"
+            title="Reset All Settings to Defaults"
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
           </button>
