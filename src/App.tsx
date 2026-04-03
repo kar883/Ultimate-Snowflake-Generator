@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { SnowflakeConfig, TextGroupConfig, HubConfig, CharOffset, LayerConfig, AbstractConfig, DesignQuality, UnderlineConfig, ShortcutConfig, ImageConfig, createDefaultImage } from './types';
 import { CURSIVE_FONTS, FONT_TTF_URLS, BOLD_FONT_URLS, BOLD_FONT_THRESHOLD } from './constants';
 import { useFontPreloader } from './utils/fontPreloader';
-import { createDefaultLayer, createDefaultTextGroup } from './defaults';
+import { createDefaultLayer, createDefaultTextGroup, createDefaultConfig } from './defaults';
 import ControlPanel from './components/ControlPanel';
 import SnowflakePreview from './components/SnowflakePreview';
 import Snowflake3D from './components/Snowflake3D';
@@ -2812,15 +2812,18 @@ const App: React.FC = () => {
   };
 
   const handleResetSettings = () => {
-    // Create reset config based on the existing initialState
+    // Get the proper default configuration
+    const defaultConfig = createDefaultConfig();
+    
+    // Create reset config based on defaults but preserve user customizations
     const resetConfig: SnowflakeConfig = {
-      ...initialState,
+      ...defaultConfig,
       // Preserve current project name and basic structure
       projectName: config.projectName,
       activeLayerIndex: config.activeLayerIndex,
       // Preserve layer structure but reset all settings
       layers: config.layers.map((layer, index) => ({
-        ...initialState.layers[index] || initialState.layers[0],
+        ...defaultConfig.layers[index] || defaultConfig.layers[0],
         // Preserve layer identity and basic properties
         id: layer.id,
         name: layer.name,

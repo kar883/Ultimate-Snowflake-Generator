@@ -80,22 +80,22 @@ export const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isE
   images: []
 });
 
-// Default Global Configuration
+// Default Global Configuration - matches original App.tsx initialState
 export const createDefaultGlobalConfig = (): Omit<SnowflakeConfig, 'projectName' | 'layers' | 'activeLayerIndex'> => ({
   color: "#38bdf8",
-  extrusionDepth: 0.8,
-  bevelEnabled: false,
+  extrusionDepth: 3.0, // Match defaultDepth from App.tsx
+  bevelEnabled: true, // Default ON
   bevelType: 'fillet',
-  bevelAmount: 0.1,
-  bevelSegments: 6,
+  bevelAmount: 0.4,
+  bevelSegments: 5,
   slotEnabled: false,
-  slotLength: 10,
-  slotWidth: 3,
+  slotLength: 95,
+  slotWidth: 4.0,
   slotMode: '2-plane',
-  quality: 'med',
-  syncAllLayers: false,
-  globalStrokeWeight: 1,
-  freeFloatingCheck: false
+  quality: 'low',
+  syncAllLayers: true, // Default ON
+  globalStrokeWeight: 0,
+  freeFloatingCheck: true
 });
 
 // Complete Default Configuration
