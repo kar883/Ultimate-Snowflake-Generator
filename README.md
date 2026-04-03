@@ -1,558 +1,162 @@
-# Snowflake Generator - 3D Printing Design Tool
-
-Create custom 3D snowflake designs with text, geometric shapes, and patterns. **All models print flat, no supports needed, as a single connected piece.**
-
-## Table of Contents
-
-1. [Installation](#installation) | 2. [Quick Start](#quick-start) | 3. [Global Tab](#global-tab) | 4. [Text Tab](#text-tab) | 5. [Letter Control Tab](#letter-control-tab) | 6. [Hubs Tab](#hubs-tab) | 7. [Abstract Tab](#abstract-tab) | 8. [Images Tab](#images-tab) | 9. [Export](#export) | 10. [Shortcuts](#shortcuts) | 11. [3D Printing Guide](#3d-printing-guide) | 12. [Troubleshooting](#troubleshooting)
-
----
-
-## Installation
-
-**Option 1 - Installer (Recommended):**
-Run `Snowflake Generator Setup 1.0.0.exe` - automatic installation to Program Files, creates Start Menu shortcuts
-
-**Option 2 - Portable (No Installation):**
-1. Download `Snowflake Generator-1.0.0-win.zip`
-2. Extract the ZIP file to your desired location
-3. Navigate to the extracted folder → `dist-electron` subfolder
-4. Double-click `Snowflake Generator 1.0.0.exe` to launch
-   - No installation needed, runs directly from the folder
-   - Safe to copy folder elsewhere or to USB drive
-
----
-
-## Quick Start
-
-1. **Open the app** → Left side = 6 control tabs, Right side = 3D preview
-2. **Explore the default design** → Click & drag to rotate, scroll to zoom
-3. **Modify text** → Text tab → enter your text → see it instantly in 3D
-4. **Add elements** → Hubs tab (shapes), Abstract tab (patterns), Images tab (SVG designs)
-5. **Export** → Ctrl+E → choose STL format → ready for 3D printer
-
----
-
-## Global Tab
-
-| Setting | Purpose | 3D Print Tip |
-|---------|---------|-------------|
-| **Project Name** | Filename for exports | Use clear, descriptive names |
-| **Color** | Preview appearance only | Doesn't affect 3D print |
-| **Extrusion Depth** | Model thickness (mm) | 2-3mm = thin but durable |
-| **Edge Profile** | Fillet (rounded) or Chamfer | Fillet for strength |
-| **Preview Quality** | Low/Med/High rendering | High for final export |
-
-**⚠️ CRITICAL:** All parts must connect to adjacent elements. Adjust variables to ensure everything touches before exporting.
-
----
-
-## Text Tab
-
-Add text that wraps around the snowflake arms.
-
-| Setting | Purpose | 3D Print Tip |
-|---------|---------|-------------|
-| **Text Input** | Words/letters to display | Text must touch hub or abstract element |
-| **Font** | 50+ cursive fonts or upload .ttf/.otf | Simple fonts print better |
-| **Outer Radius** | Text spread distance (mm) | Adjust to control size |
-| **Letter Spacing** | Gap between letters (mm) | 1-2mm typical; prevent overlaps |
-| **Boldness** | Line thickness (mm) | 0.5mm+ for structural strength |
-| **Mirror** | Create symmetric second copy | Ensures balanced design |
-| **Underline** | Optional decorative line | Must connect to text |
-
-Enable **Secondary Text** for inner text ring - must overlap or touch primary text.
-
----
-
-## Letter Control Tab
-
-Adjust individual characters if they overlap or need repositioning.
-
-| Setting | Purpose |
-|---------|---------|
-| **Character Selector** | Pick which letter to edit |
-| **X / Y Offset** | Move letter left/right/up/down |
-| **Rotation** | Rotate single character independently |
-| **Scale** | Make one letter bigger or smaller |
-
----
-
-## Hubs Tab
-
-Geometric shapes at the snowflake center.
-
-| Setting | Purpose | 3D Print Tip |
-|---------|---------|-------------|
-| **Shape Type** | Circle, Polygon (3-12 sides), Star | All must touch text or abstract |
-| **Hub Radius** | Size of the hub (mm) | Larger = extends to text |
-| **Hollow** | Ring (yes) or filled (no) | Hollow uses less material |
-| **Boldness** | Ring thickness when hollow | 0.5mm+ minimum |
-| **Oscillation** | Wavy edge effect | Adds organic look; 0-5mm typical |
-| **Star Ratio** | Point sharpness (Star only) | 0.5-0.6 for balance |
-
-Click **Add Hub** multiple times for nested geometric layers. **Each hub must touch adjacent hubs or elements.**
-
----
-
-## Abstract Tab
-
-Decorative patterns on the arms: waves, lines, or branching trees.
-
-### Shapes (Simple Patterns)
-| Setting | Purpose | Typical Values |
-|---------|---------|---|
-| **Shape Type** | Line, Sine wave, Zigzag | - |
-| **Amplitude** | Wave height (mm) | 1-3mm |
-| **Frequency** | Number of waves per arm | 2-5 |
-| **Boldness** | Line thickness (mm) | 0.3-0.5mm |
-| **Inner Radius** | Distance from center | Must reach text edge |
-| **Mirror** | Create symmetric pair | Recommended for balance |
-
-### Fractals (Complex Branching Trees)
-| Setting | Purpose | Typical Values |
-|---------|---------|---|
-| **Branches Per Node** | How branches split | 2-3 |
-| **Recursion Depth** | Branching generations | 3-4 max |
-| **Branch Length** | Initial branch size | Scales down auto |
-| **Length Decay** | Shrinking factor | 0.5-0.8 |
-| **Thickness** | Branch line width | 0.3mm minimum |
-
-**Critical:** All abstract patterns must connect to text or hubs - no isolated floating branches.
-
----
-
-## Images Tab
-
-Import SVG images to use as repeating arm elements.
-
-| Setting | Purpose | 3D Print Tip |
-|---------|---------|-------------|
-| **Import SVG** | Upload .svg file | Must be solid paths, not strokes |
-| **Scale** | 1.0 = 1mm | Adjust to fit design |
-| **Inner Radius** | Distance from center (mm) | Must reach text or hubs |
-| **Y Offset** | Vertical shift | Align with snowflake arms |
-| **Mirror** | Symmetric placement on both sides | Recommended |
-| **Rotation** | Angle of image on arms | Orients pattern |
-
-Images repeat on all snowflake arms. **Ensure image connects to text or hubs - no gaps.**
-
----
-
-## Export
-
-**Save Project:** Ctrl+S → saves settings as .json (reload anytime)
-
-**Export STL:** Ctrl+E → choose format → ready for 3D printer
-
-| Export Type | Use | Output |
-|-------------|-----|--------|
-| **Combined** | Single piece print | 1 .stl file |
-
-**Quality Setting:** Use **High** in Global tab for final prints.
-
----
-
-## Shortcuts
-
-| Action | Shortcut |
-|--------|----------|
-| Undo | Ctrl + Z |
-| Redo | Ctrl + Shift + Z |
-| Save Project | Ctrl + S |
-| Load Project | Ctrl + L |
-| Export STL | Ctrl + E |
-| Force Regenerate | Ctrl + R |
-| Tab Navigation | Alt + 1 through 6 |
-| 3D Rotate | Click & drag |
-| 3D Zoom | Scroll wheel |
-| 3D Pan | Right-click & drag |
-
----
-
-## 3D Printing Guide
-
-### ⚠️ CRITICAL: Model Connectivity
-
-**Your model must have all parts touching each other to print as a single piece.**
-
-Before exporting, verify in the 3D preview:
-- ✓ Text connects to hub (or overlaps slightly)
-- ✓ Hub connects to abstract pattern  
-- ✓ Abstract touches text at outer edge
-- ✓ No floating/isolated elements
-
-**If elements are separated:**
-1. Reduce text "Outer Radius" to move text inward
-2. Increase hub "Radius" to extend it
-3. Adjust abstract "Inner Radius" so patterns overlap
-4. Increase "Boldness" values to bridge small gaps
-
-### Print Settings for Success
-
-| Setting | Recommended | Why |
-|---------|-------------|-----|
-| **Extrusion Depth** | 2-3mm | Thin but durable; prints flat without supports |
-| **Edge Profile** | Fillet | Rounded edges are stronger than sharp |
-| **Boldness (Text/Abstract/Hubs)** | 0.5mm+ | Thin features may not print; increase if needed |
-| **Preview Quality** | High (before export) | Ensures detail in final STL |
-| **All parts** | Connected | Single piece = no assembly needed |
-
-### Print Orientation & Materials
-
-✓ **Orientation:** Print flat (lying down horizontally)  
-✓ **Supports:** Not needed - no overhanging elements  
-✓ **Post-processing:** Minimal; might need light sanding  
-✓ **Assembly:** Single piece - no gluing required  
-
-**Recommended Materials:**
-- **Resin (SLA/DLP):** Best detail; smooth finish
-- **FDM (PLA/PETG):** Most accessible; use 0.2mm+ nozzle
-
----
-
-## Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| **Text not visible** | Check "Visible" in Letter Control tab; increase Outer Radius |
-| **Font won't load** | Try different font from list; custom fonts must be .ttf/.otf |
-| **Slow/laggy updates** | Reduce Quality to Low/Med; simplify fractals (lower recursion) |
-| **Gaps between elements** | Reduce text Outer Radius; increase hub Radius; use Letter Control to adjust |
-| **Export fails** | Reduce Quality; ensure at least one element is visible; check disk space |
-
----
-
-## Support
-
-**Issues:** [GitHub Issues](https://github.com/kar883/Ultimate-Snowflake-Generator/issues)  
-**Repository:** [Ultimate-Snowflake-Generator](https://github.com/kar883/Ultimate-Snowflake-Generator)
-
----
-
-**Workflow:** Design → Preview → Test export (Low quality) → Final export (High quality) → 3D Print!
-
-All models print **flat without supports** as **single connected pieces**. ❄️
-  - Range: 0-360°
----
-
-## Export & File Operations
-
-### Understanding Export Options
-
-The app supports multiple export formats:
-
-- **STL (3D Printing)**: Binary format for 3D printers
-- **Project Save (JSON)**: Save your configuration for later editing
-- **Project Load (JSON)**: Reload previously saved designs
-
-### Export Quality Setting
-
-**Important**: Set BEFORE exporting in the Global tab
-
-- **Low**: Faster export, smaller files (~100KB)
-- **Medium**: Good quality, good file size (~500KB)
-- **High**: Maximum detail, larger files (~2-5MB)
-- **Recommendation**: High quality for final 3D print, Medium for preview
-
-### Export Options
-
-#### Export Combined STL
-- **What it does**: Combines all visible layers into ONE merged 3D model
-- **Use when**: Printing everything as one solid piece
-- **Output**: Single `.stl` file
-- **Filename**: `[ProjectName].stl`
-
-### Save Project (JSON)
-- **What it does**: Saves all your settings to a `.json` file
-- **Use when**: Want to save progress, come back later
-- **How to use**:
-  1. Click "Save Project" button
-  2. Choose location and filename
-  3. File saves all configuration, text, fonts, 
-- **Reloading**: Open saved file through "Load Project"
-- **File size**: Tiny (under 50KB), quick to save/load
-- **Shareable**: Can share `.json` files with others to recreate design
-
-### Load Project (JSON)
-- **What it does**: Restores all settings from a previously saved project
-- **How to use**:
-  1. Click "Load Project" button
-  2. Navigate to your `.json` file
-  3. All settings restore exactly as saved
-- **Note**: Fonts must be accessible (system fonts or reupload custom fonts)
-
-### AI Randomizer
-- **What it does**: Generates random snowflake design variations
-- **Requires**: Internet connection and Google Gemini API key
-- **How to use**:
-  1. Click "AI Randomizer"
-  2. Select design emphasis:
-     - "3D Printing": Optimized for physical printing
-     - "2D Aesthetics": Beautiful for viewing/art
-     - "Fractal": Mathematical patterns
-  3. AI generates random text, hub configs, abstract patterns
-  4. Click again for more variations
-
-### File Management
-
-#### Directory Structure
-```
-MySnowflake/
-├── designs/
-│   ├── Winter_Collection.json (saved Projects)
-│   ├── Holiday_2024.json
-├── exports/
-│   ├── Combined_Snowflake.stl
-│   ├── Snowflake_Base.stl
-│   ├── Snowflake_Parts.zip
-```
-
-#### Backup Workflow
-1. Design locally, save `.json` project regularly
-2. Export `.stl` files when ready
-3. Keep `.json` files for future editing
-4. Optional: Keep `.zip` exports of multi-part designs
-
----
+# Ultimate Snowflake Generator
+
+A beautiful 3D snowflake design generator for art and 3D printing. Create intricate snowflake patterns with advanced customization options, AI-powered randomization, and export capabilities.
+
+## Features
+
+### 🎨 **Design Creation**
+- **Text-Based Snowflakes**: Transform text into beautiful snowflake patterns
+- **Multiple Layers**: Base Plane, Cross Plane, and Tilt Plane configurations
+- **Font Support**: 17+ cursive fonts with automatic preloading
+- **Real-time Preview**: Instant visual feedback as you design
+
+### 🛠️ **Customization Controls**
+- **Global Settings**: Color, extrusion depth, bevel options
+- **Text Controls**: Font family, letter spacing, boldness, mirror effects
+- **Letter Control**: Individual character positioning and rotation
+- **Hubs**: Central geometric shapes with customizable parameters
+- **Abstract Shapes**: Lines, sine waves, zigzags, and fractals
+- **Underline Options**: Decorative underlines with various styles
+
+### 🤖 **AI-Powered Features**
+- **AI Randomizer**: Generate unique designs using Google Gemini AI
+- **Fractal Generation**: Complex mathematical fractal patterns
+- **Smart Suggestions**: AI-assisted design improvements
+
+### 📤 **Export Options**
+- **3D Printing**: STL export for all layers or individual planes
+- **2D Formats**: SVG and DXF for laser cutting and vinyl
+- **Project Files**: Save and load complete designs
+
+### ⚙️ **User Interface**
+- **Multi-language Support**: English, Spanish, French, German, Chinese, Japanese
+- **Keyboard Shortcuts**: Customizable shortcuts for all major actions
+- **Reset Functionality**: One-click reset to default settings
+- **Responsive Design**: Works on various screen sizes
+
+## Getting Started
+
+### System Requirements
+- **Windows**: Windows 10 or later
+- **macOS**: macOS 10.14 or later
+- **Memory**: 4GB RAM minimum
+- **Storage**: 500MB available space
+
+### Installation
+
+#### Windows
+1. Download `SnowflakeGenerator-Setup-1.0.0.exe`
+2. Run the installer
+3. Follow the installation wizard
+4. Launch from Start Menu or Desktop shortcut
+
+#### macOS
+1. Download `SnowflakeGenerator-1.0.0.dmg`
+2. Open the DMG file
+3. Drag the app to Applications folder
+4. Launch from Applications folder
+
+#### Standalone (No Installation)
+1. Download `SnowflakeGenerator-1.0.0-win.zip` (Windows) or `SnowflakeGenerator-1.0.0-mac.zip` (macOS)
+2. Extract the zip file
+3. Run `SnowflakeGenerator.exe` (Windows) or `SnowflakeGenerator.app` (macOS)
+
+## Basic Usage
+
+### Creating Your First Snowflake
+1. **Start the App**: Launch the application
+2. **Enter Text**: Type your desired text in the Text tab
+3. **Choose Font**: Select from the available cursive fonts
+4. **Adjust Settings**: Modify letter spacing, size, and positioning
+5. **Preview**: View your snowflake in real-time
+6. **Export**: Save your design as STL, SVG, or DXF
+
+### Using AI Features
+1. **Get API Key**: Obtain a free Google Gemini API key
+2. **Configure Settings**: Go to Settings > API Key tab
+3. **Generate**: Click "AI Randomizer" to create unique designs
+4. **Customize**: Fine-tune the AI-generated results
+
+### Advanced Features
+- **Multiple Layers**: Enable and configure different planes
+- **Hubs**: Add central geometric shapes
+- **Abstracts**: Include decorative patterns
+- **Fractals**: Generate complex mathematical designs
 
 ## Keyboard Shortcuts
 
-### Global Shortcuts (Work Everywhere)
+| Action | Windows/Linux | macOS |
+|--------|---------------|-------|
+| Undo | Ctrl+Z | Cmd+Z |
+| Redo | Ctrl+Shift+Z | Cmd+Shift+Z |
+| Toggle 2D/3D View | Ctrl+1 | Cmd+1 |
+| Force Regenerate | Ctrl+R | Cmd+R |
+| Save Project | Ctrl+S | Cmd+S |
+| Load Project | Ctrl+L | Cmd+L |
+| Reset App | Ctrl+Shift+R | Cmd+Shift+R |
+| Switch to Global Tab | Alt+1 | Option+1 |
+| Switch to Text Tab | Alt+2 | Option+2 |
 
-| Action | Windows/Linux | Mac |
-|--------|---------------|-----|
-| Undo | Ctrl + Z | Cmd + Z |
-| Redo | Ctrl + Shift + Z | Cmd + Shift + Z |
-| Save Project | Ctrl + S | Cmd + S |
-| Load Project | Ctrl + L | Cmd + L |
-| Export Combined STL | Ctrl + E | Cmd + E |
-| Force Regenerate | Ctrl + R | Cmd + R |
-| Toggle 2D/3D View | Ctrl + 1 | Cmd + 1 |
+## File Formats
 
-### Tab Navigation (Alt + Number)
+### Supported Export Formats
+- **STL**: 3D printing format (individual layers or combined)
+- **SVG**: Vector graphics for laser cutting
+- **DXF**: CAD format for CNC machines
+- **JSON**: Project files for saving/loading designs
 
-| Tab | Shortcut |
-|-----|----------|
-| Global Settings | Alt + 1 |
-| Text Config | Alt + 2 |
-| Letter Control | Alt + 3 |
-| Hubs | Alt + 4 |
-| Abstract Patterns | Alt + 5 |
+### Project Files
+- Save complete designs with all settings
+- Load previous projects to continue work
+- Share designs with other users
 
-### 3D View Controls
+## Settings and Preferences
 
-| Action | Control |
-|--------|---------|
-| Rotate | Click and drag with mouse |
-| Zoom | Scroll mouse wheel |
-| Pan | Right-click and drag (or Shift + left-click) |
-| Reset View | Double-click on preview |
+### Customizable Options
+- **Language**: Choose from 6 supported languages
+- **Shortcuts**: Customize keyboard shortcuts
+- **Tooltips**: Enable/disable helpful tooltips
+- **API Configuration**: Google Gemini API key setup
+- **AI Scope**: Control which AI features are enabled
 
-### Tips
-- Shortcuts disabled when typing in text fields
-- Shortcuts work continuously (hold Ctrl+Z to keep undoing)
-- Each tab has its own keyboard context
-
----
+### Reset Functionality
+- **Reset Button**: Orange button in header
+- **Preserves**: Shortcuts, language, tooltips, API settings
+- **Resets**: All design settings, history, tabs, caches
 
 ## Troubleshooting
 
-### Common Issues & Solutions
-
-#### White Screen / App Won't Load
-
-**Problem**: Application opens but shows blank white screen
-
-**Solution 1: Clear Cache**
-- Close the application
-- Delete `AppData\Roaming\Snowflake Generator\` (Windows) or equivalent
-- Reopen application
-
-**Solution 2: Reinstall**
-- Uninstall application
-- Restart computer
-- Reinstall from installer
-- Test with default design
-
-**Solution 3: Run as Administrator**
-- Right-click `.exe` file
-- Select "Run as Administrator"
-- May require permissions dialog approval
-
-#### Text Not Appearing
-
-**Problem**: Changed text but nothing shows up on snowflake
-
-**Solutions**:
-1. Check "Visible" checkbox in Letter Control tab
-2. Verify "Outer Radius" is large enough (try 60 mm)
-3. Check font loaded successfully (dropdown shows font name)
-4. Verify text boldness isn't 0 (min 0.1 mm)
-5. Try different font to test
-
-#### Font Won't Load
-
-**Problem**: Selected font doesn't appear to load
-
-**Solutions**:
-1. **Google Font**: Try different font from dropdown
-2. **System Font**: Ensure using Chrome/Edge, HTTPS connection
-3. **Custom Font**: 
-   - Check file is `.ttf` or `.otf`
-   - File isn't corrupted
-   - Try uploading again
-4. **Fallback**: Switch to Great Vibes (always available)
-
-#### 3D Preview Not Updating
-
-**Problem**: Changes don't appear in 3D view immediately
-
-**Solutions**:
-1. Click "Force Regenerate" (Ctrl + R)
-2. Wait 2-5 seconds for geometry to compute
-3. Zoom out to see full snowflake
-4. Refresh browser or restart application
-
-#### Performance Issues
-
-**Problem**: App running slow, lagging, or freezing
-
-**Solutions**:
-1. **Reduce Quality Setting**: Change to "Low" or "Medium"
-2. **Disable Features**:
-   - Turn off bevel if not needed
-   - Remove extra hubs/abstracts
-   - Disable oscillation on hubs
-3. **Simplify Fractals**: Reduce recursion depth
-4. **Close Other Programs**: Free up system RAM
-5. **Restart Application**: Clear memory cache
-6. **Reduce Fractal Complexity**:
-   - Depth 3-4 instead of 6-8
-   - Fewer branches per node
-
-#### Can't Save/Load Projects
-
-**Problem**: Save or load buttons don't work
-
-**Solutions**:
-1. Check write permission to Documents folder
-2. Ensure filename doesn't have special characters
-3. Try saving to Desktop instead
-4. Check disk space (need 50+ MB free)
-5. Restart application and try again
-
----
-
-## Tips & Best Practices
-
-### Design Tips
-
-#### Balancing Text and Decorations
-- **Text-Focused**: Larger outer radius (70-100 mm), minimal hubs/abstracts
-- **Detailed**: Smaller outer radius (40-50 mm), multiple hubs and fractals
-- **Balanced**: Medium radius (60 mm), selective hub and one simple abstract
-
-#### Choosing Hub Shapes
-- **Circle**: Clean, classical, versatile
-- **Hexagon (6-sided)**: Thematic match to snowflake (6-arm structure)
-- **Star**: Bold, striking center piece
-- **Polygon**: Matches arm count (6-arm snowflake use 6-sided polygon)
-
-#### Font Selection
-- **Elegant**: Great Vibes, Tangerine (formal/sophisticated)
-- **Modern**: Pacifico, Fredoka (contemporary look)
-- **Playful**: Caveat, Quicksand (fun/casual)
-- **Professional**: Lora, Montserrat (business/technical)
-- **Artistic**: Satisfy, Indie Flower (creative/handmade)
-
-### 3D Printing Tips
-
-#### Before Exporting
-
-1. **Set Quality**: Use "High" for final prints
-2. **Test with Low**: Export "Low" first to preview structure
-
-### Performance Optimization
-
-- **Keep Fractal Depth Under 5**: Depth 6+ exponentially slow
-- **Limit Abstracts**: Each abstract adds processing time
-- **Use Fixed-Size Mode**: Auto-fit updates live as you type
-- **Batch Edits**: Complete one section before switching tabs
-- **Disable Oscillation**: Unless oscillation is key feature
-
-### Workflow Best Practices
-
-1. **Start Simple**: Begin with default design, modify one thing
-2. **Save Often**: Hit Ctrl+S after each major change
-3. **Test Exports**: Export "Low" quality first to verify structure
-4. **Document Designs**: Give projects meaningful names with dates
-5. **Keep Backups**: Save multiple versions with different names
-6. **Incremental Changes**: Make small changes, preview, then more
-7. **Use Mirror for Balance**: Symmetric designs look more professional
-
-### Advanced Techniques
-
-#### Creating Symmetric Multi-Text Designs
-1. Set Primary text with auto-fit
-2. Enable Mirror effect
-3. Add Secondary text (inner circle)
-4. Enable Secondary Mirror for concentric symmetry
-5. Result: Multiple text rings, all balanced
-
-#### Fractal + Wave Combination
-1. Add sparse fractal (depth 3, 2 branches)
-2. Add fine sine wave pattern
-3. Both render together, one organic, one geometric
-4. Adjust boldness to emphasize one or balance
-
-#### Multi-Hub Focal Point
-1. Add Circle hub (radius 8 mm, oscillation 6 frequency)
-2. Add Hexagon hub (radius 15 mm, hollow)
-3. Add Star hub (radius 25 mm, ratio 0.4)
-4. Result: Elaborate, professional center piece
----
-
-## Additional Resources
+### Common Issues
+- **Fonts Not Loading**: Check internet connection for font downloads
+- **AI Features Not Working**: Verify API key configuration
+- **Export Fails**: Ensure sufficient disk space
+- **Performance Issues**: Close other applications to free memory
 
 ### Getting Help
+- Check the Settings menu for configuration options
+- Use keyboard shortcuts for faster workflow
+- Reset app if experiencing unusual behavior
 
-- **GitHub Issues**: [Ultimate-Snowflake-Generator/issues](https://github.com/kar883/Ultimate-Snowflake-Generator/issues)
-- **Documentation**: See `RELEASE.md` for technical details
+## Version Information
+- **Version**: 1.0.0
+- **Author**: Kyle Russell
+- **License**: MIT
 
-### Requirements
+## Technical Details
 
-**Minimum System Requirements**:
-- Windows 7 or newer (Windows version)
-- 2GB RAM
-- 500 MB disk space
-- Modern web browser (Chrome, Edge, Firefox, Safari)
+### Architecture
+- **Frontend**: React with TypeScript
+- **3D Engine**: Three.js with custom CSG operations
+- **Font Rendering**: OpenType.js for text-to-geometry conversion
+- **Export**: Custom STL, SVG, and DXF generators
+- **AI Integration**: Google Gemini API
 
-**Recommended System Requirements**:
-- Windows 10 or newer / macOS 10.15+
-- 4GB+ RAM
-- 1GB disk space
-- Chrome or Edge browser (for system font access)
-
-### File Formats Reference
-
-- **`.stl`**: 3D model file for printing (binary or ASCII)
-- **`.json`**: Project configuration (human-readable text)
-- **`.zip`**: Compressed archive of multiple files
-- **`.ttf` / `.otf`**: Font files (True Type / Open Type)
-- **`.svg`**: Vector graphics (can import)
+### Performance Features
+- **Font Preloading**: Background loading of all fonts
+- **Geometry Caching**: Optimized 3D rendering
+- **Debounced Updates**: Smooth real-time preview
+- **Memory Management**: Automatic cleanup of resources
 
 ---
 
-## Summary Quick Start
-
-1. **Install**: Download installer or portable `.exe`
-2. **Open**: Double-click application icon
-3. **Create**: Customize default snowflake in Global tab
-4. **Text**: Set your text and font in Text tab
-5. **Decorate**: Add hubs and patterns in respective tabs
-6. **Preview**: Rotate 3D model to see result
-7. **Test**: Export "Low" quality to preview
-8. **Print**: Export "High" quality STL for 3D printer
-
-**Happy snowflake creating!** 🎄❄️
+Enjoy creating beautiful snowflake designs! ❄️
