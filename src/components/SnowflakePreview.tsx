@@ -147,6 +147,39 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.layers, dynamicFonts]);
 
+  // Check for preloaded fonts on mount
+  useEffect(() => {
+    const checkPreloadedFonts = () => {
+      let foundPreloaded = false;
+      config.layers.filter(l => l.enabled).forEach(l => {
+        const checkFont = (family: string) => {
+          const name = family.replace(/'/g, '').split(',')[0].trim();
+          if (!fontsRef.current[name] && !((fontsRef.current as any)[`__loading_${name}`])) {
+            const preloadedFont = fontPreloader.getFont(name);
+            if (preloadedFont) {
+              fontsRef.current[name] = preloadedFont;
+              foundPreloaded = true;
+            }
+          }
+        };
+        
+        if (l.primary.enabled) checkFont(l.primary.fontFamily);
+        if (l.secondaryEnabled && l.secondary.enabled) checkFont(l.secondary.fontFamily);
+      });
+      
+      if (foundPreloaded) {
+        setFontLoadCount(c => c + 1);
+      }
+    };
+
+    // Check immediately
+    checkPreloadedFonts();
+    
+    // Also check after a short delay in case fonts are still loading
+    const timer = setTimeout(checkPreloadedFonts, 1000);
+    return () => clearTimeout(timer);
+  }, [config.layers]);
+
   useEffect(() => {
     if (!svgRef.current) return;
     const updateSize = () => {
