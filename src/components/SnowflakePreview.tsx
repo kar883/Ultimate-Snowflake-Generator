@@ -132,7 +132,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
           setFontLoadCount(c => c + 1);
           return;
         } else {
-          console.log(`❌ Font not preloaded: ${name}`);
+          console.log(`❌ Font not preloaded: ${name}, loading on-demand`);
         }
         
         // Mark as in-flight with a sentinel so concurrent calls don't double-load
@@ -351,7 +351,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
 
         textPaths = buildSvgInstances(d, false);
       } else {
-        console.warn(`SnowflakePreview: font '${fontName}' not loaded yet, using fallback text rendering.`);
+        // Font not loaded yet, use fallback text rendering silently
         textPaths = buildSvgInstances(null, true);
       }
     }
