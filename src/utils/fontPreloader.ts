@@ -120,7 +120,8 @@ class FontPreloader {
     // Clean font name (remove quotes and split by comma)
     const cleanName = fontName.replace(/'/g, '').split(',')[0].trim();
     const font = this.cache.get(cleanName);
-    console.log(`🔍 FontPreloader.getFont(${fontName}) -> ${font ? 'FOUND' : 'NOT FOUND'} (cache size: ${this.cache.size})`);
+    console.log(`🔍 FontPreloader.getFont(${fontName}) -> ${font ? 'FOUND' : 'NOT FOUND'} (clean name: ${cleanName}, cache size: ${this.cache.size})`);
+    console.log(`🔍 Cache contents:`, Array.from(this.cache.keys()));
     return font || null;
   }
 
