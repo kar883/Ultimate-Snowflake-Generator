@@ -2812,7 +2812,7 @@ const App: React.FC = () => {
   };
 
   const handleResetSettings = () => {
-    // Get the proper default configuration
+    // Get proper default configuration
     const defaultConfig = createDefaultConfig();
     
     // Create reset config based on defaults but preserve user customizations
@@ -2821,19 +2821,62 @@ const App: React.FC = () => {
       // Preserve current project name and basic structure
       projectName: config.projectName,
       activeLayerIndex: config.activeLayerIndex,
-      // Preserve layer structure but reset all settings
-      layers: config.layers.map((layer, index) => ({
-        ...defaultConfig.layers[index] || defaultConfig.layers[0],
-        // Preserve layer identity and basic properties
-        id: layer.id,
-        name: layer.name,
-        enabled: layer.enabled,
-        rotation3D: layer.rotation3D,
-        slotType: layer.slotType,
-        slotLengthAdjustment: layer.slotLengthAdjustment,
-        slotWidthOffset: layer.slotWidthOffset,
-        images: layer.images // Preserve user-added images
-      }))
+      // Preserve layer structure but explicitly reset all settings to defaults
+      layers: config.layers.map((layer, index) => {
+        const defaultLayer = defaultConfig.layers[index] || defaultConfig.layers[0];
+        return {
+          // Start with all default settings
+          ...defaultLayer,
+          // Preserve layer identity and basic properties
+          id: layer.id,
+          name: layer.name,
+          enabled: layer.enabled,
+          rotation3D: layer.rotation3D,
+          slotType: layer.slotType,
+          slotLengthAdjustment: layer.slotLengthAdjustment,
+          slotWidthOffset: layer.slotWidthOffset,
+          images: layer.images, // Preserve user-added images
+          // Explicitly reset all text settings to defaults
+          primary: {
+            ...defaultLayer.primary,
+            text: layer.primary.text, // Preserve user's text content
+            // All other text settings reset to defaults
+            enabled: defaultLayer.primary.enabled,
+            fontFamily: defaultLayer.primary.fontFamily,
+            arms: defaultLayer.primary.arms,
+            textX: defaultLayer.primary.textX, // Reset outer radius
+            letterSpacing: defaultLayer.primary.letterSpacing,
+            thickness: defaultLayer.primary.thickness, // Reset boldness
+            fontSize: defaultLayer.primary.fontSize,
+            mirrorEnabled: defaultLayer.primary.mirrorEnabled, // Reset mirror
+            mirrorOffset: defaultLayer.primary.mirrorOffset,
+            rotationOffset: defaultLayer.primary.rotationOffset,
+            charOffsets: defaultLayer.primary.charOffsets,
+            underline: defaultLayer.primary.underline
+          },
+          secondary: {
+            ...defaultLayer.secondary,
+            text: layer.secondary.text, // Preserve user's text content
+            // All other text settings reset to defaults
+            enabled: defaultLayer.secondary.enabled,
+            fontFamily: defaultLayer.secondary.fontFamily,
+            arms: defaultLayer.secondary.arms,
+            textX: defaultLayer.secondary.textX, // Reset outer radius
+            letterSpacing: defaultLayer.secondary.letterSpacing,
+            thickness: defaultLayer.secondary.thickness, // Reset boldness
+            fontSize: defaultLayer.secondary.fontSize,
+            mirrorEnabled: defaultLayer.secondary.mirrorEnabled, // Reset mirror
+            mirrorOffset: defaultLayer.secondary.mirrorOffset,
+            rotationOffset: defaultLayer.secondary.rotationOffset,
+            charOffsets: defaultLayer.secondary.charOffsets,
+            underline: defaultLayer.secondary.underline
+          },
+          secondaryEnabled: defaultLayer.secondaryEnabled,
+          // Reset hubs and abstracts to defaults (empty)
+          abstracts: defaultLayer.abstracts,
+          hubs: defaultLayer.hubs
+        };
+      })
     };
     
     setConfig(resetConfig);
