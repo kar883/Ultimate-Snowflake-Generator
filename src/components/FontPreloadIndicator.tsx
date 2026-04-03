@@ -1,32 +1,62 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useFontPreloader } from '../utils/fontPreloader';
 
 const FontPreloadIndicator: React.FC = () => {
   const { getProgress } = useFontPreloader();
   const [progress, setProgress] = useState({ isPreloading: false, loaded: 0, total: 0 });
   const [isVisible, setIsVisible] = useState(false);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Add CSS animation to document
+  useEffect(() => {
+    const styleId = 'font-preloader-spinner-style';
+    if (!document.getElementById(styleId)) {
+      const style = document.createElement('style');
+      style.id = styleId;
+      style.textContent = `
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+  }, []);
 
   useEffect(() => {
     const updateProgress = () => {
       const currentProgress = getProgress();
-      setProgress(currentProgress);
+      
+      // Only update state if progress actually changed
+      setProgress(prev => {
+        if (prev.isPreloading !== currentProgress.isPreloading ||
+            prev.loaded !== currentProgress.loaded ||
+            prev.total !== currentProgress.total) {
+          return currentProgress;
+        }
+        return prev;
+      });
       
       // Show indicator only when preloading is active
       if (currentProgress.isPreloading && !isVisible) {
         setIsVisible(true);
       } else if (!currentProgress.isPreloading && isVisible) {
         // Hide after a delay when complete
-        const timer = setTimeout(() => setIsVisible(false), 2000);
-        return () => clearTimeout(timer);
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => setIsVisible(false), 2000);
       }
     };
 
     // Update progress every 500ms during preloading
-    const interval = setInterval(updateProgress, 500);
+    intervalRef.current = setInterval(updateProgress, 500);
     updateProgress(); // Initial update
 
-    return () => clearInterval(interval);
-  }, [getProgress, isVisible]);
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [getProgress]); // Remove isVisible from dependencies
 
   if (!isVisible) return null;
 
@@ -83,13 +113,6 @@ const FontPreloadIndicator: React.FC = () => {
           width: `${percentage}%`
         }} />
       </div>
-
-      <style jsx>{`
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-      `}</style>
     </div>
   );
 };
