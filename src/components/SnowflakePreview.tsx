@@ -7,6 +7,7 @@ import { InfoTooltip } from './Tooltip';
 import { modelCache2D, hashConfig } from '../geometryCache';
 import { useSvgRotationWorker } from '../hooks/useSvgRotationWorker';
 import { useTranslation } from '../translations';
+import { fontPreloader } from '../utils/fontPreloader';
 
 // Helper function to get translated description
 const getDescription = (key: string, t?: (key: string) => string): string => {
@@ -115,8 +116,18 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
     config.layers.filter(l => l.enabled).forEach(l => {
       const loadFontIfNeeded = (family: string) => {
         const name = family.replace(/'/g, '').split(',')[0].trim();
+        
         // Skip if already loaded or currently loading
         if (fontsRef.current[name] || (fontsRef.current as any)[`__loading_${name}`]) return;
+        
+        // Check if font is preloaded first
+        const preloadedFont = fontPreloader.getFont(name);
+        if (preloadedFont) {
+          fontsRef.current[name] = preloadedFont;
+          setFontLoadCount(c => c + 1);
+          return;
+        }
+        
         // Mark as in-flight with a sentinel so concurrent calls don't double-load
         (fontsRef.current as any)[`__loading_${name}`] = true;
         opentype.load(dynamicFonts[name] || FONT_TTF_URLS[name], (e, f) => {

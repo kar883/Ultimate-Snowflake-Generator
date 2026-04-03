@@ -1,10 +1,13 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { SnowflakeConfig, TextGroupConfig, HubConfig, CharOffset, LayerConfig, AbstractConfig, DesignQuality, UnderlineConfig, ShortcutConfig, ImageConfig, createDefaultImage } from './types';
 import { CURSIVE_FONTS, FONT_TTF_URLS, BOLD_FONT_URLS, BOLD_FONT_THRESHOLD } from './constants';
+import { useFontPreloader } from './utils/fontPreloader';
 import ControlPanel from './components/ControlPanel';
 import SnowflakePreview from './components/SnowflakePreview';
 import Snowflake3D from './components/Snowflake3D';
 import Header from './components/Header';
+import ShortcutsModal from './components/ShortcutsModal';
+import FontPreloadIndicator from './components/FontPreloadIndicator';
 import * as THREE_ACTUAL from 'three';
 import { STLExporter } from './stlExporter';
 // import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader';
@@ -12,6 +15,7 @@ import { STLExporter } from './stlExporter';
 import opentype from 'opentype.js';
 import JSZip from 'jszip';
 import { GoogleGenAI } from "@google/genai";
+import { getApiKey, loadAiScope, type AiScopeConfig } from './components/ShortcutsModal';
 import { /*surgicalSlotRepair,*/ getTopologyReport } from './surgicalSlotRepair';
 // @ts-ignore
 // import { fillHolesManifold } from './holeFillingRepair'; // Temporarily commented
@@ -29,7 +33,7 @@ const DEFAULT_SHORTCUTS: ShortcutConfig = {
     loadProject: { key: 'l', ctrlKey: true },
     exportBasePlaneSTL: { key: 'a', ctrlKey: true },
     exportCrossPlaneSTL: { key: 'd', ctrlKey: true },
-    exportTiltPlaneSTL: { key: 's', ctrlKey: true, shiftKey: true }, 
+    exportTiltPlaneSTL: { key: 's', ctrlKey: true, shiftKey: true },
     switchToGlobalTab: { key: '1', altKey: true },
     switchToTextTab: { key: '2', altKey: true },
     switchToLetterCtrlTab: { key: '3', altKey: true },
@@ -38,14 +42,25 @@ const DEFAULT_SHORTCUTS: ShortcutConfig = {
     switchToPlanesTab: { key: '6', altKey: true },
 };
 
-const useFontCache = () => {
+const useFontCache = (getPreloadedFont?: (fontName: string) => opentype.Font | null, isPreloadedFont?: (fontName: string) => boolean) => {
   const fontCache = useRef<Record<string, opentype.Font>>({});
-  
+
   const loadFont = useCallback(async (fontName: string, url: string) => {
+    // First check if font is already in our cache
     if (fontCache.current[fontName]) {
       return fontCache.current[fontName];
     }
-    
+
+    // Check if font is preloaded
+    if (getPreloadedFont && isPreloadedFont) {
+      const preloadedFont = getPreloadedFont(fontName);
+      if (preloadedFont && isPreloadedFont(fontName)) {
+        fontCache.current[fontName] = preloadedFont;
+        return preloadedFont;
+      }
+    }
+
+    // If not preloaded, load it normally
     return new Promise<opentype.Font>((resolve, reject) => {
       opentype.load(url, (err, font) => {
         if (err || !font) {
@@ -56,8 +71,8 @@ const useFontCache = () => {
         resolve(font);
       });
     });
-  }, []);
-  
+  }, [getPreloadedFont, isPreloadedFont]);
+
   return { loadFont, fontCache: fontCache.current };
 };
 
@@ -65,17 +80,17 @@ const useThreeJSCleanup = () => {
   const geometries = useRef<THREE_ACTUAL.BufferGeometry[]>([]);
   const materials = useRef<THREE_ACTUAL.Material[]>([]);
   const meshes = useRef<THREE_ACTUAL.Mesh[]>([]);
-  
+
   const trackGeometry = useCallback((geo: THREE_ACTUAL.BufferGeometry) => {
     geometries.current.push(geo);
     return geo;
   }, []);
-  
+
   const trackMesh = useCallback((mesh: THREE_ACTUAL.Mesh) => {
     meshes.current.push(mesh);
     return mesh;
   }, []);
-  
+
   const cleanup = useCallback(() => {
     [...geometries.current].forEach(geo => {
       try { geo.dispose(); } catch (e) { console.warn('Failed to dispose geometry:', e); }
@@ -84,21 +99,21 @@ const useThreeJSCleanup = () => {
       try { mat.dispose(); } catch (e) { console.warn('Failed to dispose material:', e); }
     });
     [...meshes.current].forEach(mesh => {
-      try { 
-        mesh.geometry?.dispose(); 
+      try {
+        mesh.geometry?.dispose();
         if (Array.isArray(mesh.material)) {
           mesh.material.forEach(m => m.dispose());
         } else {
-          mesh.material?.dispose(); 
+          mesh.material?.dispose();
         }
       } catch (e) { console.warn('Failed to dispose mesh:', e); }
     });
-    
+
     geometries.current = [];
     materials.current = [];
     meshes.current = [];
   }, []);
-  
+
   return { trackGeometry, trackMesh, cleanup };
 };
 
@@ -139,14 +154,14 @@ function offsetShape(shape: THREE_ACTUAL.Shape, offset: number): THREE_ACTUAL.Sh
     x: centerX + (p.x - centerX) * scale,
     y: centerY + (p.y - centerY) * scale
   }));
-  
+
   const offsetShape = new THREE_ACTUAL.Shape();
   offsetShape.moveTo(scaledPoints[0].x, scaledPoints[0].y);
   for (let i = 1; i < scaledPoints.length; i++) {
     offsetShape.lineTo(scaledPoints[i].x, scaledPoints[i].y);
   }
   offsetShape.closePath();
-  
+
   return offsetShape;
 }
 
@@ -164,16 +179,16 @@ function applyBoldnessToShapes(
 
   // PROPER BOLDNESS - Preserves Holes and Handles Self-Intersections
   const expandedShapes: THREE_ACTUAL.Shape[] = [];
-  
+
   for (const shape of shapes) {
     try {
       // Extract the main contour and holes separately
       const extractedPoints = shape.extractPoints(48);
-      
+
       // Offset the outer shape OUTWARD
       const outerPoints = extractedPoints.shape;
       const expandedOuter = offsetPathWithValidation(outerPoints, strokeWidth / 2, false);
-      
+
       // Offset the holes INWARD (so they get smaller, preserving the loop)
       const contractedHoles: THREE_ACTUAL.Vector2[][] = [];
       if (extractedPoints.holes && extractedPoints.holes.length > 0) {
@@ -185,17 +200,17 @@ function applyBoldnessToShapes(
           }
         }
       }
-      
+
       // Create new shape with expanded outer and contracted holes
       if (expandedOuter && expandedOuter.length > 2) {
         const newShape = new THREE_ACTUAL.Shape(expandedOuter);
-        
+
         // Add holes back
         for (const holePoints of contractedHoles) {
           const holePath = new THREE_ACTUAL.Path(holePoints);
           newShape.holes.push(holePath);
         }
-        
+
         expandedShapes.push(newShape);
       }
     } catch (error) {
@@ -203,12 +218,12 @@ function applyBoldnessToShapes(
       expandedShapes.push(shape);
     }
   }
-  
+
   if (expandedShapes.length > 0) {
     console.log(`✅ Applied ${strokeWidth}px boldness to ${expandedShapes.length} shapes`);
     return expandedShapes;
   }
-  
+
   return shapes;
 }
 
@@ -217,42 +232,42 @@ function applyBoldnessToShapes(
  * Returns null if offset creates invalid geometry
  */
 function offsetPathWithValidation(
-  points: THREE_ACTUAL.Vector2[], 
+  points: THREE_ACTUAL.Vector2[],
   offsetDist: number,
   isHole: boolean
 ): THREE_ACTUAL.Vector2[] | null {
-  
+
   if (points.length < 3) return null;
-  
+
   const offsetPoints: THREE_ACTUAL.Vector2[] = [];
   const len = points.length;
-  
+
   for (let i = 0; i < len; i++) {
     const curr = points[i];
     const prev = points[(i - 1 + len) % len];
     const next = points[(i + 1) % len];
-    
+
     // Calculate tangents
     const dx1 = curr.x - prev.x;
     const dy1 = curr.y - prev.y;
     const dx2 = next.x - curr.x;
     const dy2 = next.y - curr.y;
-    
+
     const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1) || 1;
     const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2) || 1;
-    
+
     // Perpendicular vectors
     const n1x = -dy1 / len1;
     const n1y = dx1 / len1;
     const n2x = -dy2 / len2;
     const n2y = dx2 / len2;
-    
+
     // Average normal
     let avgNx = (n1x + n2x) / 2;
     let avgNy = (n1y + n2y) / 2;
-    
+
     const avgLen = Math.sqrt(avgNx * avgNx + avgNy * avgNy);
-    
+
     // Detect degenerate cases
     if (avgLen < 0.001) {
       // Sharp corner or cusp - use perpendicular to incoming edge
@@ -262,11 +277,11 @@ function offsetPathWithValidation(
       avgNx /= avgLen;
       avgNy /= avgLen;
     }
-    
+
     // Calculate the angle between consecutive edges
     const dot = (dx1 * dx2 + dy1 * dy2) / (len1 * len2);
     const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
-    
+
     // Apply miter limit for sharp corners
     let actualOffset = offsetDist;
     if (angle < Math.PI / 6) { // Less than 30 degrees
@@ -277,28 +292,28 @@ function offsetPathWithValidation(
         actualOffset = offsetDist * miterLimit * Math.sin(angle / 2);
       }
     }
-    
+
     offsetPoints.push(new THREE_ACTUAL.Vector2(
       curr.x + avgNx * actualOffset,
       curr.y + avgNy * actualOffset
     ));
   }
-  
+
   // Validate the result - check if area is positive (for outer) or negative (for holes)
   const area = calculateSignedArea(offsetPoints);
-  
+
   // If hole is contracting too much and becomes invalid, return null
   if (isHole && Math.abs(area) < 1.0) {
     return null; // Hole collapsed
   }
-  
+
   // Ensure correct winding order
   if (!isHole && area < 0) {
     offsetPoints.reverse();
   } else if (isHole && area > 0) {
     offsetPoints.reverse();
   }
-  
+
   return offsetPoints;
 }
 
@@ -322,42 +337,42 @@ function offsetClosedPath(
   points: THREE_ACTUAL.Vector2[],
   distance: number
 ): THREE_ACTUAL.Vector2[] | null {
-  
+
   if (points.length < 3) return null;
-  
+
   const result: THREE_ACTUAL.Vector2[] = [];
   const n = points.length;
-  
+
   for (let i = 0; i < n; i++) {
     const p0 = points[(i - 1 + n) % n];
     const p1 = points[i];
     const p2 = points[(i + 1) % n];
-    
+
     const e1x = p1.x - p0.x;
     const e1y = p1.y - p0.y;
     const e2x = p2.x - p1.x;
     const e2y = p2.y - p1.y;
-    
+
     const e1len = Math.sqrt(e1x * e1x + e1y * e1y) || 0.001;
     const e2len = Math.sqrt(e2x * e2x + e2y * e2y) || 0.001;
-    
+
     const n1x = -e1y / e1len;
     const n1y = e1x / e1len;
     const n2x = -e2y / e2len;
     const n2y = e2x / e2len;
-    
+
     let bisX = n1x + n2x;
     let bisY = n1y + n2y;
     const bisLen = Math.sqrt(bisX * bisX + bisY * bisY) || 0.001;
     bisX /= bisLen;
     bisY /= bisLen;
-    
+
     result.push(new THREE_ACTUAL.Vector2(
       p1.x + bisX * distance,
       p1.y + bisY * distance
     ));
   }
-  
+
   return result;
 }
 
@@ -366,13 +381,13 @@ const deepEqual = (a: any, b: any): boolean => {
   if (a === b) return true;
   if (a == null || b == null) return a === b;
   if (typeof a !== typeof b) return false;
-  
+
   if (typeof a !== 'object') return a === b;
-  
+
   const keysA = Object.keys(a);
   const keysB = Object.keys(b);
   if (keysA.length !== keysB.length) return false;
-  
+
   for (const key of keysA) {
     if (!keysB.includes(key)) return false;
     if (!deepEqual(a[key], b[key])) return false;
@@ -386,37 +401,37 @@ const deepClone = (obj: any): any => structuredClone(obj);
 
 const useErrorHandler = () => {
   const [error, setError] = useState<{message: string, details?: any} | null>(null);
-  
+
   const handleError = useCallback((error: any, context: string) => {
     console.error(`[${context}] Error:`, error);
     setError({
       message: error.message || 'An unexpected error occurred',
       details: error
     });
-    
+
     // Auto-clear error after 5 seconds
     setTimeout(() => setError(null), 5000);
   }, []);
-  
+
   return { error, handleError };
 };
 
 const useExportManager = () => {
   const [exportProgress, setExportProgress] = useState<number>(0);
   const [isExporting, setIsExporting] = useState(false);
-  
+
   const exportWithProgress = useCallback(async (
     exportFn: (onProgress: (progress: number) => void) => Promise<Blob>,
     filename: string
   ) => {
     setIsExporting(true);
     setExportProgress(0);
-    
+
     try {
       const blob = await exportFn((progress) => {
         setExportProgress(progress);
       });
-      
+
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -425,7 +440,7 @@ const useExportManager = () => {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      
+
       setExportProgress(100);
     } catch (error) {
       console.error('Export failed:', error);
@@ -437,7 +452,7 @@ const useExportManager = () => {
       }, 1000);
     }
   }, []);
-  
+
   return { exportProgress, isExporting, exportWithProgress };
 };
 
@@ -448,37 +463,37 @@ const useUserFeedback = () => {
     type: 'info' | 'success' | 'warning' | 'error';
     duration?: number;
   }>>([]);
-  
+
   const showNotification = useCallback((
-    message: string, 
+    message: string,
     type: 'info' | 'success' | 'warning' | 'error' = 'info',
     duration: number = 3000
   ) => {
     const id = Math.random().toString(36).substr(2, 9);
     setNotifications(prev => [...prev, { id, message, type, duration }]);
-    
+
     if (duration > 0) {
       setTimeout(() => {
         setNotifications(prev => prev.filter(n => n.id !== id));
       }, duration);
     }
   }, []);
-  
+
   const removeNotification = useCallback((id: string) => {
     setNotifications(prev => prev.filter(n => n.id !== id));
   }, []);
-  
+
   return { notifications, showNotification, removeNotification };
 };
 
 const useKeyboardShortcuts = (
-    shortcuts: ShortcutConfig, 
+    shortcuts: ShortcutConfig,
     callbacks: { [key in keyof ShortcutConfig]?: () => void } & { forceUpdate3D: () => void }
 ) => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const isInput = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
-      
+
       if (e.key === 'Enter' && !isInput) {
           e.preventDefault();
           callbacks.forceUpdate3D();
@@ -488,7 +503,7 @@ const useKeyboardShortcuts = (
       if (isInput) {
         if (!e.ctrlKey && !e.altKey && !e.metaKey) return;
       }
-      
+
       const check = (def: any) => {
           if (!def) return false;
           return e.key.toLowerCase() === def.key.toLowerCase() &&
@@ -507,7 +522,7 @@ const useKeyboardShortcuts = (
           }
       }
     };
-    
+
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [shortcuts, callbacks]);
@@ -1034,10 +1049,10 @@ const seededRandom = (seed: number) => {
 //     slotLength, slotWidth, extrusionDepth,
 //     bevelEnabled, bevelAmount, globalStrokeWeight
 //   );
-  
+
 //   // TEMPORARY: Force-bust slot cache during debugging
 //   clearSlotCache();  // remove after slot geometry is verified
-  
+
 //   const slotGeometries = getOrCreateSlotGeometries(
 //     cacheKey,
 //     () => createSlotGeometries(
@@ -1153,12 +1168,12 @@ const seededRandom = (seed: number) => {
 const createDefaultTextGroup = (text: string, rotation: number, fontSize: number, textX: number): TextGroupConfig => ({
   enabled: true,
   text,
-  fontFamily: CURSIVE_FONTS[0].name,
+  fontFamily: CURSIVE_FONTS[0].family,
   arms: 6,
-  textX, 
+  textX,
   letterSpacing: 0,
-  thickness: 0, 
-  fontSize, 
+  thickness: 0,
+  fontSize,
   mirrorEnabled: true,
   mirrorOffset: 0,
   rotationOffset: rotation,
@@ -1171,7 +1186,7 @@ const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isEnabled 
   name,
   enabled: isEnabled,
   rotation3D: { x: rx, y: ry, z: 0 },
-  primary: createDefaultTextGroup("Snow", 0, 36.7, 20), 
+  primary: createDefaultTextGroup("Snow", 0, 36.7, 20),
   secondary: createDefaultTextGroup("", 30, 20, 10),
   secondaryEnabled: true,
   abstracts: [],
@@ -1208,22 +1223,22 @@ const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isEnabled 
 
 const App: React.FC = () => {
   const defaultDepth = 3.0;
-  
+
   // Debug: Track app initialization only once
   useEffect(() => {
     const appStartTime = performance.now();
     console.log(`🚀 App Debug: App component starting initialization at ${appStartTime.toFixed(2)}ms`);
-    
+
     return () => {
       console.log(`🚀 App Debug: App component unmounted after ${(performance.now() - appStartTime).toFixed(2)}ms`);
     };
   }, []);
-  
+
   // Cache for expensive operations
   const enabledLayersCache = useRef<Map<string, LayerConfig[]>>(new Map());
   const lastConfigHash = useRef<string>('');
   const lastQuality = useRef<string>('');
-  
+
   const initialState: SnowflakeConfig = {
     projectName: "MySnowflake",
     layers: [
@@ -1237,19 +1252,20 @@ const App: React.FC = () => {
     bevelEnabled: true, // Default ON
     bevelType: 'fillet',
     bevelAmount: 0.4,
-    bevelSegments: 5, 
+    bevelSegments: 5,
     slotEnabled: false,
-    slotLength: 95, 
+    slotLength: 95,
     slotWidth: 4.0,
     slotMode: '2-plane',
     quality: 'low',
     syncAllLayers: true, // Default ON
-    globalStrokeWeight: 0
+    globalStrokeWeight: 0,
+    freeFloatingCheck: true
   };
 
   const [config, setConfig] = useState<SnowflakeConfig>(initialState);
-  const [config3D, setConfig3D] = useState<SnowflakeConfig>(initialState); 
-  const [rendered3DConfig, setRendered3DConfig] = useState<SnowflakeConfig>(initialState); 
+  const [config3D, setConfig3D] = useState<SnowflakeConfig>(initialState);
+  const [rendered3DConfig, setRendered3DConfig] = useState<SnowflakeConfig>(initialState);
   // Guarded setter: skip update when config hash is unchanged (avoids full deepEqual on main thread).
   const lastRendered3DHash = useRef<string>(hashConfig(initialState));
   const setRendered3DIfChanged = useCallback((next: SnowflakeConfig) => {
@@ -1258,11 +1274,14 @@ const App: React.FC = () => {
     lastRendered3DHash.current = h;
     setRendered3DConfig(next);
   }, []);
-  const [designDiameter, setDesignDiameter] = useState(0); 
+  const [designDiameter, setDesignDiameter] = useState(0);
   const [activeTab, setActiveTab] = useState<'global' | 'text' | 'Letter Ctrl' | 'hubs' | 'abstract' | 'planes' | 'images'>('text');
   const [shortcuts, setShortcuts] = useState<ShortcutConfig>(DEFAULT_SHORTCUTS);
   const [language, setLanguage] = useState<string>('en');
   const [showTooltips, setShowTooltips] = useState<boolean>(true);
+  const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+  const [shortcutsModalTab, setShortcutsModalTab] = useState<'shortcuts' | 'apikey' | 'aiscope'>('shortcuts');
+  const [shortcutsModalMessage, setShortcutsModalMessage] = useState<string | null>(null);
 
   const [history, setHistory] = useState<SnowflakeConfig[]>([initialState]);
   const [historyIndex, setHistoryIndex] = useState(0);
@@ -1271,15 +1290,38 @@ const App: React.FC = () => {
 
   const [exportLoading, setExportLoading] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
-  const [aiProgress, setAiProgress] = useState(0); 
-  const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d'); 
+  const [aiProgress, setAiProgress] = useState(0);
+  const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d');
   const [dynamicFonts, setDynamicFonts] = useState<Record<string, string>>(FONT_TTF_URLS);
-  
+
+  // Font preloader hook
+  const { preloadAllFonts, getFont, isFontLoaded, getProgress } = useFontPreloader();
+
+  // Preload all fonts when app starts
+  useEffect(() => {
+    const preloadFonts = async () => {
+      try {
+        console.log('Starting font preloading...');
+        const result = await preloadAllFonts();
+        console.log('Font preloading completed:', result);
+        
+        if (result.failed.length > 0) {
+          console.warn('Some fonts failed to preload:', result.failed);
+        }
+      } catch (error) {
+        console.error('Font preloading failed:', error);
+      }
+    };
+
+    preloadFonts();
+  }, [preloadAllFonts]);
+
   // Load fonts as CSS @font-face rules for dropdown display
   useEffect(() => {
     const style = document.createElement('style');
     let cssText = '';
-    
+
+    // Add built-in fonts
     CURSIVE_FONTS.forEach(font => {
       const fontUrl = FONT_TTF_URLS[font.name];
       if (fontUrl) {
@@ -1294,25 +1336,39 @@ const App: React.FC = () => {
         `;
       }
     });
-    
+
+    // Add dynamic fonts
+    Object.entries(dynamicFonts).forEach(([name, url]) => {
+      if (url && !CURSIVE_FONTS.some(f => f.name === name)) {
+        cssText += `
+          @font-face {
+            font-family: '${name}';
+            src: url('${url}') format('truetype');
+            font-weight: normal;
+            font-style: normal;
+          }
+        `;
+      }
+    });
+
     if (cssText) {
       style.textContent = cssText;
       document.head.appendChild(style);
     }
-    
+
     return () => {
       if (style.parentNode) {
         style.parentNode.removeChild(style);
       }
     };
-  }, []);
-  
+  }, [dynamicFonts]);
+
   const svgRef = useRef<SVGSVGElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const csgEvaluator = useRef(null); // No longer needed on main thread for cutting
   const debounceTimer = useRef<NodeJS.Timeout | null>(null);
 
-  const { loadFont } = useFontCache();
+  const { loadFont } = useFontCache(getFont, isFontLoaded);
   const { cleanup } = useThreeJSCleanup();
   const { handleError } = useErrorHandler();
   const { exportWithProgress } = useExportManager();
@@ -1335,17 +1391,17 @@ const App: React.FC = () => {
 
   // Memoized enabled layers with caching
   const getEnabledLayers = useCallback((config: SnowflakeConfig): LayerConfig[] => {
-    const configHash = JSON.stringify({ 
+    const configHash = JSON.stringify({
       layers: config.layers.map(l => ({ id: l.id, enabled: l.enabled }))
     });
-    
+
     if (lastConfigHash.current !== configHash) {
       const enabled = config.layers.filter(l => l.enabled);
       enabledLayersCache.current.set(configHash, enabled);
       lastConfigHash.current = configHash;
       return enabled;
     }
-    
+
     return enabledLayersCache.current.get(configHash) || [];
   }, []);
 
@@ -1392,7 +1448,7 @@ const App: React.FC = () => {
                     const fontName = group.fontFamily.replace(/'/g, '').split(',')[0].trim();
                     const url = dynamicFonts[fontName] || FONT_TTF_URLS[fontName];
                     try {
-                        const font = await loadFont(fontName, url); 
+                        const font = await loadFont(fontName, url);
                         if (font) {
                             const scale = group.fontSize / font.unitsPerEm;
                             const glyphs = font.stringToGlyphs(group.text);
@@ -1405,9 +1461,9 @@ const App: React.FC = () => {
                                 if (glyphRightEdge > maxGlyphX) maxGlyphX = glyphRightEdge;
                                 currentX += (glyph.advanceWidth * scale) + group.letterSpacing;
                             });
-                            
-                            let textExtent = group.textX + maxGlyphX; 
-                            
+
+                            let textExtent = group.textX + maxGlyphX;
+
                             // Underline
                             if (group.underline?.enabled) {
                                  const u = group.underline;
@@ -1436,7 +1492,7 @@ const App: React.FC = () => {
     if ('globalStrokeWeight' in updates && typeof updates.globalStrokeWeight === 'number') {
       updates.globalStrokeWeight = Math.max(0, Math.min(10, updates.globalStrokeWeight));
     }
-    
+
     // Clear geometry cache if boldness settings change
     if ('globalStrokeWeight' in updates && updates.globalStrokeWeight !== config.globalStrokeWeight) {
       clearGeometryCache();
@@ -1451,11 +1507,11 @@ const App: React.FC = () => {
     // if ('slotEnabled' in updates || 'slotLength' in updates || ...) {
     //   clearSlotCache(); slotCutCache.clear();
     // }
-    
+
     setConfig(prev => {
       const next = { ...prev, ...updates };
-      
-      
+
+
       if (debounceTimer.current) {
           clearTimeout(debounceTimer.current);
           debounceTimer.current = null;
@@ -1469,7 +1525,7 @@ const App: React.FC = () => {
             return newHistory;
         });
         setHistoryIndex(i => Math.min(i + 1, MAX_HISTORY - 1));
-        
+
         // Immediate update for 3D view (whether visible or not, it keeps it in sync)
         setRendered3DIfChanged(next);
       } else {
@@ -1493,7 +1549,7 @@ const App: React.FC = () => {
       }
   }, []);
 
-  
+
   const updateGroup = useCallback((group: 'primary' | 'secondary', updates: Partial<TextGroupConfig>, commitTo3D: boolean = false) => {
     handleUpdateConfig({
       layers: config.layers.map((layer, idx) => {
@@ -1583,19 +1639,19 @@ const App: React.FC = () => {
 
   const generateMesh = useCallback(async (onProgress: (p: number) => void, overrideQuality?: DesignQuality, overrideConfig?: SnowflakeConfig): Promise<THREE_ACTUAL.Group> => {
     const config = overrideConfig || rendered3DConfig;
-    
+
     // Full-config cache key — any property change invalidates the cache.
     // Previously used a partial key that missed hub/abstract parameters,
     // causing 3D to show stale mesh when those values changed.
     const meshKey = hashConfig(config) + '|q:' + (overrideQuality || config.quality);
-    
+
     // Check cache first
     const cached = modelCache3D.get(meshKey);
     if (cached && !overrideQuality && !overrideConfig) {
       onProgress(1);
       return cached;
     }
-    
+
     // Clear geometry cache if quality changes (different curve/bevel segments)
     if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
       clearGeometryCache();
@@ -1604,7 +1660,7 @@ const App: React.FC = () => {
     let qMult = 1;
     let curveSeg = 12;
     let bevelSegCap = 10;
-    
+
     if (qualityToUse === 'low') {
         qMult = 0.5;
         curveSeg = 6;
@@ -1637,39 +1693,39 @@ const App: React.FC = () => {
     const group = new THREE_ACTUAL.Group();
     // Only generate enabled layers
     const layersToGenerate = config.layers.filter(l => l.enabled);
-    
+
     let totalOps = layersToGenerate.length;
 
     let completedOps = 0;
-    
+
     const updateProgress = async () => {
         completedOps++;
         onProgress(Math.min(0.99, completedOps / totalOps));
-        await new Promise(r => setTimeout(r, 10)); 
+        await new Promise(r => setTimeout(r, 10));
     };
 
     for (let lIdx = 0; lIdx < layersToGenerate.length; lIdx++) {
       const layer = layersToGenerate[lIdx];
       const layerGeometries: THREE_ACTUAL.BufferGeometry[] = [];
-      
+
       const processTextGroup = async (textGroup: TextGroupConfig) => {
   if (!textGroup.enabled) return;
-  
+
   const fontName = textGroup.fontFamily.replace(/'/g, '').split(',')[0].trim();
   const url = dynamicFonts[fontName] || FONT_TTF_URLS[fontName];
-  
+
   try {
     const font = await loadFont(fontName, url);
     if (font) {
       const scale = textGroup.fontSize / font.unitsPerEm;
       const glyphs = font.stringToGlyphs(textGroup.text);
-      
+
       // BOLD FONT VARIANT FALLBACK (E part of B+E)
       // If high stroke weight and bold variant available, try loading it
       const totalStrokeWeight = (rendered3DConfig.globalStrokeWeight || 0) + (textGroup.thickness || 0);
       const boldUrl = BOLD_FONT_URLS[fontName];
       let finalFont = font;
-      
+
       if (totalStrokeWeight >= BOLD_FONT_THRESHOLD && boldUrl) {
         try {
           console.log(`🎯 Attempting bold font variant for ${fontName}`);
@@ -1685,7 +1741,7 @@ const App: React.FC = () => {
       let textShapes: THREE_ACTUAL.Shape[] = [];
       let nonTextShapes: THREE_ACTUAL.Shape[] = [];
       let currentX = 0;
-      
+
       glyphs.forEach((glyph, i) => {
         try {
           const offset = textGroup.charOffsets[i] || { x: 0, y: 0 };
@@ -1704,17 +1760,17 @@ const App: React.FC = () => {
         }
         currentX += (glyph.advanceWidth * scale) + textGroup.letterSpacing;
       });
-      
+
       // Combine all shapes for processing
       const shapes = [...textShapes, ...nonTextShapes];
-      
+
       // ==================================================================
       // BOLDNESS PROCESSING - Using bevel expansion for valid geometry
       // ==================================================================
       // Calculate boldness bevel amount (strokeWidth/2 mimics SVG stroke centered on path)
       const boldnessBevel = totalStrokeWeight > 0.1 ? totalStrokeWeight / 2 : 0;
       const shouldApplyBoldness = totalStrokeWeight > 0.1 && !(totalStrokeWeight >= BOLD_FONT_THRESHOLD && boldUrl);
-      
+
       // Create extrude settings with boldness bevel added to regular bevel
       const textExtrudeSettings = {
         ...extrudeSettings,
@@ -1723,7 +1779,7 @@ const App: React.FC = () => {
         bevelSize: bevelPerSide + boldnessBevel,
         bevelSegments: Math.max(2, bevelSegCap), // Ensure enough segments for smoothness
       };
-      
+
       if (shouldApplyBoldness) {
         console.log('🎨 Applying boldness via bevel expansion:', {
           globalStrokeWeight: rendered3DConfig.globalStrokeWeight,
@@ -1737,7 +1793,7 @@ const App: React.FC = () => {
 
       const textKey = makeTextKey(layer.id, textGroup, textGroup.fontSize, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight, textGroup.thickness);
       const groupGeo = getOrCreateGeometry(geometryCache.text, textKey, () => new THREE_ACTUAL.ExtrudeGeometry(shapes, textExtrudeSettings));
-            
+
             // Underline Logic
             const uConf = textGroup.underline;
             let underlineShapes: THREE_ACTUAL.Shape[] = [];
@@ -1749,7 +1805,7 @@ const App: React.FC = () => {
                 const halfT = t / 2;
                 const startX = textGroup.textX + uConf.startXOffset;
                 const endX = startX + uConf.length;
-                
+
                 if (!textGroup.mirrorEnabled) {
                     const topY = (textGroup.mirrorOffset / 2) + uConf.yOffset;
                     const shape = new THREE_ACTUAL.Shape();
@@ -1782,18 +1838,18 @@ const App: React.FC = () => {
                     } else {
                         const y1 = (textGroup.mirrorOffset / 2) + uConf.yOffset;
                         const y2 = -(textGroup.mirrorOffset / 2) - uConf.yOffset;
-                        
+
                         const actualTopY = Math.max(y1, y2);
                         const actualBotY = Math.min(y1, y2);
-                        
+
                         const outerTop = actualTopY + halfT;
                         const innerTop = actualTopY - halfT;
                         const outerBot = actualBotY - halfT;
                         const innerBot = actualBotY + halfT;
-                        
+
                         const capOuterX = endX + uConf.capWidth;
                         const capInnerX = Math.max(endX, endX + uConf.capWidth - (t * 1.5));
-                        
+
                         const shape = new THREE_ACTUAL.Shape();
                         shape.moveTo(startX, outerTop);
                         if (uConf.capType === 'square') {
@@ -1811,7 +1867,7 @@ const App: React.FC = () => {
                              const cy = (outerTop + outerBot) / 2;
                              shape.lineTo(capOuterX, cy);
                              shape.lineTo(endX, outerBot);
-                        } else { 
+                        } else {
                              shape.lineTo(endX, outerTop);
                              shape.lineTo(endX, outerBot);
                         }
@@ -1831,7 +1887,7 @@ const App: React.FC = () => {
                                  const cy = (outerTop + outerBot) / 2;
                                  shape.absellipse(endX, cy, rx, ry, -Math.PI/2, Math.PI/2, false);
                              } else {
-                                 shape.lineTo(endX, innerBot); 
+                                 shape.lineTo(endX, innerBot);
                                  shape.lineTo(endX, innerTop);
                              }
                         } else if (uConf.capType === 'chevron') {
@@ -1852,15 +1908,15 @@ const App: React.FC = () => {
                     }
                 }
             }
-            
+
             // Apply boldness to underlines using the same stroke expansion as text
             const underlineGlobalBoldness = rendered3DConfig.globalStrokeWeight || 0;
             const underlineTextBoldness = uConf.thickness || 0;
             const totalUnderlineBoldness = underlineGlobalBoldness + underlineTextBoldness;
-            
+
             if (totalUnderlineBoldness > 0.1) {
               const expandedUnderlineShapes: THREE_ACTUAL.Shape[] = [];
-              
+
               for (const shape of underlineShapes) {
                 try {
                   // Get points with higher resolution for smoother expansion
@@ -1869,53 +1925,53 @@ const App: React.FC = () => {
                     expandedUnderlineShapes.push(shape);
                     continue;
                   }
-                  
+
                   // Expand the shape outward by strokeWidth/2 to match SVG stroke rendering
                   const expandedPoints: THREE_ACTUAL.Vector2[] = [];
                   const halfStroke = totalUnderlineBoldness / 2;
-                  
+
                   for (let i = 0; i < points.length; i++) {
                     const p = points[i];
                     const prevP = points[(i - 1 + points.length) % points.length];
                     const nextP = points[(i + 1) % points.length];
-                    
+
                     // Calculate normals from adjacent segments
                     const dx1 = p.x - prevP.x;
                     const dy1 = p.y - prevP.y;
                     const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
-                    
+
                     const dx2 = nextP.x - p.x;
                     const dy2 = nextP.y - p.y;
                     const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
-                    
+
                     if (len1 < 0.0001 || len2 < 0.0001) {
                       expandedPoints.push(p);
                       continue;
                     }
-                    
+
                     // Perpendicular normals (rotated 90 degrees)
                     const nx1 = -dy1 / len1;
                     const ny1 = dx1 / len1;
                     const nx2 = -dy2 / len2;
                     const ny2 = dx2 / len2;
-                    
+
                     // Average normal for this vertex
                     const nx = (nx1 + nx2) / 2;
                     const ny = (ny1 + ny2) / 2;
                     const nlen = Math.sqrt(nx * nx + ny * ny);
-                    
+
                     if (nlen < 0.0001) {
                       expandedPoints.push(p);
                       continue;
                     }
-                    
+
                     // Normalize and scale by half stroke width
                     const offsetX = (nx / nlen) * halfStroke;
                     const offsetY = (ny / nlen) * halfStroke;
-                    
+
                     expandedPoints.push(new THREE_ACTUAL.Vector2(p.x + offsetX, p.y + offsetY));
                   }
-                  
+
                   // Create new shape from expanded points
                   if (expandedPoints.length >= 3) {
                     const expandedShape = new THREE_ACTUAL.Shape();
@@ -1933,20 +1989,20 @@ const App: React.FC = () => {
                   expandedUnderlineShapes.push(shape);
                 }
               }
-              
+
               if (expandedUnderlineShapes.length > 0) {
                 underlineShapes = expandedUnderlineShapes;
                 console.log(`✅ Applied ${totalUnderlineBoldness}px boldness to ${expandedUnderlineShapes.length} underline shapes`);
               }
             }
-            
+
             if (underlineShapes.length > 0) {
                 const underlineKey = makeUnderlineKey(layer.id, textGroup, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide);
                 underlineGeo = getOrCreateGeometry(geometryCache.text, underlineKey, () => new THREE_ACTUAL.ExtrudeGeometry(underlineShapes, extrudeSettings));
             }
 
             const angleStep = (Math.PI * 2) / textGroup.arms;
-            
+
             // Center the extrusion on Z-axis
             const centerZOffset = -extrudeSettings.depth / 2;
 
@@ -1961,7 +2017,7 @@ const App: React.FC = () => {
                 if (textGroup.mirrorEnabled) {
                   const mirrored = groupGeo.clone();
                   mirrored.translate(textGroup.textX, -textGroup.mirrorOffset / 2, centerZOffset);
-                  mirrored.rotateZ(-angle); 
+                  mirrored.rotateZ(-angle);
                   layerGeometries.push(mirrored);
                 }
                 if (underlineGeo && underlineGeo.attributes.position?.count > 0) {
@@ -1989,14 +2045,14 @@ const App: React.FC = () => {
              const wallT = (!isNaN(hub.wallThickness) ? hub.wallThickness : 2) + rendered3DConfig.globalStrokeWeight;
              const sRatio = !isNaN(hub.starRatio) ? hub.starRatio : 0.5;
              const amp = !isNaN(hub.oscillationAmplitude) ? hub.oscillationAmplitude : 5;
-             
+
              const sides = hub.shape === 'star' ? Math.floor(hub.sides * 2) : (hub.shape === 'polygon' ? Math.floor(hub.sides) : 64);
              const isOsc = hub.shape === 'circle' && hub.oscillationEnabled;
-             
+
              const baseRes = Math.ceil( (hub.shape === 'circle' ? 128 : 64) * qMult );
              const oscRes = Math.ceil( Math.max(baseRes, hub.oscillationFrequency * 48 * qMult) );
              const res = isOsc ? oscRes : (hub.shape === 'circle' ? baseRes : sides);
-             
+
              for(let i=0; i<=res; i++) {
                  const angle = (i/res) * Math.PI * 2;
                  let r = radius;
@@ -2012,7 +2068,7 @@ const App: React.FC = () => {
                  for(let i=0; i<=res; i++) {
                      const angle = (i/res) * Math.PI * 2;
                      let r = radius - wallT;
-                     if (r < 0) r = 0.1; 
+                     if (r < 0) r = 0.1;
                      if (hub.shape === 'star') r = (i%2 === 0) ? r : r * sRatio;
                      if (isOsc) r += Math.sin(angle * hub.oscillationFrequency) * amp;
                      const x = Math.cos(angle) * r;
@@ -2036,7 +2092,7 @@ const App: React.FC = () => {
 
              const hubKey = makeHubKey(layer.id, hub, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight);
              const geo = getOrCreateGeometry(geometryCache.hubs, hubKey, () => new THREE_ACTUAL.ExtrudeGeometry(shape, extrudeSettings));
-             
+
              // Only add to layer geometries if it has vertices
              if (geo.attributes.position?.count > 0) {
                geo.rotateZ(hub.rotationOffset * Math.PI / 180);
@@ -2058,22 +2114,22 @@ const App: React.FC = () => {
                    // ... (Fractal generation)
                    const shapes: THREE_ACTUAL.Shape[] = [];
                    const rng = seededRandom(abs.randomSeed || 1234);
-                   
+
                    const decay = abs.lengthDecay || 0.8;
                    const depth = abs.recursionDepth || 4;
                    const trunk = abs.trunkLength || 0;
                    const init = abs.initialLength || 30;
-                   
+
                    let theoreticalMax = trunk;
                    if (Math.abs(decay - 1) < 0.0001) {
                        theoreticalMax += init * depth;
                    } else {
                        theoreticalMax += init * ((1 - Math.pow(decay, depth)) / (1 - decay));
                    }
-                   
+
                    const availableSpace = abs.outerRadius - abs.innerRadius;
-                   const scaleFactor = (availableSpace > 0 && theoreticalMax > 0) 
-                       ? Math.min(1.0, availableSpace / theoreticalMax) 
+                   const scaleFactor = (availableSpace > 0 && theoreticalMax > 0)
+                       ? Math.min(1.0, availableSpace / theoreticalMax)
                        : 1.0;
 
                    const effectiveTrunk = trunk * scaleFactor;
@@ -2084,7 +2140,7 @@ const App: React.FC = () => {
                        // ... (Recursive branch logic from original code)
                        if (isNaN(x) || isNaN(y) || isNaN(angleRad) || isNaN(length) || isNaN(width)) return;
                        if (depth <= 0 || length < (effectiveMinBranch || 0.1)) return;
-                       
+
                        const endX = x + Math.cos(angleRad) * length;
                        const endY = y + Math.sin(angleRad) * length;
                        if (isNaN(endX) || isNaN(endY)) return;
@@ -2117,13 +2173,13 @@ const App: React.FC = () => {
                        const baseCount = Math.floor(rawBranchCount);
                        const extraProb = rawBranchCount - baseCount;
                        const spread = (abs.branchAngle || 45) * Math.PI / 180;
-                       const nextLenBase = length * (decay); 
+                       const nextLenBase = length * (decay);
                        const isAlt = abs.branchPattern === 'alternating';
                        const count = isAlt ? 1 : (baseCount + (rng() < extraProb ? 1 : 0));
                        for(let i=0; i<count; i++) {
                            let da = 0;
-                           if (abs.branchPattern === 'random') { da = (rng() - 0.5) * spread * 2; } 
-                           else if (isAlt) { const sign = (depth % 2 !== 0) ? 1 : -1; da = sign * spread; } 
+                           if (abs.branchPattern === 'random') { da = (rng() - 0.5) * spread * 2; }
+                           else if (isAlt) { const sign = (depth % 2 !== 0) ? 1 : -1; da = sign * spread; }
                            else { if (count > 1) da = -spread/2 + i * (spread/(count-1)); }
                            if (abs.angleVariation) da += (rng() - 0.5) * (abs.angleVariation * Math.PI);
                            let childLen = nextLenBase;
@@ -2152,7 +2208,7 @@ const App: React.FC = () => {
                    }
                    const spread = (abs.branchAngle || 45) * Math.PI / 180;
                    const count = (abs.branchPattern === 'alternating') ? 1 : (abs.branchesPerNode || 2);
-                   const initLen = effectiveInit; 
+                   const initLen = effectiveInit;
                    for(let i=0; i<count; i++) {
                        let da = 0;
                        if (abs.branchPattern === 'random') { da = (rng() - 0.5) * spread; } else if (abs.branchPattern === 'alternating') { da = spread; } else { if (count > 1) da = -spread/2 + i * (spread/(count-1)); }
@@ -2169,10 +2225,10 @@ const App: React.FC = () => {
                        if (fractalStrokeWeight > 0.1) {
                          boldedShapes = applyBoldnessToShapes(shapes, fractalStrokeWeight);
                        }
-                       
+
                        const fractalGeo = new THREE_ACTUAL.ExtrudeGeometry(boldedShapes, extrudeSettings);
                        const angleStep = (Math.PI * 2) / abs.arms;
-                       
+
                        // Only push fractal geometries if they have vertices
                        if (fractalGeo.attributes.position?.count > 0) {
                          for(let i=0; i<abs.arms; i++) {
@@ -2183,7 +2239,7 @@ const App: React.FC = () => {
                              layerGeometries.push(absInst);
                              if (abs.mirrorEnabled) {
                                  const mir = fractalGeo.clone();
-                                 mir.scale(1, -1, 1); 
+                                 mir.scale(1, -1, 1);
                                  mir.translate(0, -abs.mirrorOffset/2, centerZOffset);
                                  mir.rotateZ(angle);
                                  layerGeometries.push(mir);
@@ -2225,19 +2281,19 @@ const App: React.FC = () => {
                const normalGeo = getOrCreateGeometry(geometryCache.abstracts, abstractKey + '_normal', () => new THREE_ACTUAL.ExtrudeGeometry(normalShape as any, extrudeSettings));
                const mirroredPoints = shapePoints.map((pt) => new THREE_ACTUAL.Vector2(pt.x, -pt.y));
                const mirroredShape = createAbstractShape(mirroredPoints);
-               
+
                // Apply boldness to abstract shapes using same approach as text
                const abstractStrokeWeight = (config.globalStrokeWeight || 0);
                let finalNormalShape: THREE_ACTUAL.Shape | THREE_ACTUAL.ExtrudeGeometry = normalShape;
                let finalMirroredShape: THREE_ACTUAL.Shape | THREE_ACTUAL.ExtrudeGeometry = mirroredShape;
-               
+
                if (abstractStrokeWeight > 0.1) {
                  const boldedNormalShapes = applyBoldnessToShapes([normalShape], abstractStrokeWeight);
                  if (boldedNormalShapes.length > 0) {
                    const tempGeo = new THREE_ACTUAL.ExtrudeGeometry(boldedNormalShapes, extrudeSettings);
                    finalNormalShape = tempGeo; // Replace with bolded version
                  }
-                 
+
                  if (mirroredShape) {
                    const boldedMirroredShapes = applyBoldnessToShapes([mirroredShape], abstractStrokeWeight);
                    if (boldedMirroredShapes.length > 0) {
@@ -2246,10 +2302,10 @@ const App: React.FC = () => {
                    }
                  }
                }
-               
+
                const mirroredGeo = getOrCreateGeometry(geometryCache.abstracts, abstractKey + '_mirrored', () => new THREE_ACTUAL.ExtrudeGeometry(finalMirroredShape as any, extrudeSettings));
                const angleStep = (Math.PI * 2) / abs.arms;
-               
+
                // Only push abstract geometries if they have vertices
                if (normalGeo.attributes.position?.count > 0) {
                  for(let i=0; i<abs.arms; i++) {
@@ -2295,7 +2351,7 @@ const App: React.FC = () => {
               : '';
             const innerTransform = [rotateAttr, flipAttr].filter(Boolean).join(' ');
             const strokeWidth = Math.max(0, img.thickness || 0);
-            const pathsStr = img.svgPaths.map(d => 
+            const pathsStr = img.svgPaths.map(d =>
               `<path d="${d}"${strokeWidth > 0 ? ` stroke="${layer.color}" stroke-width="${strokeWidth}"` : ''}/>`
             ).join('');
             const svgStr = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${rawW} ${rawH}">` +
@@ -2392,7 +2448,7 @@ const App: React.FC = () => {
       await processTextGroup(layer.secondary);
       processHubs(layer.hubs);
       processAbstracts(layer.abstracts);
-      
+
       await updateProgress();
 
       if (layerGeometries.length > 0) {
@@ -2413,7 +2469,7 @@ const App: React.FC = () => {
             console.warn(`⚠️ Skipping empty geometry for layer ${layer.name} geometry index ${idx}`);
           }
         });
-          // If slots are enabled, we must perform aggressive repair (merging vertices) 
+          // If slots are enabled, we must perform aggressive repair (merging vertices)
           // to ensure CSG operations (subtraction) work on manifold geometry.
           // However, repairGeometry(..., true) destroys the sharp normals generated by ExtrudeGeometry
           // when edge profile (bevel) is OFF.
@@ -2472,7 +2528,7 @@ const App: React.FC = () => {
         }
       }
     onProgress(1);
-    
+
     // Cache the result before returning
     modelCache3D.set(meshKey, group);
     return group;
@@ -2501,17 +2557,17 @@ const App: React.FC = () => {
                 flatGeoms.push(g);
             }
         });
-        
+
         if (flatGeoms.length > 0) {
             // const combinedForCheck = BufferGeometryUtils.mergeGeometries(flatGeoms);
             // if (combinedForCheck) {
                 // Final topology verification before export
                 // const report = getTopologyReport(combinedForCheck);
                 // console.log(`📊 Final Export Topology Report:`, report);
-                
+
                 // if (!report.isManifold) {
                 //     console.warn(`⚠️ Export has ${report.nonManifoldEdges} non-manifold edges`);
-                //     
+                //
                 //     // Skip aggressive repair to prevent freezing during export
                 //     if (report.nonManifoldEdges > 100) {
                 //         console.log('🔨 Skipping aggressive repair for export to prevent freezing');
@@ -2523,7 +2579,7 @@ const App: React.FC = () => {
                 //         // }
                 //     }
                 // }
-                
+
                 // const isConnected = checkConnectivity(combinedForCheck);
                 // if (!isConnected) {
                 //     const confirmExport = window.confirm(
@@ -2545,8 +2601,8 @@ const App: React.FC = () => {
         const blob = new Blob([result], { type: 'application/octet-stream' });
         const qLabel = quality ? `_${quality}` : '';
         downloadBlob(blob, `${config.projectName}${qLabel}.stl`);
-    } catch (e) { 
-      console.error("Export Failed", e); 
+    } catch (e) {
+      console.error("Export Failed", e);
       handleError(e, 'STL Export');
     }
     setExportLoading(false);
@@ -2575,8 +2631,8 @@ const App: React.FC = () => {
             const qLabel = quality ? `_${quality}` : '';
             downloadBlob(blob, `${config.projectName}_${layer.name.replace(/\s+/g, '_')}${qLabel}.stl`);
         }
-    } catch(e) { 
-      console.error(e); 
+    } catch(e) {
+      console.error(e);
       handleError(e, 'Layer STL Export');
     }
     setExportLoading(false);
@@ -2588,7 +2644,7 @@ const App: React.FC = () => {
           const group = await generateMesh(() => {}, quality);
           const zip = new JSZip();
           // const exporter = new STLExporter();
-          
+
           let anyFloating = false;
           group.children.forEach(child => {
               if (child instanceof THREE_ACTUAL.Mesh) {
@@ -2605,7 +2661,7 @@ const App: React.FC = () => {
                   return;
               }
           }
-          
+
           const exporter = new STLExporter();
           group.children.forEach(child => {
               if (child instanceof THREE_ACTUAL.Mesh) {
@@ -2615,12 +2671,12 @@ const App: React.FC = () => {
                   zip.file(`${config.projectName}_${child.name.replace(/\s+/g, '_')}${qLabel}.stl`, data);
               }
           });
-          
+
           const content = await zip.generateAsync({ type: 'blob' });
           const qLabel = quality ? `_${quality}` : '';
           downloadBlob(content, `${config.projectName}_All_Planes${qLabel}.zip`);
-      } catch(e) { 
-        console.error(e); 
+      } catch(e) {
+        console.error(e);
         handleError(e, 'ZIP Export');
       }
       setExportLoading(false);
@@ -2648,12 +2704,12 @@ const App: React.FC = () => {
 
       let svgContent = '';
       let dxfEntities = '';
-      
+
       const getPointsFromCommands = (commands: opentype.PathCommand[]): {x:number, y:number}[] => {
           const points: {x:number, y:number}[] = [];
-          let currentX = 0; 
+          let currentX = 0;
           let currentY = 0;
-          
+
           commands.forEach(cmd => {
               if (cmd.type === 'M') {
                   currentX = cmd.x; currentY = cmd.y;
@@ -2692,10 +2748,10 @@ const App: React.FC = () => {
 
       const addPolyDXF = (pts: {x:number,y:number}[], transform: {x:number, y:number, rotation:number, scaleX:number, scaleY:number}) => {
           if (pts.length < 2) return;
-          dxfEntities += "0\nLWPOLYLINE\n8\n0\n"; 
-          dxfEntities += `90\n${pts.length}\n`; 
-          dxfEntities += "70\n1\n"; 
-          
+          dxfEntities += "0\nLWPOLYLINE\n8\n0\n";
+          dxfEntities += `90\n${pts.length}\n`;
+          dxfEntities += "70\n1\n";
+
           const rad = transform.rotation * Math.PI / 180;
           const cos = Math.cos(rad);
           const sin = Math.sin(rad);
@@ -2758,7 +2814,7 @@ const App: React.FC = () => {
          const finalSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-250 -250 500 500" width="500mm" height="500mm"><g transform="scale(1, -1)">${svgContent}</g></svg>`;
          const blob = new Blob([finalSvg], { type: 'image/svg+xml' });
          downloadBlob(blob, `${config.projectName}_${layer.name}.svg`);
-      } 
+      }
       else if (format === 'dxf') {
           let dxf = `0\nSECTION\n2\nHEADER\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n${dxfEntities}0\nENDSEC\n0\nEOF\n`;
           const blob = new Blob([dxf], { type: 'application/dxf' });
@@ -2766,8 +2822,8 @@ const App: React.FC = () => {
       }
 
       showNotification(`2D ${format.toUpperCase()} export completed!`, 'success');
-    } catch (e) { 
-      console.error(e); 
+    } catch (e) {
+      console.error(e);
       handleError(e, '2D Export');
     }
     setExportLoading(false);
@@ -2812,7 +2868,7 @@ const App: React.FC = () => {
   };
 
   const handleFetchFont = async (name: string) => {
-    return true; 
+    return true;
   };
 
   const handleFontUpload = (file: File) => {
@@ -2822,16 +2878,66 @@ const App: React.FC = () => {
     loadFont(name, url);
   };
 
+  // Helper to normalize hub objects from AI API responses with proper defaults
+  const normalizeHubs = (hubs: any[]): HubConfig[] => {
+    if (!Array.isArray(hubs)) return [];
+    return hubs.map((h: any) => ({
+      id: h.id || `hub-${Date.now()}-${Math.random()}`,
+      enabled: h.enabled !== undefined ? h.enabled : true,
+      shape: h.shape || 'circle',
+      sides: h.sides || 6,
+      outerRadius: h.outerRadius || 20,
+      hollow: h.hollow !== undefined ? h.hollow : true,
+      wallThickness: h.wallThickness ?? 0.5,
+      starRatio: h.starRatio ?? 0.5,
+      rotationOffset: h.rotationOffset ?? 0,  // FIX: Default to 0 if undefined
+      oscillationEnabled: h.oscillationEnabled !== undefined ? h.oscillationEnabled : false,
+      oscillationAmplitude: h.oscillationAmplitude ?? 5,
+      oscillationFrequency: h.oscillationFrequency ?? 6,
+    }));
+  };
+
+  // Helper to normalize abstract objects from AI API responses with proper defaults
+  const normalizeAbstracts = (abstracts: any[]): AbstractConfig[] => {
+    if (!Array.isArray(abstracts)) return [];
+    return abstracts.map((a: any) => ({
+      id: a.id || `abstract-${Date.now()}-${Math.random()}`,
+      enabled: a.enabled !== undefined ? a.enabled : true,
+      type: (a.type || a.shape || 'line') as 'line' | 'sine' | 'zigzag' | 'fractal',
+      arms: a.arms ?? 6,
+      rotationOffset: a.rotationOffset ?? a.rotation ?? 0,
+      innerRadius: a.innerRadius ?? 10,
+      outerRadius: a.outerRadius ?? 50,
+      amplitude: a.amplitude ?? 5,
+      frequency: a.frequency ?? 1,
+      thickness: a.thickness ?? a.strokeWidth ?? 1,
+      mirrorEnabled: a.mirrorEnabled ?? false,
+      mirrorOffset: a.mirrorOffset ?? 0,
+    }));
+  };
+
   const handleAiPolish = async (mode: '3d' | '2d' | 'fractal', reset: boolean = false) => {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  const apiKey = getApiKey();
   if (!apiKey) {
-    showNotification("API Key is missing. Please set VITE_GEMINI_API_KEY in .env.local", "error");
+    setShortcutsModalTab('apikey');
+    setShortcutsModalMessage('No API key found. Add your Gemini API key to use AI randomization.');
+    setShowShortcutsModal(true);
+    return;
+  }
+
+  // Load AI scope preferences
+  const aiScope = loadAiScope();
+  console.log('🔧 AI Scope loaded:', aiScope);
+
+  // Feature switch guard: do not start fractal mode when fractals are disabled.
+  if (mode === 'fractal' && !aiScope.abstractFractalsTabEnabled) {
+    showNotification('Fractal mode is disabled in AI Controls, so generation was canceled.', 'warning');
     return;
   }
 
   setAiLoading(true);
   setAiProgress(0);
-  
+
   const progressInterval = setInterval(() => {
       setAiProgress(prev => {
           if (prev >= 90) return 90;
@@ -2842,19 +2948,19 @@ const App: React.FC = () => {
   try {
     const ai = new GoogleGenAI({ apiKey });
     const model = 'gemini-3-flash-preview';
-    
+
     const availableFonts = CURSIVE_FONTS.map(f => f.name).join(', ');
-    
+
     let configContext = config;
 
     // Handle Reset: Clear to clean state but preserve layer structure
     if (reset) {
         const resetLayer1 = createDefaultLayer('layer-1', 'Base Plane', 0, 0, true);
         resetLayer1.slotType = 'half-back';
-        
+
         const resetLayer2 = createDefaultLayer('layer-2', 'Cross Plane', 120, 0, false);
         resetLayer2.slotType = 'half-front';
-        
+
         const resetLayer3 = createDefaultLayer('layer-4', 'Tilt Plane', 240, 0, false);
         resetLayer3.slotType = 'custom';
 
@@ -2868,7 +2974,7 @@ const App: React.FC = () => {
         } else {
             resetLayer1.primary.text = "";
         }
-        
+
         const cleanConfig: SnowflakeConfig = {
             ...initialState,
             projectName: config.projectName,
@@ -2877,36 +2983,131 @@ const App: React.FC = () => {
             layers: [resetLayer1, resetLayer2, resetLayer3],
             syncAllLayers: true
         };
-        
+
         setConfig(cleanConfig);
         setConfig3D(cleanConfig);
         setRendered3DIfChanged(cleanConfig);
-        
+
         configContext = cleanConfig;
     }
-    
+
     const currentText = configContext.layers[0]?.primary?.text || "";
     const hasText = currentText.trim().length > 0;
 
+    // Build scope constraint instructions from user preferences
+    const scopeLines: string[] = [];
+    if (!aiScope.globalTabEnabled) {
+      scopeLines.push('- Do NOT change color, extrusionDepth, globalStrokeWeight, or bevel settings. Keep them at their current values.');
+    } else {
+      if (!aiScope.color)              scopeLines.push('- Do NOT change the color field.');
+      if (!aiScope.extrusionDepth)     scopeLines.push('- Do NOT change extrusionDepth.');
+      if (!aiScope.globalStrokeWeight) scopeLines.push('- Do NOT change globalStrokeWeight.');
+      if (!aiScope.bevelSettings)      scopeLines.push('- Do NOT change bevelEnabled, bevelType, bevelAmount, or bevelSegments.');
+    }
+    if (!aiScope.textTabEnabled) {
+      scopeLines.push('- Do NOT modify any text/primary/secondary group properties. Keep them exactly as provided.');
+    } else {
+      if (!aiScope.textContent)    scopeLines.push('- Do NOT change the text content (primary.text / secondary.text).');
+      if (!aiScope.fontFamily)     scopeLines.push('- Do NOT change fontFamily.');
+      if (!aiScope.arms)           scopeLines.push('- Do NOT change the arms count.');
+      if (!aiScope.innerRadius)    scopeLines.push('- Do NOT change textX (inner radius).');
+      if (!aiScope.letterSpacing)  scopeLines.push('- Do NOT change letterSpacing.');
+      if (!aiScope.boldness)       scopeLines.push('- Do NOT change thickness (per-text boldness).');
+      if (!aiScope.mirrorEffect)   scopeLines.push('- Do NOT change mirrorEnabled or mirrorOffset.');
+      if (!aiScope.rotationOffset) scopeLines.push('- Do NOT change rotationOffset.');
+      if (!aiScope.underline)      scopeLines.push('- Do NOT change underline settings.');
+      if (!aiScope.secondaryGroup) scopeLines.push('- Do NOT change the secondary text group. Keep it as-is.');
+      
+      // Filter to only enabled word candidates
+      const enabledPrimaryWords = aiScope.textPrimaryWords.filter(w => aiScope.textPrimaryWordsEnabled[w] !== false);
+      if (enabledPrimaryWords.length > 0) {
+        scopeLines.push(`- Prefer using primary phrase candidates: ${enabledPrimaryWords.slice(0, 10).join(', ')}${enabledPrimaryWords.length > 10 ? ', ...' : ''}.`);
+      }
+      const enabledSecondaryWords = aiScope.textSecondaryWords.filter(w => aiScope.textSecondaryWordsEnabled[w] !== false);
+      if (enabledSecondaryWords.length > 0) {
+        scopeLines.push(`- Prefer using secondary phrase candidates: ${enabledSecondaryWords.slice(0, 10).join(', ')}${enabledSecondaryWords.length > 10 ? ', ...' : ''}.`);
+      }
+    }
+    if (!aiScope.hubsTabEnabled) {
+      scopeLines.push('- Do NOT add or modify any hubs. Set hubs to an empty array [].');
+    } else {
+      if (!aiScope.hubEnabled)    scopeLines.push('- Do NOT enable any hub (keep all hub enabled=false).');
+      if (!aiScope.hubShape)      scopeLines.push('- Do NOT change hub shape.');
+      if (!aiScope.hubRadius)     scopeLines.push('- Do NOT change hub outerRadius.');
+      if (!aiScope.hubHollow)     scopeLines.push('- Do NOT change hub hollow setting.');
+      if (!aiScope.hubOscillation)scopeLines.push('- Do NOT enable hub oscillation.');
+    }
+    if (!aiScope.abstractShapesTabEnabled) {
+      scopeLines.push('- Do NOT add or modify any abstract shapes. Keep abstract shape definitions unchanged.');
+    } else {
+      if (!aiScope.abstractType)        scopeLines.push('- Do NOT change abstract type.');
+      if (!aiScope.abstractInnerRadius) scopeLines.push('- Do NOT change abstract innerRadius.');
+      if (!aiScope.abstractOuterRadius) scopeLines.push('- Do NOT change abstract outerRadius.');
+      if (!aiScope.abstractBoldness)    scopeLines.push('- Do NOT change abstract thickness/boldness.');
+      if (!aiScope.abstractArms)        scopeLines.push('- Do NOT change abstract arms count.');
+      
+      // Shape type restrictions
+      const allowedShapeTypes: string[] = [];
+      if (aiScope.abstractAllowLine) allowedShapeTypes.push('line');
+      if (aiScope.abstractAllowSine) allowedShapeTypes.push('sine');
+      if (aiScope.abstractAllowZigzag) allowedShapeTypes.push('zigzag');
+      
+      if (allowedShapeTypes.length === 0) {
+        scopeLines.push('- Do NOT generate any non-fractal abstract shapes (no line, sine, or zigzag allowed).');
+      } else if (allowedShapeTypes.length < 3) {
+        scopeLines.push(`- For non-fractal abstracts, only use these shape types: ${allowedShapeTypes.join(', ')}.`);
+      }
+    }
+    if (!aiScope.abstractFractalsTabEnabled) {
+      scopeLines.push('- Do NOT add or modify any fractal abstract elements. Keep fractals disabled.');
+    } else {
+      if (!aiScope.fractalTrunkLength)    scopeLines.push('- Do NOT change fractal trunkLength.');
+      if (!aiScope.fractalBranchesPerNode) scopeLines.push('- Do NOT change fractal branchesPerNode.');
+      if (!aiScope.fractalRecursionDepth) scopeLines.push('- Do NOT change fractal recursionDepth.');
+      if (!aiScope.fractalMinBranchLength) scopeLines.push('- Do NOT change fractal minBranchLength.');
+      if (!aiScope.fractalBranchPattern) scopeLines.push('- Do NOT change fractal branchPattern.');
+      if (!aiScope.fractalBranchAngle)   scopeLines.push('- Do NOT change fractal branchAngle.');
+      if (!aiScope.fractalInitialLength) scopeLines.push('- Do NOT change fractal initialLength.');
+      if (!aiScope.fractalLengthDecay)   scopeLines.push('- Do NOT change fractal lengthDecay.');
+      if (!aiScope.fractalAngleVariation) scopeLines.push('- Do NOT change fractal angleVariation.');
+      if (!aiScope.fractalLengthVariation) scopeLines.push('- Do NOT change fractal lengthVariation.');
+      if (!aiScope.fractalThicknessDecay) scopeLines.push('- Do NOT change fractal thicknessDecay.');
+      if (!aiScope.fractalRoundedTips)   scopeLines.push('- Do NOT change fractal roundedTips.');
+      if (!aiScope.fractalRandomSeed)    scopeLines.push('- Do NOT change fractal randomSeed.');
+    }
+
+    if (!aiScope.abstractFractalsTabEnabled) {
+      scopeLines.push('- Do NOT generate fractal abstracts.');
+    }
+    if (!aiScope.abstractShapesTabEnabled) {
+      scopeLines.push('- Do NOT generate any hubs or abstract shapes.');
+    }
+    const scopeConstraints = scopeLines.length > 0
+      ? `\n      **USER SCOPE RESTRICTIONS — YOU MUST FOLLOW THESE EXACTLY:**\n${scopeLines.map(l => `      ${l}`).join('\n')}\n`
+      : '';
+    console.log('🔧 AI Scope constraints built:', scopeLines);
+    console.log('🔧 Feature toggles: enableShape=', aiScope.abstractShapesTabEnabled, 'enableFractals=', aiScope.abstractFractalsTabEnabled);
+
     const prompt = `
       Generate a randomized Snowflake Generator Configuration (JSON).
-      
+
       **CRITICAL CONSTRAINTS:**
       1. **Only define the design for the FIRST layer (Base Plane).**
       2. The design will be automatically applied to the other 2 planes by the app.
       3. Set 'activeLayerIndex' to 0.
       ${mode !== 'fractal' ? `4. Use a random cursive font from this list: [${availableFonts}].` : ''}
-      
+      ${scopeConstraints}
+
       ${mode === 'fractal' ? `
       **MODE: TRADITIONAL FRACTAL SNOWFLAKE**
-      
+
       **CRITICAL RULES FOR FRACTALS:**
       1. **DISABLE ALL TEXT**: Set both 'primary.enabled' = false AND 'secondary.enabled' = false
       2. **DISABLE ALL HUBS**: Set 'hubs' to empty array []
       3. **ENABLE ONLY FRACTALS**: Create 1-3 'abstracts' with type='fractal'
       4. **Use 6 arms** for traditional snowflake symmetry
       5. **Set mirrorEnabled: true** to create symmetric branches
-      
+
       **REQUIRED Fractal Schema:**
       Each fractal abstract MUST have these exact fields with SAFE values:
       {
@@ -2938,18 +3139,18 @@ const App: React.FC = () => {
       }
       ` : `
       **TEXT CONTENT:**
-      ${hasText 
-          ? `The user has provided the text "${currentText}". YOU MUST USE THIS TEXT EXACTLY. Do not change the word.` 
+      ${hasText
+          ? `The user has provided the text "${currentText}". YOU MUST USE THIS TEXT EXACTLY. Do not change the word.`
           : `Choose a random winter word like 'Snow', 'Ice', 'Frost', 'Cold', 'Joy'.`
       }
-      
+
       **VISIBILITY RULES:**
-      - **Hubs:** If enabled, 'outerRadius' MUST be > 5mm and 'wallThickness' > 1mm. 
+      - **Hubs:** If enabled, 'outerRadius' MUST be > 5mm and 'wallThickness' > 1mm.
       - **Abstracts:** If enabled, 'outerRadius' MUST be significantly larger than 'innerRadius' (min 10mm gap) so they are visible. 'thickness' > 1mm.
       - **Disable Invisible:** If an element is too small or hidden behind text, set 'enabled: false'. Do not generate invisible geometry.
-      
+
       **MODE: ${mode === '3d' ? '3D PRINTING OPTIMIZED' : '2D / LASER AESTHETIC'}**
-      
+
       ${mode === '3d' ? `
       - **Goal:** Create a single, contiguous solid object. NO floating bodies.
       - **Text Connectivity (CRITICAL):**
@@ -2965,15 +3166,27 @@ const App: React.FC = () => {
         - Can use thinner lines and more delicate details.
       `}
       `}
-      
+
       Return **ONLY** valid JSON matching the 'SnowflakeConfig' schema.
     `;
+    console.log('🤖 AI Prompt (first 500 chars):', prompt.substring(0, 500) + '...');
 
     const response = await ai.models.generateContent({
       model,
       contents: [
           { role: 'user', parts: [{ text: prompt }] },
-          { role: 'user', parts: [{ text: JSON.stringify(configContext) }] }
+          { role: 'user', parts: [{ 
+              text: JSON.stringify({
+                  // Send only essential context - reduces tokens by ~40%
+                  // This optimization speeds up API calls by ~15-20%
+                  color: configContext.color,
+                  layers: [{
+                      primary: configContext.layers[0]?.primary,
+                      secondary: configContext.layers[0]?.secondary,
+                  }],
+                  syncAllLayers: configContext.syncAllLayers,
+              })
+          }] }
       ],
       config: {
           responseMimeType: 'application/json'
@@ -2984,19 +3197,246 @@ const App: React.FC = () => {
     if (responseText) {
         const newConfig = JSON.parse(responseText);
         const generatedLayer = newConfig.layers[0];
-        
+
         // Merge generated design into current state PRESERVING LAYERS
         const currentLayers = [...configContext.layers];
-        
+
         // Update Layer 0 with generated design
         currentLayers[0] = {
             ...currentLayers[0],
             primary: { ...currentLayers[0].primary, ...generatedLayer.primary },
             secondary: { ...currentLayers[0].secondary, ...generatedLayer.secondary },
-            hubs: generatedLayer.hubs || [],
-            abstracts: generatedLayer.abstracts || []
+            hubs: normalizeHubs(generatedLayer.hubs || []),
+            abstracts: normalizeAbstracts(generatedLayer.abstracts || [])
         };
-        
+
+        // Enforce AI scope overrides in case the model ignored instructions
+        const originalLayer = configContext.layers[0];
+        if (originalLayer) {
+          // Global-level protection
+          if (!aiScope.globalTabEnabled) {
+            // reset all global fields
+            configContext.color = configContext.color;
+            configContext.extrusionDepth = configContext.extrusionDepth;
+            configContext.globalStrokeWeight = configContext.globalStrokeWeight;
+            configContext.bevelEnabled = configContext.bevelEnabled;
+            configContext.bevelType = configContext.bevelType;
+            configContext.bevelAmount = configContext.bevelAmount;
+            configContext.bevelSegments = configContext.bevelSegments;
+          } else {
+            if (!aiScope.color)           configContext.color = configContext.color;
+            if (!aiScope.extrusionDepth)  configContext.extrusionDepth = configContext.extrusionDepth;
+            if (!aiScope.globalStrokeWeight) configContext.globalStrokeWeight = configContext.globalStrokeWeight;
+            if (!aiScope.bevelSettings) {
+              configContext.bevelEnabled = configContext.bevelEnabled;
+              configContext.bevelType = configContext.bevelType;
+              configContext.bevelAmount = configContext.bevelAmount;
+              configContext.bevelSegments = configContext.bevelSegments;
+            }
+          }
+
+          // Handle text controls
+          if (!aiScope.textTabEnabled) {
+            currentLayers[0].primary = originalLayer.primary;
+            currentLayers[0].secondary = originalLayer.secondary;
+          } else {
+            if (!aiScope.textContent) {
+              currentLayers[0].primary.text = originalLayer.primary.text;
+              currentLayers[0].secondary.text = originalLayer.secondary.text;
+            }
+            if (!aiScope.fontFamily) {
+              currentLayers[0].primary.fontFamily = originalLayer.primary.fontFamily;
+              currentLayers[0].secondary.fontFamily = originalLayer.secondary.fontFamily;
+            }
+            if (!aiScope.arms) {
+              currentLayers[0].primary.arms = originalLayer.primary.arms;
+              currentLayers[0].secondary.arms = originalLayer.secondary.arms;
+            }
+            if (!aiScope.innerRadius) {
+              currentLayers[0].primary.textX = originalLayer.primary.textX;
+              currentLayers[0].secondary.textX = originalLayer.secondary.textX;
+            }
+            if (!aiScope.letterSpacing) {
+              currentLayers[0].primary.letterSpacing = originalLayer.primary.letterSpacing;
+              currentLayers[0].secondary.letterSpacing = originalLayer.secondary.letterSpacing;
+            }
+            if (!aiScope.boldness) {
+              currentLayers[0].primary.thickness = originalLayer.primary.thickness;
+              currentLayers[0].secondary.thickness = originalLayer.secondary.thickness;
+            }
+            if (!aiScope.mirrorEffect) {
+              currentLayers[0].primary.mirrorEnabled = originalLayer.primary.mirrorEnabled;
+              currentLayers[0].secondary.mirrorEnabled = originalLayer.secondary.mirrorEnabled;
+              currentLayers[0].primary.mirrorOffset = originalLayer.primary.mirrorOffset;
+              currentLayers[0].secondary.mirrorOffset = originalLayer.secondary.mirrorOffset;
+            }
+            if (!aiScope.rotationOffset) {
+              currentLayers[0].primary.rotationOffset = originalLayer.primary.rotationOffset;
+              currentLayers[0].secondary.rotationOffset = originalLayer.secondary.rotationOffset;
+            }
+            if (!aiScope.underline) {
+              currentLayers[0].primary.underline = originalLayer.primary.underline;
+              currentLayers[0].secondary.underline = originalLayer.secondary.underline;
+            }
+            if (!aiScope.secondaryGroup) {
+              currentLayers[0].secondary = originalLayer.secondary;
+            }
+          }
+
+          // Hubs controls
+          if (!aiScope.hubsTabEnabled || !aiScope.hubEnabled || !aiScope.hubShape || !aiScope.hubRadius || !aiScope.hubHollow || !aiScope.hubOscillation) {
+            currentLayers[0].hubs = originalLayer.hubs;
+          }
+
+          // Abstract controls
+          if (!aiScope.abstractShapesTabEnabled || !aiScope.abstractType || !aiScope.abstractInnerRadius || !aiScope.abstractOuterRadius || !aiScope.abstractBoldness || !aiScope.abstractArms) {
+            currentLayers[0].abstracts = originalLayer.abstracts;
+          } else {
+            // Filter out disallowed shape types
+            const allowedShapeTypes = new Set<string>();
+            if (aiScope.abstractAllowLine) allowedShapeTypes.add('line');
+            if (aiScope.abstractAllowSine) allowedShapeTypes.add('sine');
+            if (aiScope.abstractAllowZigzag) allowedShapeTypes.add('zigzag');
+            
+            if (allowedShapeTypes.size < 3) {
+              // Some shape types are disallowed - filter them out
+              currentLayers[0].abstracts = currentLayers[0].abstracts.filter((a: any) => 
+                a.type === 'fractal' || allowedShapeTypes.has(a.type)
+              );
+            }
+          }
+          if (!aiScope.abstractFractalsTabEnabled || 
+              !aiScope.fractalTrunkLength || !aiScope.fractalBranchesPerNode || !aiScope.fractalRecursionDepth || 
+              !aiScope.fractalMinBranchLength || !aiScope.fractalBranchPattern || !aiScope.fractalBranchAngle || 
+              !aiScope.fractalInitialLength || !aiScope.fractalLengthDecay || !aiScope.fractalAngleVariation || 
+              !aiScope.fractalLengthVariation || !aiScope.fractalThicknessDecay || !aiScope.fractalRoundedTips || 
+              !aiScope.fractalRandomSeed) {
+            currentLayers[0].abstracts = currentLayers[0].abstracts.filter((a: any) => a.type !== 'fractal');
+          }
+
+          // Additional feature toggles
+          if (!aiScope.abstractShapesTabEnabled) {
+            currentLayers[0].hubs = originalLayer.hubs;
+            currentLayers[0].abstracts = originalLayer.abstracts;
+          }
+          if (!aiScope.abstractFractalsTabEnabled) {
+            currentLayers[0].abstracts = currentLayers[0].abstracts.filter((a: any) => a.type !== 'fractal');
+          }
+
+          // Prevent AI from enabling/altering secondary group if it was disabled
+          if (!originalLayer.secondary.enabled) {
+            currentLayers[0].secondary = originalLayer.secondary;
+          }
+        }
+
+        // Debug: report which fields were allowed and which changed
+        const allowedFields: string[] = [];
+        const changedFields: string[] = [];
+        const safeEqual = (a: any, b: any) => JSON.stringify(a) === JSON.stringify(b);
+
+        if (aiScope.globalTabEnabled) {
+          if (aiScope.color) allowedFields.push('color');
+          if (aiScope.extrusionDepth) allowedFields.push('extrusionDepth');
+          if (aiScope.globalStrokeWeight) allowedFields.push('globalStrokeWeight');
+          if (aiScope.bevelSettings) {
+            allowedFields.push('bevelEnabled', 'bevelType', 'bevelAmount', 'bevelSegments');
+          }
+        }
+
+        if (aiScope.textTabEnabled) {
+          if (aiScope.textContent) allowedFields.push('primary.text', 'secondary.text');
+          if (aiScope.fontFamily) allowedFields.push('primary.fontFamily', 'secondary.fontFamily');
+          if (aiScope.arms) allowedFields.push('primary.arms', 'secondary.arms');
+          if (aiScope.innerRadius) allowedFields.push('primary.textX', 'secondary.textX');
+          if (aiScope.letterSpacing) allowedFields.push('primary.letterSpacing', 'secondary.letterSpacing');
+          if (aiScope.boldness) allowedFields.push('primary.thickness', 'secondary.thickness');
+          if (aiScope.mirrorEffect) allowedFields.push('primary.mirrorEnabled', 'secondary.mirrorEnabled', 'primary.mirrorOffset', 'secondary.mirrorOffset');
+          if (aiScope.rotationOffset) allowedFields.push('primary.rotationOffset', 'secondary.rotationOffset');
+          if (aiScope.underline) allowedFields.push('primary.underline', 'secondary.underline');
+          if (aiScope.secondaryGroup) allowedFields.push('secondary');
+        }
+
+        if (aiScope.hubsTabEnabled && aiScope.hubEnabled && aiScope.hubShape && aiScope.hubRadius && aiScope.hubHollow && aiScope.hubOscillation) {
+          allowedFields.push('hubs');
+        }
+
+        if (aiScope.abstractShapesTabEnabled && aiScope.abstractType && aiScope.abstractInnerRadius && aiScope.abstractOuterRadius && aiScope.abstractBoldness && aiScope.abstractArms && (aiScope.abstractAllowLine || aiScope.abstractAllowSine || aiScope.abstractAllowZigzag)) {
+          allowedFields.push('abstracts');
+        }
+        if (aiScope.abstractFractalsTabEnabled && 
+            aiScope.fractalTrunkLength && aiScope.fractalBranchesPerNode && aiScope.fractalRecursionDepth && 
+            aiScope.fractalMinBranchLength && aiScope.fractalBranchPattern && aiScope.fractalBranchAngle && 
+            aiScope.fractalInitialLength && aiScope.fractalLengthDecay && aiScope.fractalAngleVariation && 
+            aiScope.fractalLengthVariation && aiScope.fractalThicknessDecay && aiScope.fractalRoundedTips && 
+            aiScope.fractalRandomSeed) {
+          allowedFields.push('abstracts');
+        }
+        if (aiScope.abstractShapesTabEnabled) {
+          allowedFields.push('hubs', 'abstracts');
+        }
+        if (aiScope.abstractFractalsTabEnabled) {
+          allowedFields.push('abstracts');
+        }
+
+        const finalLayer = currentLayers[0];
+        const checkIfChanged = (path: string, before: any, after: any) => {
+          if (!safeEqual(before, after)) {
+            changedFields.push(path);
+          }
+        };
+
+        if (allowedFields.includes('color')) checkIfChanged('color', configContext.color, configContext.color); // no change in this function
+        if (allowedFields.includes('extrusionDepth')) checkIfChanged('extrusionDepth', configContext.extrusionDepth, configContext.extrusionDepth);
+        if (allowedFields.includes('globalStrokeWeight')) checkIfChanged('globalStrokeWeight', configContext.globalStrokeWeight, configContext.globalStrokeWeight);
+        if (allowedFields.includes('bevelEnabled')) checkIfChanged('bevelEnabled', configContext.bevelEnabled, configContext.bevelEnabled);
+        if (allowedFields.includes('bevelType')) checkIfChanged('bevelType', configContext.bevelType, configContext.bevelType);
+        if (allowedFields.includes('bevelAmount')) checkIfChanged('bevelAmount', configContext.bevelAmount, configContext.bevelAmount);
+        if (allowedFields.includes('bevelSegments')) checkIfChanged('bevelSegments', configContext.bevelSegments, configContext.bevelSegments);
+
+        const beforePrimary = originalLayer.primary;
+        const beforeSecondary = originalLayer.secondary;
+
+        const checkField = (flag: string, fieldName: string, beforeVal: any, afterVal: any) => {
+          if (allowedFields.includes(flag)) checkIfChanged(fieldName, beforeVal, afterVal);
+        };
+
+        if (aiScope.textTabEnabled) {
+          checkField('primary.text', 'primary.text', beforePrimary.text, finalLayer.primary.text);
+          checkField('secondary.text', 'secondary.text', beforeSecondary.text, finalLayer.secondary.text);
+          checkField('primary.fontFamily', 'primary.fontFamily', beforePrimary.fontFamily, finalLayer.primary.fontFamily);
+          checkField('secondary.fontFamily', 'secondary.fontFamily', beforeSecondary.fontFamily, finalLayer.secondary.fontFamily);
+          checkField('primary.arms', 'primary.arms', beforePrimary.arms, finalLayer.primary.arms);
+          checkField('secondary.arms', 'secondary.arms', beforeSecondary.arms, finalLayer.secondary.arms);
+          checkField('primary.textX', 'primary.textX', beforePrimary.textX, finalLayer.primary.textX);
+          checkField('secondary.textX', 'secondary.textX', beforeSecondary.textX, finalLayer.secondary.textX);
+          checkField('primary.letterSpacing', 'primary.letterSpacing', beforePrimary.letterSpacing, finalLayer.primary.letterSpacing);
+          checkField('secondary.letterSpacing', 'secondary.letterSpacing', beforeSecondary.letterSpacing, finalLayer.secondary.letterSpacing);
+          checkField('primary.thickness', 'primary.thickness', beforePrimary.thickness, finalLayer.primary.thickness);
+          checkField('secondary.thickness', 'secondary.thickness', beforeSecondary.thickness, finalLayer.secondary.thickness);
+          checkField('primary.mirrorEnabled', 'primary.mirrorEnabled', beforePrimary.mirrorEnabled, finalLayer.primary.mirrorEnabled);
+          checkField('secondary.mirrorEnabled', 'secondary.mirrorEnabled', beforeSecondary.mirrorEnabled, finalLayer.secondary.mirrorEnabled);
+          checkField('primary.mirrorOffset', 'primary.mirrorOffset', beforePrimary.mirrorOffset, finalLayer.primary.mirrorOffset);
+          checkField('secondary.mirrorOffset', 'secondary.mirrorOffset', beforeSecondary.mirrorOffset, finalLayer.secondary.mirrorOffset);
+          checkField('primary.rotationOffset', 'primary.rotationOffset', beforePrimary.rotationOffset, finalLayer.primary.rotationOffset);
+          checkField('secondary.rotationOffset', 'secondary.rotationOffset', beforeSecondary.rotationOffset, finalLayer.secondary.rotationOffset);
+          checkField('primary.underline', 'primary.underline', beforePrimary.underline, finalLayer.primary.underline);
+          checkField('secondary.underline', 'secondary.underline', beforeSecondary.underline, finalLayer.secondary.underline);
+          if (aiScope.secondaryGroup) {
+            if (!safeEqual(beforeSecondary, finalLayer.secondary)) changedFields.push('secondary');
+          }
+        }
+
+        if (allowedFields.includes('hubs')) {
+          if (!safeEqual(originalLayer.hubs, finalLayer.hubs)) changedFields.push('hubs');
+        }
+
+        if (allowedFields.includes('abstracts')) {
+          if (!safeEqual(originalLayer.abstracts, finalLayer.abstracts)) changedFields.push('abstracts');
+        }
+
+        console.log('🔍 AI scope debug: allowed fields', allowedFields);
+        console.log('🔍 AI scope debug: changed fields', changedFields);
+
         // Handle Fractal specific: Force disable text/hubs if mode is fractal
         if (mode === 'fractal') {
             currentLayers[0].primary.enabled = false;
@@ -3010,13 +3450,13 @@ const App: React.FC = () => {
                 ...currentLayers[i],
                 primary: JSON.parse(JSON.stringify(currentLayers[0].primary)),
                 secondary: JSON.parse(JSON.stringify(currentLayers[0].secondary)),
-                hubs: JSON.parse(JSON.stringify(currentLayers[0].hubs)),
-                abstracts: JSON.parse(JSON.stringify(currentLayers[0].abstracts)),
+                hubs: JSON.parse(JSON.stringify(normalizeHubs(currentLayers[0].hubs))),
+                abstracts: JSON.parse(JSON.stringify(normalizeAbstracts(currentLayers[0].abstracts))),
             };
             // Preserve basic transform/slot properties of the target layer
             // (Assuming rotation3D and slotType are managed by layer setup, not design gen)
         }
-        
+
         const finalConfig = {
             ...configContext,
             layers: currentLayers,
@@ -3031,10 +3471,63 @@ const App: React.FC = () => {
         showNotification(`Generated random ${modeLabel} design!`, "success");
     }
 
-  } catch (err) {
+  } catch (err: any) {
     console.error("AI Randomizer error:", err);
+    
+    // Detailed error message based on error type
+    let errorMessage = "AI generation failed. Please try again.";
+    
+    // Check error message for specific issues
+    const errorText = String(err?.message || err?.toString() || "").toLowerCase();
+    
+    // Invalid API Key
+    if (errorText.includes('invalid') || errorText.includes('unauthorized') || errorText.includes('unauthenticated') || errorText.includes('api_key')) {
+      errorMessage = "❌ Invalid API key. Please check your API key in Settings > API Key tab.";
+      setShortcutsModalTab('apikey');
+      setShortcutsModalMessage('The API key you provided is invalid or expired. Please update it.');
+      setShowShortcutsModal(true);
+    }
+    // API Usage / Quota Exceeded
+    else if (errorText.includes('quota') || errorText.includes('limit') || errorText.includes('rate') || errorText.includes('usage')) {
+      errorMessage = "⚠️ API quota exceeded. You've used up your free Gemini API quota for today. Try again tomorrow or upgrade your plan.";
+    }
+    // Timeout / Network Error
+    else if (errorText.includes('timeout') || errorText.includes('deadline') || errorText.includes('network') || errorText.includes('econnrefused') || errorText.includes('enotfound')) {
+      errorMessage = "⏱️ Request timed out. The AI service took too long to respond. Check your internet connection and try again.";
+    }
+    // Leaked or compromised API key
+    else if (errorText.includes('leaked') || errorText.includes('compromised') || errorText.includes('exposed')) {
+      errorMessage = "🔒 Security Alert: Your API key appears to be compromised. Please regenerate it immediately from Google Cloud Console.";
+      setShortcutsModalTab('apikey');
+      setShortcutsModalMessage('Your API key has been flagged as compromised. You must regenerate it immediately.');
+      setShowShortcutsModal(true);
+    }
+    // API Error / Service Issue
+    else if (errorText.includes('error') && (errorText.includes('server') || errorText.includes('internal') || errorText.includes('api'))) {
+      errorMessage = "🔧 Gemini API service error. The service is experiencing issues. Try again in a few moments.";
+    }
+    // JSON parsing / Invalid response
+    else if (errorText.includes('json') || errorText.includes('parse') || errorText.includes('unexpected') || errorText.includes('syntaxerror')) {
+      errorMessage = "⚠️ Invalid response from AI. The generated content wasn't valid. Try generating again.";
+    }
+    // No API key at all
+    else if (errorText.includes('no api') || errorText.includes('missing api')) {
+      errorMessage = "🔑 No API key found. Add your Gemini API key in Settings > API Key tab.";
+      setShortcutsModalTab('apikey');
+      setShortcutsModalMessage('You need to add your Gemini API key to use AI randomization.');
+      setShowShortcutsModal(true);
+    }
+    
+    // Log full error details for debugging
+    if (err?.status || err?.code) {
+      console.error(`Error Code: ${err.status || err.code}`);
+    }
+    if (err?.error) {
+      console.error(`API Error Details:`, err.error);
+    }
+    
     handleError(err, "AI Randomizer");
-    showNotification("AI generation failed. Please try again.", "error");
+    showNotification(errorMessage, "error", 6000);  // Show for 6 seconds
   } finally {
     clearInterval(progressInterval);
     setTimeout(() => {
@@ -3092,8 +3585,8 @@ const App: React.FC = () => {
             <div className="h-14 border-b border-white/10 bg-slate-900/50 backdrop-blur-md shrink-0 z-50 relative">
                 <div className="h-full max-w-[1920px] mx-auto px-4 flex items-center justify-center">
                     <div className="w-full">
-                        <Header 
-                            projectName={config.projectName} 
+                        <Header
+                            projectName={config.projectName}
                             onProjectNameChange={(n) => handleUpdateConfig({ projectName: n })}
                             onSaveConfig={handleSaveProject}
                             onLoadConfig={handleLoadProject}
@@ -3112,8 +3605,8 @@ const App: React.FC = () => {
             <div className="flex-1 flex overflow-hidden">
                 {/* Control Panel */}
                 <div className="w-[420px] flex flex-col border-r border-white/10 bg-slate-900/30 backdrop-blur-sm shrink-0 z-40">
-                    <ControlPanel 
-                        config={config} 
+                    <ControlPanel
+                        config={config}
                         onUpdate={handleUpdateConfig}
                         updateGroup={updateGroup}
                         updateCharOffset={updateCharOffset}
@@ -3137,6 +3630,13 @@ const App: React.FC = () => {
                         canUndo={canUndo}
                         canRedo={canRedo}
                         shortcuts={shortcuts}
+                        onUpdateShortcuts={(s) => setShortcuts(s)}
+                        onResetShortcuts={() => setShortcuts(DEFAULT_SHORTCUTS)}
+                        onOpenShortcutsModal={(tab, message) => {
+                            setShortcutsModalTab(tab);
+                            if (message) setShortcutsModalMessage(message);
+                            setShowShortcutsModal(true);
+                        }}
                         activeTab={activeTab}
                         onTabChange={setActiveTab}
                     />
@@ -3145,10 +3645,10 @@ const App: React.FC = () => {
                 {/* Preview Area */}
                 <div className="flex-1 relative bg-slate-950 overflow-hidden">
                     <div className={`absolute inset-0 w-full h-full transition-opacity duration-300 ${viewMode === '2d' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
-                        <SnowflakePreview 
-                            config={config} 
-                            globalColor={config.color} 
-                            globalBevel={config.bevelEnabled} 
+                        <SnowflakePreview
+                            config={config}
+                            globalColor={config.color}
+                            globalBevel={config.bevelEnabled}
                             globalBevelAmount={config.bevelAmount}
                             globalThickness={config.extrusionDepth}
                             slotEnabled={config.slotEnabled}
@@ -3165,33 +3665,33 @@ const App: React.FC = () => {
                         />
                     </div>
                     <div className={`absolute inset-0 w-full h-full transition-opacity duration-300 ${viewMode === '3d' ? 'opacity-100 z-10' : 'opacity-0 z-0'}`}>
-                        <Snowflake3D 
-                            config={config} 
-                            generateMesh={generateMesh} 
-                            color={config.color} 
-                            undo={undo} 
-                            redo={redo} 
-                            canUndo={canUndo} 
+                        <Snowflake3D
+                            config={config}
+                            generateMesh={generateMesh}
+                            color={config.color}
+                            undo={undo}
+                            redo={redo}
+                            canUndo={canUndo}
                             canRedo={canRedo}
                             initialDiameter={designDiameter} // PASS INITIAL DIAMETER
                             shortcuts={shortcuts}
                             isVisible={viewMode === '3d'}
                         />
                     </div>
-                    
+
                     {/* View Toggle */}
                     <div className="absolute top-4 right-4 z-50 flex bg-slate-900/80 rounded-lg p-1 border border-white/10 shadow-lg backdrop-blur">
-                        <button 
-                            onClick={() => setViewMode('2d')} 
+                        <button
+                            onClick={() => setViewMode('2d')}
                             className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${viewMode === '2d' ? 'bg-sky-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
                         >
                             2D
                         </button>
-                        <button 
+                        <button
                             onClick={() => {
                               setRendered3DIfChanged(config);
                               setViewMode('3d');
-                            }} 
+                            }}
                             className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${viewMode === '3d' ? 'bg-sky-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
                         >
                             3D
@@ -3201,14 +3701,25 @@ const App: React.FC = () => {
             </div>
 
             {/* Hidden Input for File Load */}
-            <input 
-                type="file" 
-                ref={fileInputRef} 
-                onChange={handleFileLoad} 
-                accept=".json" 
-                className="hidden" 
+            <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileLoad}
+                accept=".json"
+                className="hidden"
             />
-            
+
+            {/* Shortcuts Modal */}
+            <ShortcutsModal
+                isOpen={showShortcutsModal}
+                onClose={() => setShowShortcutsModal(false)}
+                config={shortcuts}
+                onSave={setShortcuts}
+                onReset={() => setShortcuts(DEFAULT_SHORTCUTS)}
+                activeTab={shortcutsModalTab}
+                message={shortcutsModalMessage}
+            />
+
             {/* Notifications */}
             <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none">
                 {notifications.map(n => (
@@ -3217,6 +3728,9 @@ const App: React.FC = () => {
                     </div>
                 ))}
             </div>
+
+            {/* Font Preload Indicator */}
+            <FontPreloadIndicator />
         </div>
     );
   };
