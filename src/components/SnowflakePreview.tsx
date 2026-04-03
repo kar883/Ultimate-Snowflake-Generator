@@ -40,6 +40,7 @@ interface SnowflakePreviewProps {
   canRedo?: boolean;
   calculatedDiameter?: number;
   shortcuts?: ShortcutConfig;
+  fontsPreloaded?: boolean;
 }
 
 const seededRandom = (seed: number) => {
@@ -51,7 +52,7 @@ const seededRandom = (seed: number) => {
 };
 
 const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
-  config, globalColor, globalBevel, globalBevelAmount, slotEnabled, slotLength, slotWidth, svgRef, dynamicFonts, undo, redo, canUndo, canRedo, calculatedDiameter, shortcuts
+  config, globalColor, globalBevel, globalBevelAmount, slotEnabled, slotLength, slotWidth, svgRef, dynamicFonts, undo, redo, canUndo, canRedo, calculatedDiameter, shortcuts, fontsPreloaded
 }) => {
   const { t } = useTranslation(config.language || 'en');
   // Use a ref for the font cache so loading a font never triggers an infinite
@@ -113,6 +114,9 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   }, [fitView]);
 
   useEffect(() => {
+    // Don't try to load fonts until preloading is complete
+    if (!fontsPreloaded) return;
+    
     config.layers.filter(l => l.enabled).forEach(l => {
       const loadFontIfNeeded = (family: string) => {
         const name = family.replace(/'/g, '').split(',')[0].trim();
@@ -123,9 +127,12 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
         // Check if font is preloaded first
         const preloadedFont = fontPreloader.getFont(name);
         if (preloadedFont) {
+          console.log(`✅ Found preloaded font: ${name}`);
           fontsRef.current[name] = preloadedFont;
           setFontLoadCount(c => c + 1);
           return;
+        } else {
+          console.log(`❌ Font not preloaded: ${name}`);
         }
         
         // Mark as in-flight with a sentinel so concurrent calls don't double-load
@@ -145,10 +152,13 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   // Intentionally excludes fontsRef (stable ref) and fontLoadCount to avoid the loop.
   // Re-runs only when the actual font names / URLs change.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.layers, dynamicFonts]);
+  }, [config.layers, dynamicFonts, fontsPreloaded]);
 
   // Check for preloaded fonts on mount
   useEffect(() => {
+    // Don't check until preloading is complete
+    if (!fontsPreloaded) return;
+    
     const checkPreloadedFonts = () => {
       let foundPreloaded = false;
       config.layers.filter(l => l.enabled).forEach(l => {
@@ -178,7 +188,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
     // Also check after a short delay in case fonts are still loading
     const timer = setTimeout(checkPreloadedFonts, 1000);
     return () => clearTimeout(timer);
-  }, [config.layers]);
+  }, [config.layers, fontsPreloaded]);
 
   useEffect(() => {
     if (!svgRef.current) return;

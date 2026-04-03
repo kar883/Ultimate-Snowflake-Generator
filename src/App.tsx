@@ -1292,6 +1292,7 @@ const App: React.FC = () => {
   const [aiProgress, setAiProgress] = useState(0);
   const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d');
   const [dynamicFonts, setDynamicFonts] = useState<Record<string, string>>(FONT_TTF_URLS);
+  const [fontsPreloaded, setFontsPreloaded] = useState(false);
 
   // Font preloader hook
   const { preloadAllFonts, getFont, isFontLoaded } = useFontPreloader();
@@ -1300,10 +1301,14 @@ const App: React.FC = () => {
   useEffect(() => {
     const preloadFonts = async () => {
       try {
+        console.log('🚀 Starting font preloading...');
         await preloadAllFonts();
+        console.log('✅ Font preloading completed');
+        setFontsPreloaded(true);
       } catch (error) {
         // Silent failure - fonts will load on-demand if preloading fails
         console.debug('Font preloading failed, fonts will load on-demand:', error);
+        setFontsPreloaded(true); // Still set to true to allow normal loading
       }
     };
 
@@ -3656,6 +3661,7 @@ const App: React.FC = () => {
                             canRedo={canRedo}
                             calculatedDiameter={designDiameter} // PASS CALCULATED DIAMETER
                             shortcuts={shortcuts}
+                            fontsPreloaded={fontsPreloaded}
                         />
                     </div>
                     <div className={`absolute inset-0 w-full h-full transition-opacity duration-300 ${viewMode === '3d' ? 'opacity-100 z-10' : 'opacity-0 z-0'}`}>

@@ -114,7 +114,9 @@ class FontPreloader {
   getFont(fontName: string): opentype.Font | null {
     // Clean font name (remove quotes and split by comma)
     const cleanName = fontName.replace(/'/g, '').split(',')[0].trim();
-    return this.cache.get(cleanName) || null;
+    const font = this.cache.get(cleanName);
+    console.log(`🔍 FontPreloader.getFont(${fontName}) -> ${font ? 'FOUND' : 'NOT FOUND'} (cache size: ${this.cache.size})`);
+    return font || null;
   }
 
   /**
