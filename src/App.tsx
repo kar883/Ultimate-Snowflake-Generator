@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { SnowflakeConfig, TextGroupConfig, HubConfig, CharOffset, LayerConfig, AbstractConfig, DesignQuality, UnderlineConfig, ShortcutConfig, ImageConfig, createDefaultImage } from './types';
 import { CURSIVE_FONTS, FONT_TTF_URLS, BOLD_FONT_URLS, BOLD_FONT_THRESHOLD } from './constants';
 import { useFontPreloader } from './utils/fontPreloader';
-import { resetSettingsToDefaults, createDefaultLayer, createDefaultTextGroup } from './defaults';
+import { createDefaultLayer, createDefaultTextGroup } from './defaults';
 import ControlPanel from './components/ControlPanel';
 import SnowflakePreview from './components/SnowflakePreview';
 import Snowflake3D from './components/Snowflake3D';
@@ -2812,7 +2812,27 @@ const App: React.FC = () => {
   };
 
   const handleResetSettings = () => {
-    const resetConfig = resetSettingsToDefaults(config);
+    // Create reset config based on the existing initialState
+    const resetConfig: SnowflakeConfig = {
+      ...initialState,
+      // Preserve current project name and basic structure
+      projectName: config.projectName,
+      activeLayerIndex: config.activeLayerIndex,
+      // Preserve layer structure but reset all settings
+      layers: config.layers.map((layer, index) => ({
+        ...initialState.layers[index] || initialState.layers[0],
+        // Preserve layer identity and basic properties
+        id: layer.id,
+        name: layer.name,
+        enabled: layer.enabled,
+        rotation3D: layer.rotation3D,
+        slotType: layer.slotType,
+        slotLengthAdjustment: layer.slotLengthAdjustment,
+        slotWidthOffset: layer.slotWidthOffset,
+        images: layer.images // Preserve user-added images
+      }))
+    };
+    
     setConfig(resetConfig);
     setConfig3D(resetConfig);
     setRendered3DIfChanged(resetConfig);
