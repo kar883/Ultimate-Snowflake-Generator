@@ -3469,51 +3469,85 @@ const App: React.FC = () => {
     }
 
   } catch (err: any) {
-    console.error("AI Randomizer error:", err);
+    console.error("AI Polish error:", err);
     
     // Detailed error message based on error type
     let errorMessage = "AI generation failed. Please try again.";
+    let errorDetails = "";
     
     // Check error message for specific issues
     const errorText = String(err?.message || err?.toString() || "").toLowerCase();
     
     // Invalid API Key
     if (errorText.includes('invalid') || errorText.includes('unauthorized') || errorText.includes('unauthenticated') || errorText.includes('api_key')) {
-      errorMessage = "❌ Invalid API key. Please check your API key in Settings > API Key tab.";
+      errorMessage = "❌ Invalid API Key";
+      errorDetails = "Your Gemini API key is invalid or expired. Please update it in Settings > API Key tab.";
       setShortcutsModalTab('apikey');
       setShortcutsModalMessage('The API key you provided is invalid or expired. Please update it.');
       setShowShortcutsModal(true);
     }
     // API Usage / Quota Exceeded
     else if (errorText.includes('quota') || errorText.includes('limit') || errorText.includes('rate') || errorText.includes('usage')) {
-      errorMessage = "⚠️ API quota exceeded. You've used up your free Gemini API quota for today. Try again tomorrow or upgrade your plan.";
+      errorMessage = "⚠️ API Limit Reached";
+      errorDetails = "You've used up your free Gemini API quota for today. Try again tomorrow or upgrade your plan.";
     }
     // Timeout / Network Error
     else if (errorText.includes('timeout') || errorText.includes('deadline') || errorText.includes('network') || errorText.includes('econnrefused') || errorText.includes('enotfound')) {
-      errorMessage = "⏱️ Request timed out. The AI service took too long to respond. Check your internet connection and try again.";
+      errorMessage = "⏱️ Connection Failed";
+      errorDetails = "The AI service took too long to respond or your internet connection is unstable. Check your connection and try again.";
     }
     // Leaked or compromised API key
     else if (errorText.includes('leaked') || errorText.includes('compromised') || errorText.includes('exposed')) {
-      errorMessage = "🔒 Security Alert: Your API key appears to be compromised. Please regenerate it immediately from Google Cloud Console.";
+      errorMessage = "🔒 Security Alert";
+      errorDetails = "Your API key appears to be compromised. Please regenerate it immediately from Google Cloud Console.";
       setShortcutsModalTab('apikey');
       setShortcutsModalMessage('Your API key has been flagged as compromised. You must regenerate it immediately.');
       setShowShortcutsModal(true);
     }
     // API Error / Service Issue
     else if (errorText.includes('error') && (errorText.includes('server') || errorText.includes('internal') || errorText.includes('api'))) {
-      errorMessage = "🔧 Gemini API service error. The service is experiencing issues. Try again in a few moments.";
+      errorMessage = "🔧 AI Service Error";
+      errorDetails = "The Gemini AI service is experiencing issues. This isn't your fault - try again in a few moments.";
     }
     // JSON parsing / Invalid response
     else if (errorText.includes('json') || errorText.includes('parse') || errorText.includes('unexpected') || errorText.includes('syntaxerror')) {
-      errorMessage = "⚠️ Invalid response from AI. The generated content wasn't valid. Try generating again.";
+      errorMessage = "⚠️ Invalid AI Response";
+      errorDetails = "The AI generated content that wasn't properly formatted. This happens sometimes - just try generating again.";
     }
     // No API key at all
     else if (errorText.includes('no api') || errorText.includes('missing api')) {
-      errorMessage = "🔑 No API key found. Add your Gemini API key in Settings > API Key tab.";
+      errorMessage = "🔑 No API Key";
+      errorDetails = "You need to add your Gemini API key to use AI features. Get one free from Google AI Studio.";
       setShortcutsModalTab('apikey');
       setShortcutsModalMessage('You need to add your Gemini API key to use AI randomization.');
       setShowShortcutsModal(true);
     }
+    // Content policy violation
+    else if (errorText.includes('policy') || errorText.includes('blocked') || errorText.includes('safety') || errorText.includes('inappropriate')) {
+      errorMessage = "🚫 Content Blocked";
+      errorDetails = "The AI couldn't generate content due to safety policies. Try different parameters or wording.";
+    }
+    // Model unavailable
+    else if (errorText.includes('model') || errorText.includes('unavailable') || errorText.includes('deprecated')) {
+      errorMessage = "🤖 AI Model Unavailable";
+      errorDetails = "The AI model is temporarily unavailable or being updated. Try again in a few minutes.";
+    }
+    // Generic API errors
+    else if (errorText.includes('400') || errorText.includes('bad request')) {
+      errorMessage = "📝 Invalid Request";
+      errorDetails = "The AI received an invalid request. This might be a bug - try different settings.";
+    }
+    else if (errorText.includes('500') || errorText.includes('internal server')) {
+      errorMessage = "💥 Server Error";
+      errorDetails = "The AI servers are having problems. This isn't your fault - try again later.";
+    }
+    else if (errorText.includes('503') || errorText.includes('service unavailable')) {
+      errorMessage = "⚠️ Service Busy";
+      errorDetails = "The AI service is overloaded with requests. Wait a moment and try again.";
+    }
+    
+    // If we have specific error details, format them nicely
+    const fullMessage = errorDetails ? `${errorMessage}: ${errorDetails}` : errorMessage;
     
     // Log full error details for debugging
     if (err?.status || err?.code) {
@@ -3523,8 +3557,8 @@ const App: React.FC = () => {
       console.error(`API Error Details:`, err.error);
     }
     
-    handleError(err, "AI Randomizer");
-    showNotification(errorMessage, "error", 6000);  // Show for 6 seconds
+    handleError(err, "AI Polish");
+    showNotification(fullMessage, "error", 8000);  // Show for 8 seconds for better readability
   } finally {
     clearInterval(progressInterval);
     setTimeout(() => {
