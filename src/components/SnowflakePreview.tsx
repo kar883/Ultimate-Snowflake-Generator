@@ -127,12 +127,9 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
         // Check if font is preloaded first
         const preloadedFont = fontPreloader.getFont(name);
         if (preloadedFont) {
-          console.log(`✅ Found preloaded font: ${name}`);
           fontsRef.current[name] = preloadedFont;
           setFontLoadCount(c => c + 1);
           return;
-        } else {
-          console.log(`❌ Font not preloaded: ${name}, loading on-demand`);
         }
         
         // Mark as in-flight with a sentinel so concurrent calls don't double-load

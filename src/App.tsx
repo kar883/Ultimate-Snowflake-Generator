@@ -1301,9 +1301,7 @@ const App: React.FC = () => {
   useEffect(() => {
     const preloadFonts = async () => {
       try {
-        console.log('🚀 Starting font preloading...');
         await preloadAllFonts();
-        console.log('✅ Font preloading completed');
         setFontsPreloaded(true);
       } catch (error) {
         // Silent failure - fonts will load on-demand if preloading fails

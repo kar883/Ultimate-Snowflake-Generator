@@ -54,7 +54,6 @@ class FontPreloader {
       .filter(font => FONT_TTF_URLS[font.name])
       .map(font => font.name);
 
-    console.log('📝 Font names to preload:', fontNames);
     result.total = fontNames.length;
 
     // Load fonts in parallel with concurrency control
@@ -64,16 +63,13 @@ class FontPreloader {
     for (const chunk of chunks) {
       const promises = chunk.map(async (fontName) => {
         try {
-          console.log(`⏳ Loading font: ${fontName}`);
           const font = await this.loadSingleFont(fontName);
           if (font) {
             this.cache.set(fontName, font);
             result.success.push(fontName);
             result.loaded++;
-            console.log(`✅ Successfully loaded font: ${fontName}`);
           }
         } catch (error) {
-          console.error(`❌ Failed to load font: ${fontName}`, error);
           result.failed.push({
             name: fontName,
             error: error instanceof Error ? error.message : 'Unknown error'
@@ -84,7 +80,6 @@ class FontPreloader {
       await Promise.allSettled(promises);
     }
 
-    console.log(`🏁 Font preloading complete: ${result.loaded}/${result.total} loaded`);
     return result;
   }
 
@@ -119,10 +114,7 @@ class FontPreloader {
   getFont(fontName: string): opentype.Font | null {
     // Clean font name (remove quotes and split by comma)
     const cleanName = fontName.replace(/'/g, '').split(',')[0].trim();
-    const font = this.cache.get(cleanName);
-    console.log(`🔍 FontPreloader.getFont(${fontName}) -> ${font ? 'FOUND' : 'NOT FOUND'} (clean name: ${cleanName}, cache size: ${this.cache.size})`);
-    console.log(`🔍 Cache contents:`, Array.from(this.cache.keys()));
-    return font || null;
+    return this.cache.get(cleanName) || null;
   }
 
   /**
