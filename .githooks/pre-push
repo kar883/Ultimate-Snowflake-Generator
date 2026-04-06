@@ -1,0 +1,40 @@
+#!/bin/bash
+# Pre-push hook for ggshield secrets detection
+# This hook runs ggshield on all commits about to be pushed
+# automatically installed by: pre-commit install --hook-type push
+
+set -e
+
+echo "🔒 Running ggshield pre-push secrets detection..."
+
+# Get the range of commits being pushed
+# This checks all commits that aren't in the remote yet
+remote="$1"
+url="$2"
+
+# Get the list of all commits that will be pushed
+# We check the commits between the remote tracking branch and local branch
+while read local_ref local_sha remote_ref remote_sha; do
+    if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+        # New branch being pushed
+        commit_range="$(git merge-base refs/remotes/$remote/${remote_ref##refs/heads/} $local_sha)..$local_sha"
+    else
+        # Existing branch being updated
+        commit_range="$remote_sha..$local_sha"
+    fi
+    
+    echo "Scanning commits: $commit_range"
+    
+    # Run ggshield on the commit range
+    if ggshield secret scan commit-range "$commit_range"; then
+        echo "✅ No secrets detected in commits being pushed"
+    else
+        echo "❌ GGSHIELD DETECTED POTENTIAL SECRETS!"
+        echo "Please remove secrets before pushing, or run:"
+        echo "  ggshield secret scan commit-range $commit_range --verbose"
+        exit 1
+    fi
+done
+
+echo "✅ Pre-push check passed!"
+exit 0
