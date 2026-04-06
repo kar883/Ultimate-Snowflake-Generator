@@ -14,6 +14,7 @@
     "dist": "node build.js"
   },
   "dependencies": {
+    "@electron/osx-sign": "^2.3.0",
     "@google/genai": "^1.34.0",
     "@jscad/csg": "^0.7.0",
     "@vitejs/plugin-react": "^5.1.2",
@@ -35,6 +36,7 @@
     "autoprefixer": "^10.4.24",
     "electron": "^40.0.0",
     "electron-builder": "^24.13.3",
+    "electron-builder-squirrel-windows": "^24.13.3",
     "esbuild": "^0.27.4",
     "jimp": "^1.6.0",
     "png-to-ico": "^3.0.1",
@@ -53,11 +55,12 @@
       "dist/**",
       "main.cjs",
       "electron.js",
-      "package.json"
+      "package.json",
+      "assets/**"
     ],
+    "icon": "assets/icon.png",
     "win": {
       "target": [
-        "portable",
         "nsis",
         "zip"
       ]
