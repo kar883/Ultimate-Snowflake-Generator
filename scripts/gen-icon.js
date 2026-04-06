@@ -1,4 +1,4 @@
-import * as Jimp from 'jimp';
+import Jimp from 'jimp';
 import pngToIco from 'png-to-ico';
 import fs from 'fs';
 import path from 'path';
@@ -12,8 +12,8 @@ async function main(){
   const pngPath = path.join(assetsDir,'icon.png');
   const icoPath = path.join(outDir,'icon.ico');
 
-  // Create 1024x1024 icon for high-DPI displays
-  const image = new Jimp.Jimp({ width: 1024, height: 1024 });
+  // Create 1024x1024 icon for high-DPI displays (using new Jimp API)
+  const image = new Jimp(1024, 1024, 0x00000000);
   image.scan(0,0,image.bitmap.width,image.bitmap.height,(x,y,idx)=>{
     const cx=512, cy=512;
     const d=Math.hypot(x-cx,y-cy)/512;
@@ -27,7 +27,7 @@ async function main(){
     image.bitmap.data[idx+3]=255;
   });
   
-  await new Promise((resolve, reject) => image.write(pngPath, err => err ? reject(err) : resolve()));
+  await image.writeAsync(pngPath);
   const icoBuf = await pngToIco(pngPath);
   fs.writeFileSync(icoPath, icoBuf);
   console.log('✓ Created 1024x1024 icon:', pngPath);
