@@ -1,3 +1,7 @@
+[Standalone ZIP](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.3/Snowflake.Generator-1.0.3-win.zip)
+
+[Windows Installer](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.3/Snowflake.Generator.Setup.1.0.3.exe)
+
 # Ultimate Snowflake Generator
 
 A beautiful 3D snowflake design generator for art and 3D printing. Create intricate snowflake patterns with advanced customization options, AI-powered randomization, and export capabilities.
@@ -45,19 +49,19 @@ A beautiful 3D snowflake design generator for art and 3D printing. Create intric
 ### Installation
 
 #### Windows
-1. Download `SnowflakeGenerator-Setup-1.0.0.exe`
+1. Download `SnowflakeGenerator-Setup-1.0.3.exe`
 2. Run the installer
 3. Follow the installation wizard
 4. Launch from Start Menu or Desktop shortcut
 
 #### macOS
-1. Download `SnowflakeGenerator-1.0.0.dmg`
+1. Download `SnowflakeGenerator-1.0.3.dmg`
 2. Open the DMG file
 3. Drag the app to Applications folder
 4. Launch from Applications folder
 
 #### Standalone (No Installation)
-1. Download `SnowflakeGenerator-1.0.0-win.zip` (Windows) or `SnowflakeGenerator-1.0.0-mac.zip` (macOS)
+1. Download `SnowflakeGenerator-1.0.3-win.zip` (Windows) or `SnowflakeGenerator-1.0.3-mac.zip` (macOS)
 2. Extract the zip file
 3. Run `SnowflakeGenerator.exe` (Windows) or `SnowflakeGenerator.app` (macOS)
 
@@ -143,6 +147,9 @@ A beautiful 3D snowflake design generator for art and 3D printing. Create intric
 - **License**: MIT
 
 ## Technical Details
+
+
+
 
 ### Architecture
 - **Frontend**: React with TypeScript
