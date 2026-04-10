@@ -1,10 +1,10 @@
-[Windows Standalone ZIP](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.3/Snowflake.Generator-1.0.3-win.zip)
+[Windows Standalone ZIP](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.4/Snowflake.Generator-1.0.4-win.zip)
 
-[Windows Installer](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.3/Snowflake.Generator.Setup.1.0.3.exe)
+[Windows Installer](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.4/Snowflake.Generator.Setup.1.0.4.exe)
 
-[Mac Installer](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.3/Snowflake.Generator-1.0.3-arm64.dmg)
+[Mac Installer](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.4/Snowflake.Generator-1.0.4-arm64.dmg)
 
-[Mac Standalone Zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.3/Snowflake.Generator-1.0.3-arm64-mac.zip) 
+[Mac Standalone Zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.4/Snowflake.Generator-1.0.4-arm64-mac.zip) 
 
 # Ultimate Snowflake Generator
 <img width="1364" height="589" alt="image" src="https://github.com/user-attachments/assets/950fae08-f11b-45af-88b9-33a5a465c5f6" />
