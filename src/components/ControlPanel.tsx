@@ -777,8 +777,17 @@ const DeferredTextInput: React.FC<DeferredTextInputProps> = ({ value, onChange, 
   const isDirty = useRef(false);
   useEffect(() => { setLocalValue(value); }, [value]);
   const commit = () => { if (isDirty.current || localValue !== value) { onChange(localValue, true); isDirty.current = false; } };
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => { setLocalValue(e.target.value); isDirty.current = true; onChange(e.target.value, false); };
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => { if (e.key === 'Enter') { commit(); (e.target as HTMLInputElement).blur(); } };
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => { 
+    setLocalValue(e.target.value); 
+    isDirty.current = true; 
+    onChange(e.target.value, false); 
+  };
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => { 
+    if (e.key === 'Enter') { 
+      commit(); 
+      (e.target as HTMLInputElement).blur(); 
+    } 
+  };
   const showRevert = defaultValue !== undefined && value !== defaultValue;
   const heightClass = className?.includes('h-') ? 'h-full' : 'h-9';
   return (
@@ -1003,7 +1012,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
           if (currentWidth > 0.1) {
             const ratio = neededWidth / currentWidth;
             const newFontSize = currentGroup.fontSize * ratio;
-            updateGroup(group, { fontSize: newFontSize }, commitTo3D);
+            // Include the original updates to prevent reverting text changes
+            updateGroup(group, { ...updates, fontSize: newFontSize }, commitTo3D);
           }
         });
       }
