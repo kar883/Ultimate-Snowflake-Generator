@@ -7,6 +7,7 @@
 [Mac Standalone Zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.3/Snowflake.Generator-1.0.3-arm64-mac.zip) 
 
 # Ultimate Snowflake Generator
+<img width="1364" height="589" alt="image" src="https://github.com/user-attachments/assets/950fae08-f11b-45af-88b9-33a5a465c5f6" />
 
 A beautiful 3D snowflake design generator for art and 3D printing. Create intricate snowflake patterns with advanced customization options, AI-powered randomization, and export capabilities.
 
