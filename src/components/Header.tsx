@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import ShortcutsModal from './ShortcutsModal';
+// import AboutModal from './AboutModal';
 import { ShortcutConfig } from '../types';
 
 interface HeaderProps {
@@ -11,6 +12,7 @@ interface HeaderProps {
   onSaveConfig?: () => void;
   onLoadConfig?: () => void;
   onResetApp?: () => void;
+  onAbout?: () => void;  // Add About handler
   shortcuts?: ShortcutConfig;
   onUpdateShortcuts?: (config: ShortcutConfig) => void;
   onResetShortcuts?: () => void;
@@ -29,6 +31,7 @@ const Header: React.FC<HeaderProps> = ({
   onSaveConfig,
   onLoadConfig,
   onResetApp,
+  onAbout,  // Add About handler
   shortcuts,
   onUpdateShortcuts,
   onResetShortcuts,
@@ -39,6 +42,7 @@ const Header: React.FC<HeaderProps> = ({
 }) => {
   const [localName, setLocalName] = useState(projectName);
   const [showSettings, setShowSettings] = useState(false);
+  const [showAbout, setShowAbout] = useState(false);
 
   useEffect(() => {
     setLocalName(projectName);
@@ -48,6 +52,11 @@ const Header: React.FC<HeaderProps> = ({
     if (onProjectNameChange && localName !== projectName) {
       onProjectNameChange(localName);
     }
+  };
+
+  const handleAbout = () => {
+    // Show about modal
+    setShowAbout(true);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -76,7 +85,7 @@ const Header: React.FC<HeaderProps> = ({
             </h1>
             <div className="flex items-center space-x-2">
               <span className="text-[9px] font-bold text-slate-400 tracking-widest uppercase">
-                V1.0 • Created by: Kyle Russell
+                V1.0.4 • Created by: Kyle Russell
               </span>
             </div>
           </div>
@@ -95,6 +104,7 @@ const Header: React.FC<HeaderProps> = ({
             </svg>
           </button>
 
+          
           {/* Settings Button */}
           <button
             onClick={() => setShowSettings(true)}
@@ -102,7 +112,7 @@ const Header: React.FC<HeaderProps> = ({
             title="Settings & Shortcuts"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
             </svg>
           </button>
 
@@ -161,6 +171,13 @@ const Header: React.FC<HeaderProps> = ({
             onTooltipsChange={onTooltipsChange}
           />
       )}
+      
+      {/* showAbout && (
+        <AboutModal
+          isOpen={showAbout}
+          onClose={() => setShowAbout(false)}
+        />
+      ) */}
     </div>
   );
 };

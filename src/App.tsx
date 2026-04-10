@@ -7,6 +7,7 @@ import SnowflakePreview from './components/SnowflakePreview';
 import Snowflake3D from './components/Snowflake3D';
 import Header from './components/Header';
 import ShortcutsModal from './components/ShortcutsModal';
+import UpdateNotification from './components/UpdateNotification';
 import * as THREE_ACTUAL from 'three';
 import { STLExporter } from './stlExporter';
 // import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader';
@@ -1228,6 +1229,108 @@ const App: React.FC = () => {
   useEffect(() => {
     const appStartTime = performance.now();
     console.log(`🚀 App Debug: App component starting initialization at ${appStartTime.toFixed(2)}ms`);
+
+    // Auto-update functionality - Temporarily commented out due to rendering issues
+    // const checkForUpdates = async () => {
+    //   try {
+    //     const response = await fetch('https://api.github.com/repos/kar883/Ultimate-Snowflake-Generator/releases/latest');
+    //     const release = await response.json();
+    //     const currentVersion = '1.0.3';
+    //     const latestVersion = release.tag_name.replace('v', '');
+        
+    //     console.log('Current version:', currentVersion, 'Latest version:', latestVersion);
+        
+    //     if (latestVersion !== currentVersion) {
+    //       console.log('New version available:', latestVersion);
+          
+    //       // Show update notification
+    //       const updateNotification = document.createElement('div');
+    //       updateNotification.innerHTML = `
+    //         <div style="
+    //           position: fixed;
+    //           top: 20px;
+    //           right: 20px;
+    //           background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    //           color: white;
+    //           padding: 16px 20px;
+    //           border-radius: 12px;
+    //           box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+    //           z-index: 9999;
+    //           font-family: system-ui, -apple-system, sans-serif;
+    //           font-size: 14px;
+    //           font-weight: 600;
+    //           max-width: 350px;
+    //           border: 1px solid rgba(255,255,255,0.1);
+    //         ">
+    //           <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+    //             <span style="font-size: 18px;"></span>
+    //             <div>
+    //               <div style="font-weight: 700; margin-bottom: 2px;">Update Available!</div>
+    //               <div style="opacity: 0.9; font-size: 12px;">Version ${latestVersion} is now available</div>
+    //             </div>
+    //           </div>
+    //           <div style="display: flex; gap: 8px; margin-top: 12px;">
+    //             <button id="download-update" style="
+    //               background: rgba(255,255,255,0.2);
+    //               border: 1px solid rgba(255,255,255,0.3);
+    //               color: white;
+    //               padding: 6px 12px;
+    //               border-radius: 6px;
+    //               font-size: 12px;
+    //               font-weight: 600;
+    //               cursor: pointer;
+    //               transition: all 0.2s;
+    //             ">Download</button>
+    //             <button id="dismiss-update" style="
+    //               background: transparent;
+    //               border: 1px solid rgba(255,255,255,0.2);
+    //               color: white;
+    //               padding: 6px 12px;
+    //               border-radius: 6px;
+    //               font-size: 12px;
+    //               font-weight: 600;
+    //               cursor: pointer;
+    //               transition: all 0.2s;
+    //             ">Later</button>
+    //           </div>
+    //         </div>
+    //       `;
+          
+    //       document.body.appendChild(updateNotification);
+          
+    //       // Add event listeners
+    //       const downloadBtn = updateNotification.querySelector('#download-update');
+    //       const dismissBtn = updateNotification.querySelector('#dismiss-update');
+          
+    //       if (downloadBtn) {
+    //         downloadBtn.addEventListener('click', () => {
+    //           window.open('https://github.com/kar883/Ultimate-Snowflake-Generator/releases/latest', '_blank');
+    //           document.body.removeChild(updateNotification);
+    //         });
+    //       }
+          
+    //       if (dismissBtn) {
+    //         dismissBtn.addEventListener('click', () => {
+    //           document.body.removeChild(updateNotification);
+    //         });
+    //       }
+          
+    //       // Auto-dismiss after 30 seconds
+    //       setTimeout(() => {
+    //         if (document.body.contains(updateNotification)) {
+    //           document.body.removeChild(updateNotification);
+    //         }
+    //       }, 30000);
+    //     } else {
+    //       console.log('App is up to date');
+    //     }
+    //   } catch (error) {
+    //     console.error('Failed to check for updates:', error);
+    //   }
+    // };
+
+    // Check for updates on app start
+    // setTimeout(checkForUpdates, 3000); // Check after 3 seconds
 
     return () => {
       console.log(`🚀 App Debug: App component unmounted after ${(performance.now() - appStartTime).toFixed(2)}ms`);
@@ -3658,6 +3761,7 @@ const App: React.FC = () => {
                             onSaveConfig={handleSaveProject}
                             onLoadConfig={handleLoadProject}
                             onResetApp={handleResetApp}
+                            // onAbout={handleAbout}  // Add About handler - Temporarily commented out
                             shortcuts={shortcuts}
                             onUpdateShortcuts={(s) => setShortcuts(s)}
                             onResetShortcuts={() => setShortcuts(DEFAULT_SHORTCUTS)}
@@ -3797,6 +3901,9 @@ const App: React.FC = () => {
                     </div>
                 ))}
             </div>
+
+            {/* Update Notification */}
+            <UpdateNotification currentVersion="1.0.4" />
         </div>
     );
   };

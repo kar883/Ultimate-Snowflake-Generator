@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import './src/index.css';
 import App from './src/App.tsx';
 
-console.log('🚀 index.tsx loading... v2.8 - Restored');
+console.log('Ultimate Snowflake Generator v1.0.4 - Restored');
 
 try {
   console.log('✅ App.tsx imported successfully');
