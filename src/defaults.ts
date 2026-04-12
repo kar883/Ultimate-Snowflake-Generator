@@ -91,7 +91,7 @@ export const createDefaultGlobalConfig = (): Omit<SnowflakeConfig, 'projectName'
   slotEnabled: false,
   slotLength: 95,
   slotWidth: 4.0,
-  slotMode: '2-plane',
+  slotMode: '3-plane',
   quality: 'low',
   syncAllLayers: true, // Default ON
   globalStrokeWeight: 0,
@@ -103,8 +103,8 @@ export const createDefaultConfig = (): SnowflakeConfig => ({
   projectName: "MySnowflake",
   layers: [
     createDefaultLayer('layer-1', 'Base Plane', 0, 0, true),
-    createDefaultLayer('layer-2', 'Cross Plane', 120, 0, false),
-    createDefaultLayer('layer-4', 'Tilt Plane', 240, 0, false),
+    createDefaultLayer('layer-2', 'Cross Plane', 120, 0, true),
+    createDefaultLayer('layer-4', 'Tilt Plane', 240, 0, true),
   ],
   activeLayerIndex: 0,
   ...createDefaultGlobalConfig()

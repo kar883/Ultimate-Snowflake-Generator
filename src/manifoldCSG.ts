@@ -16,6 +16,14 @@ import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUti
 
 let wasmInstance: any = null;
 
+export interface SlotProfile2D {
+  length: number;
+  width: number;
+  xOffset?: number;
+  yOffset?: number;
+  rotationDeg?: number;
+}
+
 export async function initManifold() {
   if (!wasmInstance) {
     console.log('🔧 Initializing Manifold WASM...');
@@ -51,15 +59,15 @@ export async function manifoldSubtract(
 
   let result: any;
   try {
-    result = new Manifold(baseMeshObj);
+    result = createManifoldFromMesh(Manifold, baseMeshObj);
     console.log('✅ Base Manifold created');
   } catch (err: any) {
-    baseMeshObj.delete();
+    baseMeshObj.delete?.();
     cleanBase.dispose();
     console.error('Base Manifold failed after merge:', err.message ?? err);
     throw err;
   }
-  baseMeshObj.delete();
+  baseMeshObj.delete?.();
   cleanBase.dispose();
 
   for (let i = 0; i < slotGeometries.length; i++) {
@@ -75,22 +83,109 @@ export async function manifoldSubtract(
     slotMeshObj.merge();
 
     try {
-      const slotManifold = new Manifold(slotMeshObj);
+      const slotManifold = createManifoldFromMesh(Manifold, slotMeshObj);
       console.log(`  Subtracting slot ${i + 1}/${slotGeometries.length}...`);
       result = result.subtract(slotManifold);
-      slotManifold.delete();
+      slotManifold.delete?.();
     } catch (err: any) {
       console.warn(`  Slot ${i + 1} failed: ${err.message ?? err}`);
     }
-    slotMeshObj.delete();
+    slotMeshObj.delete?.();
     cleanSlot.dispose();
   }
 
   const finalMesh = result.getMesh();
-  result.delete();
+  result.delete?.();
 
+  const out = meshToBufferGeometry(finalMesh);
+  const posCount = out.attributes.position?.count ?? 0;
+  const faceCount = out.index ? out.index.count / 3 : 0;
+
+  console.log(`✅ Manifold CSG: ${posCount} verts, ${faceCount} faces (watertight)`);
+  return out;
+}
+
+export async function manifoldProfileCutAndExtrude(
+  baseGeometry: THREE.BufferGeometry,
+  profiles: SlotProfile2D[],
+  extrusionDepth: number
+): Promise<THREE.BufferGeometry> {
+  const wasm = await initManifold();
+  const { Manifold, Mesh, CrossSection } = wasm;
+
+  const cleanBase = prepare(baseGeometry);
+  const basePos = cleanBase.attributes.position.array as Float32Array;
+  const baseIdx = cleanBase.index!.array as Uint32Array;
+
+  const baseMeshObj = new Mesh({
+    numProp: 3,
+    vertProperties: basePos,
+    triVerts: baseIdx,
+  });
+  baseMeshObj.merge();
+
+  let baseSolid: any;
+  try {
+    baseSolid = createManifoldFromMesh(Manifold, baseMeshObj);
+  } catch (err: any) {
+    baseMeshObj.delete?.();
+    cleanBase.dispose();
+    throw err;
+  }
+
+  baseMeshObj.delete?.();
+  cleanBase.dispose();
+
+  let profile = baseSolid.project();
+  baseSolid.delete?.();
+
+  if (!profile || profile.isEmpty()) {
+    profile?.delete?.();
+    return baseGeometry;
+  }
+
+  try {
+    for (const p of profiles) {
+      const slot = CrossSection.square([Math.max(0.01, p.length), Math.max(0.01, p.width)], false)
+        // Keep profile placement consistent with the 3D fallback cutter path:
+        // xOffset marks the slot start, and geometry extends +length from there.
+        .translate((p.xOffset ?? 0) + (p.length / 2), -(p.width / 2) + (p.yOffset ?? 0))
+        .rotate(p.rotationDeg ?? 0);
+      const next = profile.subtract(slot);
+      slot.delete?.();
+      profile.delete?.();
+      profile = next;
+      if (profile.isEmpty()) break;
+    }
+
+    if (profile.isEmpty()) {
+      profile.delete?.();
+      return baseGeometry;
+    }
+
+    const solid = profile.extrude(Math.max(0.01, extrusionDepth), 0, 0, 1, true);
+    profile.delete?.();
+
+    const finalMesh = solid.getMesh();
+    solid.delete?.();
+
+    return meshToBufferGeometry(finalMesh);
+  } catch (err) {
+    profile.delete?.();
+    throw err;
+  }
+}
+
+function createManifoldFromMesh(ManifoldCtor: any, meshObj: any): any {
+  if (typeof ManifoldCtor?.ofMesh === 'function') {
+    return ManifoldCtor.ofMesh(meshObj);
+  }
+  return new ManifoldCtor(meshObj);
+}
+
+function meshToBufferGeometry(finalMesh: any): THREE.BufferGeometry {
   const positions = new Float32Array(finalMesh.vertProperties);
-  const indices   = new Uint32Array(finalMesh.triVerts);
+  const indices = new Uint32Array(finalMesh.triVerts);
   finalMesh.delete?.();
 
   const out = new THREE.BufferGeometry();
@@ -98,8 +193,6 @@ export async function manifoldSubtract(
   out.setIndex(new THREE.BufferAttribute(indices, 1));
   out.computeVertexNormals();
   out.computeBoundingBox();
-
-  console.log(`✅ Manifold CSG: ${positions.length / 3} verts, ${indices.length / 3} faces (watertight)`);
   return out;
 }
 

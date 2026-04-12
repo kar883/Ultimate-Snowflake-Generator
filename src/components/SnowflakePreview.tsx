@@ -614,7 +614,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   };
 
   const renderSlotPreview = (layer: LayerConfig, layerIndex: number, enabledLayers: LayerConfig[], slotLength: number, slotWidth: number) => {
-    if (!slotEnabled || layer.slotType === 'none') return null;
+    if (!slotEnabled) return null;
     const rotationOffset = layer.primary.rotationOffset;
     const numPlanes = enabledLayers.length;
     const adjLength = slotLength + (layer.slotLengthAdjustment || 0);
@@ -683,8 +683,17 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
             return (
               <g key={layer.id} transform={`translate(${offsetX}, 0)`}>
                 <circle cx="0" cy="0" r="95" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="1" strokeDasharray="5,5" className="group"><title>Reference Radius (95mm)&#10;This dotted line shows the standard size for a snowflake arm.</title></circle>
-                {/* Commented out: Base Plane label since we only have 1 plane */}
-                {/* <text x="0" y="-115" textAnchor="middle" fill="#94a3b8" fontSize="16" fontWeight="bold" style={{ textTransform: 'uppercase', letterSpacing: '0.1em' }}>{layer.name}</text> */}
+                <text
+                  x="0"
+                  y="-118"
+                  textAnchor="middle"
+                  fill="#cbd5e1"
+                  fontSize="13"
+                  fontWeight="700"
+                  style={{ textTransform: 'uppercase', letterSpacing: '0.08em' }}
+                >
+                  {layer.name}
+                </text>
                 <g transform={`scale(1, -1) rotate(${zRotation})`}>
                   <circle cx="0" cy="0" r="2" fill="#ef4444" />
                   {renderHubs(layer.hubs, layerColor)}

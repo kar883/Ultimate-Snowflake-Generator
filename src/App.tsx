@@ -11,12 +11,15 @@ import UpdateNotification from './components/UpdateNotification';
 import * as THREE_ACTUAL from 'three';
 import { STLExporter } from './stlExporter';
 // import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader';
-// import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
+import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
 import opentype from 'opentype.js';
 import JSZip from 'jszip';
 import { GoogleGenAI } from "@google/genai";
 import { getApiKey, loadAiScope, type AiScopeConfig } from './components/ShortcutsModal';
-import { /*surgicalSlotRepair,*/ getTopologyReport } from './surgicalSlotRepair';
+import { surgicalSlotRepair, getTopologyReport } from './surgicalSlotRepair';
+import { type SlotProfile2D } from './manifoldCSG';
+import { fillSlotHoles } from './slotHoleFiller';
+import { postCSGJob } from './csgWorkerManager';
 // @ts-ignore
 // import { fillHolesManifold } from './holeFillingRepair'; // Temporarily commented
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, /*makeSlotKey,*/ getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, /*slotCutCache,*/ makeUnderlineKey } from './geometryCache';
@@ -602,6 +605,304 @@ const seededRandom = (seed: number) => {
     value = (value * 9301 + 49297) % 233280;
     return value / 233280;
   };
+};
+
+const getSlotPlanePreset = (
+  enabledLayers: LayerConfig[],
+  index: number,
+  slotMode: SnowflakeConfig['slotMode']
+) => {
+  if (slotMode === '2-plane') {
+    if (enabledLayers.length < 2) return null;
+    return index === 0
+      ? { rotationX: 0, slotType: 'half-back' as const }
+      : { rotationX: 90, slotType: 'half-front' as const };
+  }
+
+  if (enabledLayers.length < 3) return null;
+  if (index === 0) return { rotationX: 0, slotType: 'third-back' as const };
+  if (index === 1) return { rotationX: 120, slotType: 'third-middle' as const };
+  if (index === 2) return { rotationX: 240, slotType: 'third-front' as const };
+  return null;
+};
+
+const createSlotProfilesForLayer = (
+  layer: LayerConfig,
+  layerIndex: number,
+  enabledLayers: LayerConfig[],
+  config: SnowflakeConfig,
+  materialThickness: number
+): SlotProfile2D[] => {
+  if (!config.slotEnabled) return [];
+  if (config.slotMode === '2-plane' && enabledLayers.length < 2) return [];
+  if (config.slotMode === '3-plane' && enabledLayers.length < 3) return [];
+
+  const slots: SlotProfile2D[] = [];
+  const modelDiameter = 190;
+  const drawLength = Math.max(config.slotLength + (layer.slotLengthAdjustment ?? 0), (modelDiameter / 2) + 20);
+  const slotLength = Math.max(2, config.slotLength + (layer.slotLengthAdjustment ?? 0));
+  const tipInStart = Math.max(0, slotLength * 0.75);
+  const tipInLength = Math.max(0.01, drawLength - tipInStart);
+  const widthAdjustment = layer.slotWidthOffset ?? 0;
+  const requestedWidth = Math.max(0.5, config.slotWidth + widthAdjustment);
+  const cutThickness = Math.max(materialThickness + 0.2, requestedWidth);
+  const bridge = Math.min(0.4, Math.max(0.15, cutThickness * 0.08));
+  const halfChannel = Math.max(0.12, (cutThickness - bridge) / 2);
+  const armAngle = layer.primary.rotationOffset ?? 0;
+
+  if (config.slotMode === '2-plane') {
+    if (layerIndex === 0) {
+      slots.push({ length: drawLength, width: cutThickness, yOffset: 0, rotationDeg: -armAngle });
+    } else if (layerIndex === 1) {
+      slots.push({ length: drawLength, width: cutThickness, yOffset: 0, rotationDeg: -(armAngle + 180) });
+    }
+    return slots;
+  }
+
+  if (layerIndex === 0) {
+    slots.push({
+      length: drawLength,
+      width: halfChannel,
+      yOffset: (bridge / 2) + (halfChannel / 2),
+      rotationDeg: -armAngle,
+    });
+    slots.push({
+      length: drawLength,
+      width: halfChannel,
+      yOffset: -((bridge / 2) + (halfChannel / 2)),
+      rotationDeg: -armAngle,
+    });
+    return slots;
+  }
+
+  if (layerIndex === 1) {
+    slots.push({
+      length: slotLength,
+      width: halfChannel,
+      yOffset: (bridge / 2) + (halfChannel / 2),
+      rotationDeg: -armAngle,
+    });
+    // rot=-(armAngle+180) flips both x and y, so negate yOffset here so it
+    // lands in the correct upper half-channel after the 180° rotation.
+    slots.push({
+      length: tipInLength,
+      width: halfChannel,
+      xOffset: -drawLength,
+      yOffset: -((bridge / 2) + (halfChannel / 2)),
+      rotationDeg: -(armAngle + 180),
+    });
+    return slots;
+  }
+
+  if (layerIndex === 2) {
+    slots.push({
+      length: slotLength,
+      width: halfChannel,
+      yOffset: -((bridge / 2) + (halfChannel / 2)),
+      rotationDeg: -armAngle,
+    });
+    // rot=-(armAngle+180) flips both x and y:
+    //   xOffset=-drawLength + length=tipInLength → after flip: x ∈ [tipInStart, drawLength] ✓
+    //   yOffset positive here → flips to negative (lower half-channel) ✓
+    slots.push({
+      length: tipInLength,
+      width: Math.max(0.12, halfChannel * 0.85),
+      xOffset: -drawLength,
+      yOffset: (bridge / 2) + (halfChannel / 2),
+      rotationDeg: -(armAngle + 180),
+    });
+    return slots;
+  }
+
+  return slots;
+};
+
+const createAngledSlotCuttersForLayer = (
+  layer: LayerConfig,
+  layerIndex: number,
+  enabledLayers: LayerConfig[],
+  config: SnowflakeConfig,
+  materialThickness: number,
+  centerZ: number,
+  depthZ: number
+): THREE_ACTUAL.BufferGeometry[] => {
+  if (!config.slotEnabled) return [];
+  if (config.slotMode === '2-plane' && enabledLayers.length < 2) return [];
+  if (config.slotMode === '3-plane' && enabledLayers.length < 3) return [];
+
+  const modelDiameter = 190;
+  const adjLength = Math.max(2, config.slotLength + (layer.slotLengthAdjustment ?? 0));
+  const adjWidth = Math.max(0.5, config.slotWidth + (layer.slotWidthOffset ?? 0));
+  const drawLength = Math.max(adjLength, (modelDiameter / 2) + 20);
+  const tipInStart = Math.max(0, adjLength * 0.75);
+  const tipInLength = Math.max(0.01, drawLength - tipInStart);
+  const armAngle = layer.primary.rotationOffset ?? 0;
+  const cutThickness = Math.max(materialThickness + 0.25, adjWidth);
+  const bridge = Math.min(0.4, Math.max(0.15, cutThickness * 0.08));
+  const halfChannel = Math.max(0.12, (cutThickness - bridge) / 2);
+  const fullPunch = Math.max(500, drawLength * 4);
+
+  const cutters: THREE_ACTUAL.BufferGeometry[] = [];
+
+  const addCutter = (
+    nearX: number,
+    length: number,
+    slotThickness: number,
+    rotXDeg: number,
+    rotZDeg: number,
+    yOffset = 0
+  ) => {
+    if (length <= 0.01 || slotThickness <= 0.01) return;
+    // Match legacy blade orientation: length along X, huge punch along Y,
+    // and slot opening thickness along Z.
+    const g = new THREE_ACTUAL.BoxGeometry(length, fullPunch, slotThickness);
+    // Keep slot placement in local XY before rotation, then apply global Z centering.
+    // If centerZ is applied before rotateX/rotateZ it gets rotated into side offsets.
+    g.translate(nearX + (length / 2), yOffset, 0);
+    g.rotateX((rotXDeg * Math.PI) / 180);
+    g.rotateZ((rotZDeg * Math.PI) / 180);
+    g.translate(0, 0, centerZ);
+    cutters.push(g);
+  };
+
+  if (config.slotMode === '2-plane') {
+    if (layerIndex === 0) {
+      addCutter(0, drawLength, cutThickness, 90, -armAngle, 0);
+    } else if (layerIndex === 1) {
+      addCutter(0, drawLength, cutThickness, 270, -(armAngle + 180), 0);
+    }
+    return cutters;
+  }
+
+  if (layerIndex === 0) {
+    addCutter(0, drawLength, halfChannel, 120, -armAngle, (bridge / 2) + (halfChannel / 2));
+    addCutter(0, drawLength, halfChannel, 240, -armAngle, -((bridge / 2) + (halfChannel / 2)));
+    return cutters;
+  }
+
+  if (layerIndex === 1) {
+    addCutter(0, drawLength, halfChannel, 240, -armAngle, (bridge / 2) + (halfChannel / 2));
+    addCutter(-drawLength, tipInLength, halfChannel, 240, -(armAngle + 180), -((bridge / 2) + (halfChannel / 2)));
+    return cutters;
+  }
+
+  if (layerIndex === 2) {
+    addCutter(0, adjLength, halfChannel, 120, -armAngle, -((bridge / 2) + (halfChannel / 2)));
+    addCutter(-drawLength, tipInLength, Math.max(0.12, halfChannel * 0.8), 120, -(armAngle + 180), (bridge / 2) + (halfChannel / 2));
+    return cutters;
+  }
+
+  return cutters;
+};
+
+const applyWatertightSlotCuts = async (
+  layerGeo: THREE_ACTUAL.BufferGeometry,
+  layer: LayerConfig,
+  layerIndex: number,
+  enabledLayers: LayerConfig[],
+  config: SnowflakeConfig,
+  bevelPerSide: number
+): Promise<THREE_ACTUAL.BufferGeometry> => {
+  const materialThickness = config.extrusionDepth + (config.bevelEnabled ? bevelPerSide * 2 : 0);
+  const profiles = createSlotProfilesForLayer(layer, layerIndex, enabledLayers, config, materialThickness);
+  if (profiles.length === 0) return layerGeo;
+
+  const layerForCut = layerGeo.clone();
+  layerForCut.computeBoundingBox();
+  const layerBounds = layerForCut.boundingBox;
+  const layerCenterZ = layerBounds ? (layerBounds.min.z + layerBounds.max.z) * 0.5 : 0;
+  const layerDepth = layerBounds ? Math.max(0.01, layerBounds.max.z - layerBounds.min.z) : Math.max(0.01, materialThickness);
+  const fallbackDepth = Math.max(layerDepth + 6, materialThickness + 2, config.extrusionDepth * 8, 40);
+
+  const angledCutters = config.slotMode === '3-plane'
+    ? createAngledSlotCuttersForLayer(
+        layer,
+        layerIndex,
+        enabledLayers,
+        config,
+        materialThickness,
+        layerCenterZ,
+        fallbackDepth
+      )
+    : [];
+
+  const cutters = angledCutters.length > 0
+    ? angledCutters
+    : profiles.map((p) => {
+        const g = new THREE_ACTUAL.BoxGeometry(
+          Math.max(0.01, p.length),
+          Math.max(0.01, p.width),
+          fallbackDepth
+        );
+        g.translate((p.length / 2) + (p.xOffset ?? 0), p.yOffset ?? 0, layerCenterZ);
+        g.rotateZ(((p.rotationDeg ?? 0) * Math.PI) / 180);
+        return g;
+      });
+
+  if (cutters.length === 0) {
+    layerForCut.dispose();
+    return layerGeo;
+  }
+
+  try {
+    const baseData = {
+      positions: Array.from(layerForCut.attributes.position.array as Float32Array),
+      indices: layerForCut.index
+        ? Array.from(layerForCut.index.array as Uint32Array)
+        : null,
+    };
+
+    const slotsData = cutters.map((g) => ({
+      positions: Array.from(g.attributes.position.array as Float32Array),
+      indices: g.index
+        ? Array.from(g.index.array as Uint32Array)
+        : null,
+      rotation: { x: 0, y: 0, z: 0 },
+    }));
+
+    const workerResult = await postCSGJob(baseData, slotsData, { x: 0, y: 0, z: 0 });
+    if (!workerResult?.success || !workerResult?.geometry?.positions?.length) {
+      throw new Error(workerResult?.error || 'Worker CSG returned empty geometry');
+    }
+
+    const out = new THREE_ACTUAL.BufferGeometry();
+    out.setAttribute(
+      'position',
+      new THREE_ACTUAL.BufferAttribute(new Float32Array(workerResult.geometry.positions), 3)
+    );
+    if (workerResult.geometry.indices?.length) {
+      out.setIndex(new THREE_ACTUAL.BufferAttribute(new Uint32Array(workerResult.geometry.indices), 1));
+    }
+    out.computeVertexNormals();
+    out.computeBoundingBox();
+
+    // Worker CSG returns an open shell by design; cap slot openings to make
+    // a printable solid before any topology cleanup.
+    const capped = fillSlotHoles(out, cutters);
+    if (capped !== out) out.dispose();
+
+    const welded = BufferGeometryUtils.mergeVertices(capped, 0.0001) as THREE_ACTUAL.BufferGeometry;
+    if (welded !== capped) capped.dispose();
+    welded.computeVertexNormals();
+    welded.computeBoundingBox();
+
+    const topo = getTopologyReport(welded);
+    if (topo.boundaryEdges > 0 || topo.nonManifoldEdges > 0) {
+      const repaired = surgicalSlotRepair(welded);
+      welded.dispose();
+      repaired.computeVertexNormals();
+      repaired.computeBoundingBox();
+      return repaired;
+    }
+
+    return welded;
+  } catch (workerErr) {
+    console.warn(`Worker slot cutting failed for ${layer.name}, keeping uncut geometry`, workerErr);
+    return layerGeo;
+  } finally {
+    cutters.forEach((g) => g.dispose());
+    layerForCut.dispose();
+  }
 };
 
 // // ============================================================
@@ -1346,8 +1647,8 @@ const App: React.FC = () => {
     projectName: "MySnowflake",
     layers: [
       createDefaultLayer('layer-1', 'Base Plane', 0, 0, true),
-      createDefaultLayer('layer-2', 'Cross Plane', 120, 0, false),
-      createDefaultLayer('layer-4', 'Tilt Plane', 240, 0, false),
+      createDefaultLayer('layer-2', 'Cross Plane', 120, 0, true),
+      createDefaultLayer('layer-4', 'Tilt Plane', 240, 0, true),
     ],
     activeLayerIndex: 0,
     color: "#38bdf8",
@@ -1359,7 +1660,7 @@ const App: React.FC = () => {
     slotEnabled: false,
     slotLength: 95,
     slotWidth: 4.0,
-    slotMode: '2-plane',
+    slotMode: '3-plane',
     quality: 'low',
     syncAllLayers: true, // Default ON
     globalStrokeWeight: 0,
@@ -2559,23 +2860,51 @@ const App: React.FC = () => {
       await updateProgress();
 
       if (layerGeometries.length > 0) {
-        const layerRotX = layer.rotation3D.x * Math.PI / 180;
-        const layerRotY = layer.rotation3D.y * Math.PI / 180;
+        const layerPreset = getSlotPlanePreset(layersToGenerate, lIdx, config.slotMode);
+        const effectiveRotationX = config.slotEnabled && layerPreset
+          ? layerPreset.rotationX
+          : layer.rotation3D.x;
+        const effectiveRotationY = layer.rotation3D.y;
 
-        layerGeometries.forEach((geom, idx) => {
-          const finalGeo = geom.clone();
-          finalGeo.rotateX(layerRotX);
-          finalGeo.rotateY(layerRotY);
+        const mergedLayerGeo = BufferGeometryUtils.mergeGeometries(layerGeometries, false);
+        if (!mergedLayerGeo || !mergedLayerGeo.attributes.position || mergedLayerGeo.attributes.position.count === 0) {
+          console.warn(`⚠️ Skipping empty merged geometry for layer ${layer.name}`);
+          layerGeometries.forEach(g => g.dispose());
+          continue;
+        }
 
-          if (finalGeo && finalGeo.attributes && finalGeo.attributes.position && finalGeo.attributes.position.count > 0) {
-            const mesh = new THREE_ACTUAL.Mesh(finalGeo);
-            mesh.userData.layerId = layer.id;
-            mesh.name = layer.name;
-            group.add(mesh);
-          } else {
-            console.warn(`⚠️ Skipping empty geometry for layer ${layer.name} geometry index ${idx}`);
-          }
+        layerGeometries.forEach((g) => {
+          if (g !== mergedLayerGeo) g.dispose();
         });
+
+        let cutSourceGeo = mergedLayerGeo;
+        if (config.slotEnabled) {
+          const cutLayerGeo = await applyWatertightSlotCuts(
+            mergedLayerGeo,
+            layer,
+            lIdx,
+            layersToGenerate,
+            config,
+            bevelPerSide
+          );
+          if (cutLayerGeo !== mergedLayerGeo) {
+            mergedLayerGeo.dispose();
+          }
+          cutSourceGeo = cutLayerGeo;
+        }
+
+        const finalGeo = cutSourceGeo.clone();
+        finalGeo.rotateX((effectiveRotationX * Math.PI) / 180);
+        finalGeo.rotateY((effectiveRotationY * Math.PI) / 180);
+
+        cutSourceGeo.dispose();
+
+        if (finalGeo && finalGeo.attributes && finalGeo.attributes.position && finalGeo.attributes.position.count > 0) {
+          const mesh = new THREE_ACTUAL.Mesh(finalGeo);
+          mesh.userData.layerId = layer.id;
+          mesh.name = layer.name;
+          group.add(mesh);
+        }
           // If slots are enabled, we must perform aggressive repair (merging vertices)
           // to ensure CSG operations (subtraction) work on manifold geometry.
           // However, repairGeometry(..., true) destroys the sharp normals generated by ExtrudeGeometry
@@ -2589,7 +2918,7 @@ const App: React.FC = () => {
            //   layerMerged = BufferGeometryUtils.mergeVertices(layerMerged, 0.0001) as THREE_ACTUAL.BufferGeometry;
            // }
 
-          // Layer geometry has already been added to the scene for each arm instance.
+          // Layer geometry has already been added to the scene as a single merged mesh.
 
           //           // ── SLOT CUTTER VISUALIZER ──────────────────────────────────────
           //           // When slots are enabled, add each blade as a distinct semi-transparent
@@ -2632,7 +2961,7 @@ const App: React.FC = () => {
           //             });
           //           }
           //           // ── END SLOT CUTTER VISUALIZER ───────────────────────────────────
-        }
+      }
       }
     onProgress(1);
 
@@ -3099,10 +3428,10 @@ const App: React.FC = () => {
         const resetLayer1 = createDefaultLayer('layer-1', 'Base Plane', 0, 0, true);
         resetLayer1.slotType = 'half-back';
 
-        const resetLayer2 = createDefaultLayer('layer-2', 'Cross Plane', 120, 0, false);
+        const resetLayer2 = createDefaultLayer('layer-2', 'Cross Plane', 120, 0, true);
         resetLayer2.slotType = 'half-front';
 
-        const resetLayer3 = createDefaultLayer('layer-4', 'Tilt Plane', 240, 0, false);
+        const resetLayer3 = createDefaultLayer('layer-4', 'Tilt Plane', 240, 0, true);
         resetLayer3.slotType = 'custom';
 
         // FOR FRACTAL MODE: Clear everything and prepare fractal-only config

@@ -268,40 +268,9 @@ export function surgicalSlotRepair(geometry: THREE.BufferGeometry): THREE.Buffer
   // Step 4: Remove newly created degenerates
   result = removeDegenerateTriangles(result, 0.00001);
   
-  // Step 5: Manual merge with tight tolerance
-  const finalMergeMap = new Map<number, number>();
-  const positions = result.attributes.position;
-  const indices = result.index;
-  
-  if (indices) {
-    const tolerance = 0.0002;
-    for (let i = 0; i < positions.count; i++) {
-      const x = positions.getX(i);
-      const y = positions.getY(i);
-      const z = positions.getZ(i);
-      
-      for (let j = i + 1; j < positions.count; j++) {
-        const dx = positions.getX(j) - x;
-        const dy = positions.getY(j) - y;
-        const dz = positions.getZ(j) - z;
-        const distSq = dx * dx + dy * dy + dz * dz;
-        
-        if (distSq < tolerance * tolerance && !finalMergeMap.has(j)) {
-          finalMergeMap.set(j, i);
-        }
-      }
-    }
-    
-    const newIndices: number[] = [];
-    for (let i = 0; i < indices.count; i++) {
-      const originalIdx = indices.getX(i);
-      const mergedIdx = finalMergeMap.get(originalIdx) ?? originalIdx;
-      newIndices.push(mergedIdx);
-    }
-    
-    result.setIndex(newIndices);
-  }
-  
+  // Step 5: Second weld pass with slightly larger tolerance (spatial hash, not O(n²))
+  result = weldCoincidentVertices(result, 0.0002);
+
   // Step 6: Remove unused vertices
   result = removeUnusedVertices(result);
   

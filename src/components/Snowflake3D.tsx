@@ -6,6 +6,80 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
 import { SnowflakeConfig, ShortcutConfig, DesignQuality } from '../types';
 
+const SLOT_DEBUG_OVERLAY_ENABLED = true;
+
+function createSlotDebugCuttersForLayer(
+  layer: SnowflakeConfig['layers'][number],
+  layerIndex: number,
+  enabledLayers: SnowflakeConfig['layers'],
+  config: SnowflakeConfig,
+  materialThickness: number,
+  centerZ: number
+): THREE.BufferGeometry[] {
+  if (!config.slotEnabled) return [];
+  if (config.slotMode === '2-plane' && enabledLayers.length < 2) return [];
+  if (config.slotMode === '3-plane' && enabledLayers.length < 3) return [];
+
+  const modelDiameter = 190;
+  const adjLength = Math.max(2, config.slotLength + (layer.slotLengthAdjustment ?? 0));
+  const adjWidth = Math.max(0.5, config.slotWidth + (layer.slotWidthOffset ?? 0));
+  const drawLength = Math.max(adjLength, (modelDiameter / 2) + 20);
+  const tipInStart = Math.max(0, adjLength * 0.75);
+  const tipInLength = Math.max(0.01, drawLength - tipInStart);
+  const armAngle = layer.primary.rotationOffset ?? 0;
+  const cutThickness = Math.max(materialThickness + 0.25, adjWidth);
+  const bridge = Math.min(0.4, Math.max(0.15, cutThickness * 0.08));
+  const halfChannel = Math.max(0.12, (cutThickness - bridge) / 2);
+  const fullPunch = Math.max(500, drawLength * 4);
+
+  const cutters: THREE.BufferGeometry[] = [];
+  const addCutter = (
+    nearX: number,
+    length: number,
+    slotThickness: number,
+    rotXDeg: number,
+    rotZDeg: number,
+    yOffset = 0
+  ) => {
+    if (length <= 0.01 || slotThickness <= 0.01) return;
+    const g = new THREE.BoxGeometry(length, fullPunch, slotThickness);
+    g.translate(nearX + (length / 2), yOffset, 0);
+    g.rotateX((rotXDeg * Math.PI) / 180);
+    g.rotateZ((rotZDeg * Math.PI) / 180);
+    g.translate(0, 0, centerZ);
+    cutters.push(g);
+  };
+
+  if (config.slotMode === '2-plane') {
+    if (layerIndex === 0) {
+      addCutter(0, drawLength, cutThickness, 90, -armAngle, 0);
+    } else if (layerIndex === 1) {
+      addCutter(0, drawLength, cutThickness, 270, -(armAngle + 180), 0);
+    }
+    return cutters;
+  }
+
+  if (layerIndex === 0) {
+    addCutter(0, drawLength, halfChannel, 120, -armAngle, (bridge / 2) + (halfChannel / 2));
+    addCutter(0, drawLength, halfChannel, 240, -armAngle, -((bridge / 2) + (halfChannel / 2)));
+    return cutters;
+  }
+
+  if (layerIndex === 1) {
+    addCutter(0, drawLength, halfChannel, 240, -armAngle, (bridge / 2) + (halfChannel / 2));
+    addCutter(-drawLength, tipInLength, halfChannel, 240, -(armAngle + 180), -((bridge / 2) + (halfChannel / 2)));
+    return cutters;
+  }
+
+  if (layerIndex === 2) {
+    addCutter(0, adjLength, halfChannel, 120, -armAngle, -((bridge / 2) + (halfChannel / 2)));
+    addCutter(-drawLength, tipInLength, Math.max(0.12, halfChannel * 0.8), 120, -(armAngle + 180), (bridge / 2) + (halfChannel / 2));
+    return cutters;
+  }
+
+  return cutters;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Identify disconnected mesh bodies for the "ID Bodies" diagnostic tool.
 //
@@ -875,6 +949,8 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     });
   };
 
+  const viewportLayers = config.layers.filter(l => l.enabled);
+
   const handleGizmoPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!controlsRef.current) return;
 
@@ -1178,6 +1254,18 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
       // Guard: only dispose if material is valid and not already disposed
       const old = child.material as THREE.MeshStandardMaterial;
       if (old && !old.disposed) old.dispose();
+
+      if (child.userData.slotDebug) {
+        child.material = new THREE.MeshBasicMaterial({
+          color: 0x10e8a8,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+        });
+        child.renderOrder = 999;
+        return;
+      }
 
       // Standard appearance (ID Bodies disabled)
       const ghost = planeTransparencyEnabled[lid] ?? false;
@@ -1483,6 +1571,55 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
         box.getCenter(ctr);
         group.position.set(0, 0, -ctr.z); // XY stays at 0, only Z is centred
 
+        if (SLOT_DEBUG_OVERLAY_ENABLED && config.slotEnabled) {
+          const enabledLayers = config.layers.filter(l => l.enabled);
+          const materialThickness = config.extrusionDepth + (config.bevelEnabled ? Math.min(config.bevelAmount, config.extrusionDepth / 2) * 2 : 0);
+
+          enabledLayers.forEach((layer, layerIndex) => {
+            let layerMesh: THREE.Mesh | null = null;
+            group.traverse(child => {
+              if (layerMesh || !(child instanceof THREE.Mesh)) return;
+              if (child.userData.layerId === layer.id && !child.userData.slotDebug) {
+                layerMesh = child;
+              }
+            });
+
+            if (!layerMesh) return;
+
+            const layerBounds = new THREE.Box3().setFromObject(layerMesh);
+            if (layerBounds.isEmpty()) return;
+
+            const layerCenterZ = (layerBounds.min.z + layerBounds.max.z) * 0.5;
+            const debugCutters = createSlotDebugCuttersForLayer(
+              layer,
+              layerIndex,
+              enabledLayers,
+              config,
+              materialThickness,
+              layerCenterZ
+            );
+
+            debugCutters.forEach((geo, cutterIndex) => {
+              const debugMesh = new THREE.Mesh(
+                geo,
+                new THREE.MeshBasicMaterial({
+                  color: 0x10e8a8,
+                  wireframe: true,
+                  transparent: true,
+                  opacity: 0.9,
+                  depthWrite: false,
+                })
+              );
+              debugMesh.userData.layerId = layer.id;
+              debugMesh.userData.slotDebug = true;
+              debugMesh.userData.slotDebugIndex = cutterIndex;
+              debugMesh.name = `${layer.name} Slot Debug ${cutterIndex + 1}`;
+              debugMesh.renderOrder = 999;
+              group.add(debugMesh);
+            });
+          });
+        }
+
         sceneRef.current.add(group);
         meshGroupRef.current = group;
         // Apply current appearance state after a short defer
@@ -1528,13 +1665,46 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
           </span>
         </div>
 
-        {/* Plane visibility/transparency — commented out (single-plane mode)
-        {enabledLayers.length > 0 && (
-          <div className="bg-slate-900/85 backdrop-blur px-3 py-2.5 rounded-lg border border-white/10 shadow-xl">
-            ...
+        {viewportLayers.length > 0 && (
+          <div className="bg-slate-900/85 backdrop-blur px-3 py-2.5 rounded-lg border border-white/10 shadow-xl min-w-[220px]">
+            <div className="text-[9px] font-extrabold uppercase tracking-widest text-slate-500 mb-2">Planes</div>
+            <div className="space-y-1.5">
+              {viewportLayers.map((layer) => {
+                const isShown = planeVisibility[layer.id] ?? true;
+                const isGhost = planeTransparencyEnabled[layer.id] ?? false;
+                return (
+                  <div key={layer.id} className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold text-slate-200 truncate">{layer.name}</span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => togglePlaneVisibility(layer.id)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-colors ${
+                          isShown
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/30 hover:bg-emerald-500/30'
+                            : 'bg-slate-700/60 text-slate-300 border-slate-500/40 hover:bg-slate-600/70'
+                        }`}
+                        title={isShown ? 'Hide plane' : 'Show plane'}
+                      >
+                        {isShown ? 'ON' : 'OFF'}
+                      </button>
+                      <button
+                        onClick={() => togglePlaneTransparency(layer.id)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-colors ${
+                          isGhost
+                            ? 'bg-sky-500/20 text-sky-300 border-sky-400/30 hover:bg-sky-500/30'
+                            : 'bg-slate-700/60 text-slate-300 border-slate-500/40 hover:bg-slate-600/70'
+                        }`}
+                        title={isGhost ? 'Disable ghost mode' : 'Enable ghost mode'}
+                      >
+                        Ghost
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
-        */}
       </div>
 
       {/* ── BOTTOM-LEFT: undo / redo ──────────────────────────────────────── */}

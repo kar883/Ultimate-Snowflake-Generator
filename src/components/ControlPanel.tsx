@@ -284,8 +284,6 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
     else onExport2D?.(format);
   };
 
-  const formatLabel = format === 'stl' ? `STL (${t ? t(quality) : quality})` : format.toUpperCase();
-
   return (
     <div ref={containerRef} className={`relative flex rounded-lg shadow-lg ${disabled ? 'opacity-50 pointer-events-none' : ''} ${className}`}>
       <InfoTooltip label={label} description={getDescription('Export', t)} shortcut={shortcut} className="flex-1">
@@ -297,7 +295,7 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
             <><div className="w-3 h-3 border-2 border-white/60 border-t-white rounded-full animate-spin" /><span>Exporting…</span></>
           ) : (
             <><svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-            <span>{label} · {formatLabel}</span></>
+            <span>{label}</span></>
           )}
         </button>
       </InfoTooltip>
@@ -415,66 +413,58 @@ const AiRandomizerMenu: React.FC<{
     setIsOpen(false);
   };
 
+  const handleMainClick = () => {
+    if (isLoading) return;
+    onGenerate(lastMode || '3d', resetOnRefresh);
+  };
+
   const handleRefresh = (e: React.MouseEvent) => {
     e.stopPropagation();
     onGenerate(lastMode || '3d', resetOnRefresh);
   };
 
-  const modeLabel = lastMode ? (lastMode === 'fractal' ? 'Trad.' : lastMode.toUpperCase()) : null;
+  const modeLabel = lastMode ? (lastMode === 'fractal' ? 'Trad.' : lastMode.toUpperCase()) : '3D';
 
   return (
-    <div ref={containerRef} className={`relative flex flex-col gap-1 ${className}`}>
-      {/* Row 1: AI Randomizer button (full width) */}
-      <div className="relative h-8 rounded-lg bg-violet-600 overflow-hidden shadow-lg">
+    <div ref={containerRef} className={`relative flex rounded-lg shadow-lg ${className}`}>
+      <div className="relative flex-1 rounded-l-lg bg-violet-600 overflow-hidden">
         {isLoading && (
           <div className="absolute inset-0 bg-violet-400/40 transition-all duration-300 ease-out" style={{ width: `${progress}%` }} />
         )}
         <InfoTooltip label={t('AI Randomizer')} description={getDescription('AI Randomizer', t)} className="w-full h-full">
           <button
-            onClick={() => !isLoading && setIsOpen(o => !o)}
+            onClick={handleMainClick}
             disabled={isLoading}
-            className="relative w-full h-full flex items-center justify-center gap-1.5 text-white text-[9px] font-black uppercase tracking-wider hover:bg-violet-500 transition-colors z-10"
+            className="relative w-full h-full px-3 py-1.5 rounded-l-lg text-[10px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 hover:bg-violet-500 text-white z-10"
           >
             {isLoading ? (
               <><div className="w-3 h-3 border-2 border-white/60 border-t-white rounded-full animate-spin" /><span>{progress}%</span></>
             ) : (
-              <><span>✦ AI Randomizer</span>{modeLabel && <span className="opacity-60 text-[8px]">({modeLabel})</span>}<span className="opacity-50 text-[8px]">▼</span></>
+              <><span>AI</span><span className="opacity-60 text-[8px]">({modeLabel})</span></>
             )}
           </button>
         </InfoTooltip>
       </div>
 
-      {/* Row 2: Shuffle button + Reset on Shuffle toggle */}
-      <div className="flex items-center gap-1.5 h-7">
-        <InfoTooltip label={t('Shuffle / Refresh')} description={getDescription('Shuffle / Refresh', t)} className="flex-1 h-full">
-          <button
-            onClick={handleRefresh}
-            disabled={isLoading}
-            className="w-full h-full bg-violet-600/20 hover:bg-violet-600 border border-violet-500/30 rounded-md flex items-center justify-center gap-1 text-violet-300 hover:text-white transition-all text-[9px] font-bold uppercase"
-          >
-            <svg className={`w-3 h-3 shrink-0 ${isLoading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            {lastMode ? 'Shuffle Again' : 'Shuffle'}
-          </button>
-        </InfoTooltip>
-        <InfoTooltip label={t('Reset on Shuffle')} description={getDescription('Reset on Shuffle', t)} className="h-full">
-          <div className="flex items-center gap-1.5 bg-violet-900/30 border border-violet-500/20 rounded-md px-2 h-full cursor-default">
-            <span className="text-[8px] font-bold uppercase text-violet-300/70 whitespace-nowrap">Reset</span>
-            <Toggle label="" checked={resetOnRefresh} onChange={setResetOnRefresh} activeColor="text-violet-400" className="scale-90 origin-right" />
-          </div>
-        </InfoTooltip>
-      </div>
+      <button
+        onClick={() => !isLoading && setIsOpen(!isOpen)}
+        className="px-2 rounded-r-lg flex items-center justify-center transition-all border-l border-black/10 bg-violet-600 hover:bg-violet-500 text-white"
+        disabled={isLoading}
+      >
+        <svg className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
 
       {/* Mode dropdown */}
       {isOpen && !isLoading && createPortal(
         <div
           ref={dropdownRef}
-          className="fixed z-[9999] bg-slate-800 border border-white/10 rounded-lg shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 flex flex-col p-1 gap-0.5"
+          className="fixed z-[9999] bg-slate-800 border border-white/10 rounded-lg shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 flex flex-col p-1.5 gap-1"
           style={{ top: position.top, left: position.left, width: Math.max(position.width, 190), transform: 'translateY(-100%) translateY(-4px)' }}
         >
-          <div className="px-2 py-1 text-[8px] font-black uppercase text-slate-500 tracking-wider flex items-center justify-between">
-            <span>Select Generation Mode</span>
+          <div className="px-2 pt-1 pb-0.5 text-[8px] font-black uppercase text-slate-500 tracking-wider flex items-center justify-between">
+            <span>Mode</span>
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -489,16 +479,150 @@ const AiRandomizerMenu: React.FC<{
               </svg>
             </button>
           </div>
+          <div className="grid grid-cols-3 gap-1 bg-slate-900/60 p-1 rounded-md">
           {([
-            { mode: '3d' as const,      label: '3D Printing Safe',      sub: 'Contiguous, sturdy parts' },
-            { mode: '2d' as const,      label: '2D / Laser',            sub: 'Aesthetic, may float' },
-            { mode: 'fractal' as const, label: 'Traditional Snowflake', sub: 'No text, just crystals' },
-          ]).map(({ mode, label, sub }) => (
+            { mode: '3d' as const, label: '3D' },
+            { mode: '2d' as const, label: '2D' },
+            { mode: 'fractal' as const, label: 'Trad.' },
+          ]).map(({ mode, label }) => (
             <button key={mode} onClick={() => handleModeSelect(mode)}
-              className={`text-left px-3 py-2 text-[9px] font-bold uppercase rounded hover:bg-white/10 transition-colors ${lastMode === mode ? 'text-violet-300' : 'text-slate-300 hover:text-white'}`}>
-              {label} <span className="block text-[8px] font-normal normal-case text-slate-500">{sub}</span>
+              className={`py-1.5 text-[9px] font-black uppercase rounded transition-all ${lastMode === mode ? 'bg-violet-500 text-white' : 'text-slate-400 hover:text-white'}`}>
+              {label}
             </button>
           ))}
+          </div>
+
+          <div className="px-2 pt-1 pb-0.5 text-[8px] font-black uppercase text-slate-500 tracking-wider">Actions</div>
+          <button
+            onClick={(e) => { handleRefresh(e); setIsOpen(false); }}
+            className="w-full py-2 text-[10px] font-black uppercase rounded-md text-white bg-violet-600 hover:bg-violet-500 transition-all flex items-center justify-center gap-1.5"
+          >
+            <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            {lastMode ? 'Shuffle Again' : 'Shuffle'}
+          </button>
+
+          <div className="flex justify-between items-center bg-slate-900/60 p-2 rounded-md">
+            <span className="text-[9px] font-black uppercase text-slate-300">Reset on Shuffle</span>
+            <Toggle label="" checked={resetOnRefresh} onChange={setResetOnRefresh} activeColor="text-violet-400" className="scale-90 origin-right" />
+          </div>
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+};
+
+const CutSlotsMenu: React.FC<{
+  config: SnowflakeConfig;
+  onUpdate: (updates: Partial<SnowflakeConfig>, commitTo3D?: boolean) => void;
+  className?: string;
+  t?: (key: string) => string;
+}> = ({ config, onUpdate, className, t }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ top: 0, left: 0, width: 0 });
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (
+        containerRef.current && !containerRef.current.contains(target) &&
+        dropdownRef.current && !dropdownRef.current.contains(target)
+      ) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const updatePosition = useCallback(() => {
+    if (containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      setPosition({ top: rect.top, left: rect.left, width: rect.width });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isOpen) {
+      updatePosition();
+      window.addEventListener('scroll', updatePosition, true);
+      window.addEventListener('resize', updatePosition);
+      return () => {
+        window.removeEventListener('scroll', updatePosition, true);
+        window.removeEventListener('resize', updatePosition);
+      };
+    }
+  }, [isOpen, updatePosition]);
+
+  const ensureMinEnabled = (mode: '2-plane' | '3-plane') => {
+    const required = mode === '3-plane' ? 3 : 2;
+    const enabledCount = config.layers.filter(l => l.enabled).length;
+    if (enabledCount >= required) return config.layers;
+
+    const nextLayers = [...config.layers];
+    for (let i = 0; i < nextLayers.length && nextLayers.filter(l => l.enabled).length < required; i++) {
+      nextLayers[i] = { ...nextLayers[i], enabled: true };
+    }
+    return nextLayers;
+  };
+
+  const handleToggle = () => {
+    const nextEnabled = !config.slotEnabled;
+    if (nextEnabled) {
+      const layers = ensureMinEnabled(config.slotMode);
+      onUpdate({ slotEnabled: true, layers }, true);
+    } else {
+      onUpdate({ slotEnabled: false }, true);
+    }
+  };
+
+  const handleModeChange = (mode: '2-plane' | '3-plane') => {
+    const layers = config.slotEnabled ? ensureMinEnabled(mode) : config.layers;
+    onUpdate({ slotMode: mode, layers }, true);
+  };
+
+  return (
+    <div ref={containerRef} className={`relative flex rounded-lg shadow-lg ${className}`}>
+      <InfoTooltip label={t ? t('Cut Slots') : 'Cut Slots'} description={getDescription('Cut Slots', t)} className="flex-1">
+        <button
+          onClick={handleToggle}
+          className={`w-full h-full px-3 py-1.5 rounded-l-lg text-[10px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 ${config.slotEnabled ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-slate-700 hover:bg-slate-600 text-slate-100'}`}
+        >
+          <span>Cut Slots</span>
+          <span className="opacity-70 text-[8px]">{config.slotEnabled ? 'ON' : 'OFF'}</span>
+        </button>
+      </InfoTooltip>
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className={`px-2 rounded-r-lg flex items-center justify-center transition-all border-l border-black/10 ${config.slotEnabled ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-slate-700 hover:bg-slate-600 text-slate-100'}`}
+      >
+        <svg className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {isOpen && createPortal(
+        <div
+          ref={dropdownRef}
+          className="fixed z-[9999] bg-slate-800 border border-white/10 rounded-lg shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 flex flex-col p-1.5 gap-1"
+          style={{ top: position.top, left: position.left, width: Math.max(position.width, 190), transform: 'translateY(-100%) translateY(-4px)' }}
+        >
+          <div className="px-2 pt-1 pb-0.5 text-[8px] font-black uppercase text-slate-500 tracking-wider">Mode</div>
+          <div className="grid grid-cols-2 gap-1 bg-slate-900/60 p-1 rounded-md">
+            {(['2-plane', '3-plane'] as const).map(mode => (
+              <button
+                key={mode}
+                onClick={() => handleModeChange(mode)}
+                className={`py-1.5 text-[9px] font-black uppercase rounded transition-all ${config.slotMode === mode ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:text-white'}`}
+              >
+                {mode === '2-plane' ? '2-Plane' : '3-Plane'}
+              </button>
+            ))}
+          </div>
         </div>,
         document.body
       )}
@@ -1266,8 +1390,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
       <div className="flex flex-col h-full" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         {/* Tab Headers */}
         <div className="p-2 bg-slate-900/50 border-b border-white/5 shrink-0" style={{ padding: '8px', backgroundColor: 'rgba(15,23,42,0.5)', borderBottom: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 }}>
-           <div className="grid grid-cols-6 gap-1" style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '4px' }}>
-              {(['global', 'text', 'Letter Ctrl', 'hubs', 'abstract', 'images' /* SLOT-DISABLED: 'planes' */] as const).map(tab => {
+           <div className="grid grid-cols-7 gap-1" style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px' }}>
+              {(['global', 'text', 'Letter Ctrl', 'hubs', 'abstract', 'planes', 'images'] as const).map(tab => {
                  const isActive = activeTab === tab;
                  const btnActive = 'bg-sky-600 text-white border-sky-500';
                  const btnInactive = 'bg-slate-800 text-slate-400 border-white/10 hover:bg-slate-700 hover:text-white';
@@ -2144,7 +2268,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
             </div>
           )}
 
-          {false /* SLOT-DISABLED: planes tab */ && (
+          {activeTab === 'planes' && (
              <div className="space-y-5 animate-in fade-in duration-200">
                 <div className="space-y-2 pb-4 border-b border-white/5">
                     <div className="flex justify-between items-center">
@@ -2239,23 +2363,22 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
         </div>
 
         {/* Footer actions */}
-        <div className="p-2 bg-slate-900/80 border-t border-white/10 shrink-0 flex flex-col gap-2">
-
-            {/* AI Randomizer section */}
-            <AiRandomizerMenu onGenerate={onAiPolish} isLoading={aiLoading} progress={aiProgress} className="w-full" t={t} onOpenShortcutsModal={onOpenShortcutsModal} />
-
-            {/* Export button — full width, format + quality in dropdown */}
-            <ExportMenu
-              label="Export"
-              onExportSTL={onExportSTL}
-              onExport2D={(fmt) => onExport2D?.(config.activeLayerIndex, fmt)}
-              isLoading={exportLoading}
-              t={t}
-              className="w-full h-9"
-              baseColor="bg-sky-600"
-              show2D={true}
-              shortcut={shortcuts?.exportCombinedSTL}
-            />
+        <div className="p-2 bg-slate-900/80 border-t border-white/10 shrink-0">
+            <div className="grid grid-cols-3 gap-2 h-8">
+              <CutSlotsMenu config={config} onUpdate={onUpdate} className="w-full h-8" t={t} />
+              <AiRandomizerMenu onGenerate={onAiPolish} isLoading={aiLoading} progress={aiProgress} className="w-full h-8" t={t} onOpenShortcutsModal={onOpenShortcutsModal} />
+              <ExportMenu
+                label="Export"
+                onExportSTL={onExportSTL}
+                onExport2D={(fmt) => onExport2D?.(config.activeLayerIndex, fmt)}
+                isLoading={exportLoading}
+                t={t}
+                className="w-full h-8"
+                baseColor="bg-sky-600"
+                show2D={true}
+                shortcut={shortcuts?.exportCombinedSTL}
+              />
+            </div>
         </div>
       </div>
     </TooltipContext.Provider>
