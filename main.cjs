@@ -1,5 +1,6 @@
-const { app, BrowserWindow, Menu, shell, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, shell, ipcMain, dialog } = require('electron');
 const path = require('path');
+const https = require('https');
 
 // Keep a global reference of the window object
 let mainWindow;
@@ -72,6 +73,89 @@ app.on('web-contents-created', (event, contents) => {
     shell.openExternal(navigationUrl);
   });
 });
+
+// Helper function to check for updates from GitHub
+function checkForUpdates() {
+  return new Promise((resolve, reject) => {
+    https.get('https://api.github.com/repos/kar883/Ultimate-Snowflake-Generator/releases/latest', {
+      headers: { 'User-Agent': 'Ultimate-Snowflake-Generator' }
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const release = JSON.parse(data);
+          const latestVersion = release.tag_name.replace('v', '');
+          const currentVersion = '1.0.4';
+          
+          resolve({
+            latestVersion,
+            currentVersion,
+            hasUpdate: latestVersion !== currentVersion,
+            downloadUrl: 'https://github.com/kar883/Ultimate-Snowflake-Generator/releases/latest',
+            releaseUrl: release.html_url
+          });
+        } catch (e) {
+          reject(e);
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
+// Helper function to show About dialog
+function showAbout() {
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'About Ultimate Snowflake Generator',
+    message: 'Ultimate Snowflake Generator',
+    detail: 'Version 1.0.4\nCreated by Kyle Russell\n\nA beautiful 3D snowflake design generator for art and 3D printing.\n\nVisit the GitHub repository for more information and to report issues.',
+    buttons: ['GitHub Repository', 'OK'],
+    defaultId: 1,
+    cancelId: 1
+  }).then(result => {
+    if (result.response === 0) {
+      shell.openExternal('https://github.com/kar883/Ultimate-Snowflake-Generator');
+    }
+  });
+}
+
+// Helper function to check and prompt for updates
+function checkAndPromptForUpdates(isManual = false) {
+  checkForUpdates().then(versionInfo => {
+    if (versionInfo.hasUpdate) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: 'Update Available',
+        message: 'A new version is available!',
+        detail: `Version ${versionInfo.latestVersion} is now available.\nYou are currently using version ${versionInfo.currentVersion}.\n\nWould you like to download the new version?`,
+        buttons: ['Download', 'Later'],
+        defaultId: 0,
+        cancelId: 1
+      }).then(result => {
+        if (result.response === 0) {
+          shell.openExternal(versionInfo.releaseUrl);
+        }
+      });
+    } else if (isManual) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: 'App is Up to Date',
+        message: 'You are running the latest version!',
+        detail: `Version ${versionInfo.currentVersion} is the latest available.`,
+        buttons: ['OK']
+      });
+    }
+  }).catch(error => {
+    dialog.showMessageBox(mainWindow, {
+      type: 'error',
+      title: 'Update Check Failed',
+      message: 'Could not check for updates',
+      detail: 'Failed to connect to GitHub. Please check your internet connection and try again.',
+      buttons: ['OK']
+    });
+  });
+}
 
 // Create application menu
 const template = [
@@ -183,9 +267,15 @@ const template = [
     label: 'Help',
     submenu: [
       {
-        label: 'About',
+        label: 'About Ultimate Snowflake Generator',
         click: () => {
-          mainWindow.webContents.send('menu-about');
+          showAbout();
+        }
+      },
+      {
+        label: 'Check for Updates',
+        click: () => {
+          checkAndPromptForUpdates(true);
         }
       },
       {

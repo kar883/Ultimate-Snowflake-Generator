@@ -1439,7 +1439,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
           )}
 
           {activeTab === 'text' && (
-            <div className="space-y-0 animate-in fade-in duration-200">
+            <div className="space-y-3 animate-in fade-in duration-200">
               <DeferredTextInput
                 label={t('Phrase Content')}
                 value={groupData.text}

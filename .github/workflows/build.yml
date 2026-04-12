@@ -65,14 +65,13 @@ jobs:
     - name: Create Release
       uses: softprops/action-gh-release@v2
       with:
-        # Use the specific folder we downloaded into
+        # Only upload final installers and standalone apps - no clutter files
         files: |
-          release-assets/**/*.exe
-          release-assets/**/*.zip
+          release-assets/**/*Setup*.exe
+          release-assets/**/*-win.zip
           release-assets/**/*.dmg
-          release-assets/**/*.deb
+          release-assets/**/*-mac.zip
           release-assets/**/*.AppImage
-          release-assets/**/*.pkg
         draft: false
         prerelease: false
       env:

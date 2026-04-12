@@ -67,6 +67,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   const [containerSize, setContainerSize] = useState({ width: 800, height: 800 });
   const [cachedSvgContent, setCachedSvgContent] = useState<string | null>(null);
   const [isGeneratingSvg, setIsGeneratingSvg] = useState(false);
+  const [initialPreviewReady, setInitialPreviewReady] = useState(false);
 
   // SVG rotation worker disabled for performance - using simple CSS transform instead
   // const { rotatedPaths, isRotating, rotateSvg } = useSvgRotationWorker();
@@ -79,6 +80,34 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   const hasUserInteracted = useRef(false);
 
   const enabledLayers = useMemo(() => config.layers.filter(l => l.enabled), [config.layers]);
+
+  const requiredInitialFonts = useMemo(() => {
+    const required = new Set<string>();
+    enabledLayers.forEach(layer => {
+      const collectIfNeeded = (group: TextGroupConfig) => {
+        if (!group.enabled || !group.text?.trim()) return;
+        const name = group.fontFamily.replace(/'/g, '').split(',')[0].trim();
+        if (name) required.add(name);
+      };
+
+      collectIfNeeded(layer.primary);
+      if (layer.secondaryEnabled) collectIfNeeded(layer.secondary);
+    });
+    return Array.from(required);
+  }, [enabledLayers]);
+
+  const allInitialFontsLoaded = useMemo(() => {
+    // fontLoadCount is intentionally read to re-evaluate when fontsRef is mutated.
+    void fontLoadCount;
+    if (!fontsPreloaded) return false;
+    return requiredInitialFonts.every(name => Boolean(fontsRef.current[name]));
+  }, [fontsPreloaded, requiredInitialFonts, fontLoadCount]);
+
+  useEffect(() => {
+    if (!initialPreviewReady && fontsPreloaded && allInitialFontsLoaded) {
+      setInitialPreviewReady(true);
+    }
+  }, [initialPreviewReady, fontsPreloaded, allInitialFontsLoaded]);
 
   const layerSpacing = useMemo(() => {
       const slotRequirement = slotEnabled ? (slotLength + (modelDiameter / 2) + 150) : 0;
@@ -619,6 +648,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   const centerX = containerSize.width / 2;
   const centerY = containerSize.height / 2;
   const hasEnabledLayers = enabledLayers.length > 0;
+  const showInitialLoadingMask = hasEnabledLayers && !initialPreviewReady;
 
   return (
     <div
@@ -646,7 +676,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
           </text>
         )}
         <g transform={`translate(${centerX + viewTransform.x}, ${centerY + viewTransform.y}) scale(${viewTransform.scale})`}>
-          {enabledLayers.map((layer, index) => {
+          {!showInitialLoadingMask && enabledLayers.map((layer, index) => {
             const offsetX = (index - (enabledLayers.length - 1) / 2) * layerSpacing;
             const layerColor = globalColor;
             const zRotation = (slotEnabled && index === 0) ? 180 : 0;
@@ -669,6 +699,13 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
           })}
         </g>
       </svg>
+      {showInitialLoadingMask && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
+          <div className="bg-slate-900/80 border border-white/10 rounded-lg px-4 py-3 shadow-xl backdrop-blur">
+            <span className="text-xs font-bold text-slate-200 uppercase tracking-wide">Preparing final preview...</span>
+          </div>
+        </div>
+      )}
       <div className="absolute bottom-8 right-8 z-20">
          <InfoTooltip label={t('Reset View')} description={getDescription('Reset View', t)} placement="left">
              <button onClick={handleResetView} className="p-6 bg-slate-900/80 hover:bg-sky-500 text-white rounded-[2rem] border border-white/10 shadow-2xl backdrop-blur-xl transition-all active:scale-90 group">

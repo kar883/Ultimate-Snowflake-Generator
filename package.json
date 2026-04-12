@@ -34,11 +34,11 @@
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
     "autoprefixer": "^10.4.24",
-    "electron": "^40.0.0",
+    "electron": "^40.8.5",
     "electron-builder": "^26.8.1",
     "electron-builder-squirrel-windows": "^26.8.1",
     "esbuild": "^0.27.4",
-    "jimp": "^0.22.12",
+    "jimp": "^1.6.1",
     "png-to-ico": "^3.0.1",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.19",
@@ -77,6 +77,11 @@
         "zip"
       ],
       "category": "public.app-category.graphics"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
     }
   },
   "description": "A beautiful 3D snowflake design generator for art and 3D printing",

@@ -1508,6 +1508,12 @@ const App: React.FC = () => {
 
   // Diameter Calculation Logic
   useEffect(() => {
+    // Skip diameter calculation during app initialization to prevent visual shifting
+    // Only start calculating once fonts are preloaded
+    if (!fontsPreloaded) {
+      return;
+    }
+
     let active = true;
     const calc = async () => {
         const enabledLayers = getEnabledLayers(config);
@@ -1586,7 +1592,7 @@ const App: React.FC = () => {
     };
     calc();
     return () => { active = false; };
-  }, [config, dynamicFonts, loadFont]);
+  }, [config, dynamicFonts, loadFont, fontsPreloaded]);
 
   const handleUpdateConfig = useCallback((updates: Partial<SnowflakeConfig>, commitTo3D: boolean = false) => {
     // Validate numeric bounds to prevent invalid values

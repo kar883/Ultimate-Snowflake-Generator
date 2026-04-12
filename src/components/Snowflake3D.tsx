@@ -3,12 +3,6 @@ import * as THREE from 'three';
 // @ts-ignore
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 // @ts-ignore
-import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer';
-// @ts-ignore
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass';
-// @ts-ignore
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass';
-// @ts-ignore
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
 import { SnowflakeConfig, ShortcutConfig, DesignQuality } from '../types';
 
@@ -269,48 +263,313 @@ function buildBodyColors(
 // ─────────────────────────────────────────────────────────────────────────────
 // Dynamic XYZ orientation gizmo
 // ─────────────────────────────────────────────────────────────────────────────
-const XYZGizmo: React.FC<{ camQ: THREE.Quaternion | null }> = ({ camQ }) => {
-  if (!camQ) return (
-    <svg width="60" height="60">
-      <circle cx="30" cy="30" r="28" fill="rgba(15,23,42,0.6)" />
-      <line x1="30" y1="30" x2="50" y2="30" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" />
-      <text x="53" y="34" fill="#ef4444" fontSize="9" fontWeight="bold">X</text>
-      <line x1="30" y1="30" x2="30" y2="10" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round" />
-      <text x="26" y="7"  fill="#22c55e" fontSize="9" fontWeight="bold">Y</text>
-      <line x1="30" y1="30" x2="44" y2="16" stroke="#3b82f6" strokeWidth="2.5" strokeLinecap="round" />
-      <text x="45" y="13" fill="#3b82f6" fontSize="9" fontWeight="bold">Z</text>
-      <circle cx="30" cy="30" r="2.5" fill="white" opacity="0.9" />
-    </svg>
-  );
+const XYZGizmo: React.FC<{
+  camQ: THREE.Quaternion | null;
+  onSnapDirection?: (direction: THREE.Vector3) => void;
+  onRotateStep?: (dir: 'left' | 'right' | 'up' | 'down') => void;
+}> = ({ camQ, onSnapDirection, onRotateStep }) => {
+  const [hovered, setHovered] = useState<{ kind: 'face' | 'edge' | 'corner' | 'arrow'; key: string; label: string } | null>(null);
+  const size = 115;
+  const cx = size / 2;
+  const cy = size / 2;
+  const radius = 64.0625;
 
-  const R  = 20;
-  const cx = 30, cy = 30;
-  const axes = [
-    { label: 'X', dir: new THREE.Vector3(1, 0, 0), col: '#ef4444' },
-    { label: 'Y', dir: new THREE.Vector3(0, 1, 0), col: '#22c55e' },
-    { label: 'Z', dir: new THREE.Vector3(0, 0, 1), col: '#3b82f6' },
-  ].map(({ label, dir, col }) => {
-    const v = dir.clone().applyQuaternion(camQ);
-    return { label, col, x: cx + v.x * R, y: cy - v.y * R, depth: v.z };
-  }).sort((a, b) => a.depth - b.depth); // draw back → front
+  if (!camQ) {
+    return (
+      <svg width={size} height={size} className="select-none">
+        <circle cx={cx} cy={cy} r={52.5} fill="rgba(15,23,42,0.72)" stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
+      </svg>
+    );
+  }
+
+  const keyFrom = (x: number, y: number, z: number) => `${x > 0 ? 'p' : 'n'}${y > 0 ? 'p' : 'n'}${z > 0 ? 'p' : 'n'}`;
+  const parseKey = (k: string) => ({
+    x: k[0] === 'p' ? 1 : -1,
+    y: k[1] === 'p' ? 1 : -1,
+    z: k[2] === 'p' ? 1 : -1,
+  });
+
+  const corners3D = [
+    new THREE.Vector3(1, 1, 1), new THREE.Vector3(1, 1, -1), new THREE.Vector3(1, -1, 1), new THREE.Vector3(1, -1, -1),
+    new THREE.Vector3(-1, 1, 1), new THREE.Vector3(-1, 1, -1), new THREE.Vector3(-1, -1, 1), new THREE.Vector3(-1, -1, -1),
+  ];
+
+  const projected = new Map<string, { x: number; y: number; depth: number; world: THREE.Vector3 }>();
+  corners3D.forEach(v => {
+    const vr = v.clone().normalize().applyQuaternion(camQ);
+    projected.set(keyFrom(v.x, v.y, v.z), {
+      x: cx + vr.x * radius,
+      y: cy - vr.y * radius,
+      depth: vr.z,
+      world: v.clone(),
+    });
+  });
+
+  const faceDefs = [
+    { key: 'px', normal: new THREE.Vector3(1, 0, 0), corners: ['ppp', 'ppn', 'pnn', 'pnp'], color: 'rgba(239,68,68,0.34)' },
+    { key: 'nx', normal: new THREE.Vector3(-1, 0, 0), corners: ['npp', 'npn', 'nnn', 'nnp'], color: 'rgba(239,68,68,0.18)' },
+    { key: 'py', normal: new THREE.Vector3(0, 1, 0), corners: ['ppp', 'ppn', 'npn', 'npp'], color: 'rgba(34,197,94,0.34)' },
+    { key: 'ny', normal: new THREE.Vector3(0, -1, 0), corners: ['pnp', 'pnn', 'nnn', 'nnp'], color: 'rgba(34,197,94,0.18)' },
+    { key: 'pz', normal: new THREE.Vector3(0, 0, 1), corners: ['ppp', 'npp', 'nnp', 'pnp'], color: 'rgba(59,130,246,0.34)' },
+    { key: 'nz', normal: new THREE.Vector3(0, 0, -1), corners: ['ppn', 'npn', 'nnn', 'pnn'], color: 'rgba(59,130,246,0.18)' },
+  ].map(f => {
+    const points = f.corners.map(k => projected.get(k)!);
+    const depth = points.reduce((sum, p) => sum + p.depth, 0) / points.length;
+    return { ...f, points, depth };
+  }).sort((a, b) => a.depth - b.depth);
+
+  const edgeDefs: Array<[string, string]> = [
+    ['ppp', 'ppn'], ['ppp', 'pnp'], ['ppp', 'npp'], ['ppn', 'pnn'],
+    ['ppn', 'npn'], ['pnp', 'pnn'], ['pnp', 'nnp'], ['pnn', 'nnn'],
+    ['npp', 'npn'], ['npp', 'nnp'], ['npn', 'nnn'], ['nnp', 'nnn'],
+  ];
+
+  const faceLabelByKey: Record<string, string> = {
+    px: 'Snap Right Face',
+    nx: 'Snap Left Face',
+    py: 'Snap Top Face',
+    ny: 'Snap Bottom Face',
+    pz: 'Snap Front Face',
+    nz: 'Snap Back Face',
+  };
+
+  const edgeItems = edgeDefs.map(([a, b], i) => {
+    const pa = projected.get(a)!;
+    const pb = projected.get(b)!;
+    const aa = parseKey(a);
+    const bb = parseKey(b);
+    const snapVec = new THREE.Vector3(
+      aa.x + bb.x,
+      aa.y + bb.y,
+      aa.z + bb.z,
+    ).normalize();
+    const key = `${a}-${b}`;
+    return { key, i, pa, pb, snapVec };
+  });
+
+  const cornerItems = Array.from(projected.entries()).map(([key, p]) => {
+    const s = parseKey(key);
+    const cornerVec = new THREE.Vector3(s.x, s.y, s.z).normalize();
+    return { key, p, cornerVec };
+  });
 
   return (
-    <svg width="60" height="60" className="select-none">
-      <circle cx="30" cy="30" r="28" fill="rgba(15,23,42,0.6)" stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
-      {axes.map(({ label, x, y, col, depth }) => {
-        const op = 0.35 + 0.65 * ((depth + 1) / 2);
+    <svg width={size} height={size} className="select-none">
+      <defs>
+        <radialGradient id="gizmoBg" cx="35%" cy="30%">
+          <stop offset="0%" stopColor="rgba(30,41,59,0.95)" />
+          <stop offset="100%" stopColor="rgba(2,6,23,0.92)" />
+        </radialGradient>
+      </defs>
+
+      <circle cx={cx} cy={cy} r={52.5} fill="url(#gizmoBg)" stroke="rgba(148,163,184,0.25)" strokeWidth="1" />
+
+      {faceDefs.map(face => (
+        <polygon
+          key={face.key}
+          points={face.points.map(p => `${p.x},${p.y}`).join(' ')}
+          fill={face.color}
+          stroke="rgba(148,163,184,0.28)"
+          strokeWidth="0.9"
+          className="cursor-pointer"
+          data-gizmo-interactive="true"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSnapDirection?.(face.normal.clone());
+          }}
+        />
+      ))}
+
+      {/* Base cube edge wireframe (subtle, always visible) */}
+      {edgeItems.map(({ key, pa, pb }) => (
+        <line
+          key={`edge-base-${key}`}
+          x1={pa.x}
+          y1={pa.y}
+          x2={pb.x}
+          y2={pb.y}
+          stroke="rgba(203,213,225,0.35)"
+          strokeWidth="0.95"
+        />
+      ))}
+
+      {/* Hover highlight overlays */}
+      {hovered?.kind === 'face' && (() => {
+        const face = faceDefs.find(f => f.key === hovered.key);
+        if (!face) return null;
         return (
-          <g key={label} opacity={op}>
-            <line x1="30" y1="30" x2={x} y2={y} stroke={col} strokeWidth="2.5" strokeLinecap="round" />
-            <text
-              x={x + (x - 30) * 0.5} y={y + (y - 30) * 0.5 + 3.5}
-              fill={col} fontSize="9" fontWeight="900" textAnchor="middle"
-              style={{ fontFamily: 'ui-monospace, monospace' }}
-            >{label}</text>
-          </g>
+          <polygon
+            points={face.points.map(p => `${p.x},${p.y}`).join(' ')}
+            fill="rgba(248,250,252,0.08)"
+            stroke="rgba(248,250,252,0.9)"
+            strokeWidth="1.5"
+          />
         );
-      })}
-      <circle cx="30" cy="30" r="2.5" fill="white" opacity="0.9" />
+      })()}
+      {hovered?.kind === 'edge' && (() => {
+        const edge = edgeItems.find(e => e.key === hovered.key);
+        if (!edge) return null;
+        return (
+          <line
+            x1={edge.pa.x}
+            y1={edge.pa.y}
+            x2={edge.pb.x}
+            y2={edge.pb.y}
+            stroke="rgba(248,250,252,0.95)"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+          />
+        );
+      })()}
+      {hovered?.kind === 'corner' && (() => {
+        const corner = cornerItems.find(c => c.key === hovered.key);
+        if (!corner) return null;
+        return (
+          <circle
+            cx={corner.p.x}
+            cy={corner.p.y}
+            r="5.1"
+            fill="none"
+            stroke="rgba(248,250,252,0.95)"
+            strokeWidth="1.6"
+          />
+        );
+      })()}
+
+      {/* Face hit zones */}
+      {faceDefs.map(face => (
+        <polygon
+          key={`hot-${face.key}`}
+          points={face.points.map(p => `${p.x},${p.y}`).join(' ')}
+          fill="transparent"
+          className="cursor-pointer"
+          data-gizmo-interactive="true"
+          onMouseEnter={() => setHovered({ kind: 'face', key: face.key, label: faceLabelByKey[face.key] || 'Face' })}
+          onMouseLeave={() => setHovered(null)}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSnapDirection?.(face.normal.clone());
+          }}
+        />
+      ))}
+
+      {/* Edge hit zones (invisible until hovered) */}
+      {edgeItems.map(({ key, pa, pb, snapVec }) => (
+        <line
+          key={`edge-hit-${key}`}
+          x1={pa.x}
+          y1={pa.y}
+          x2={pb.x}
+          y2={pb.y}
+          stroke="rgba(0,0,0,0)"
+          strokeWidth="8"
+          className="cursor-pointer"
+          data-gizmo-interactive="true"
+          onMouseEnter={() => setHovered({ kind: 'edge', key, label: 'Snap Edge View' })}
+          onMouseLeave={() => setHovered(null)}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSnapDirection?.(snapVec.clone());
+          }}
+        />
+      ))}
+
+      {/* Corner hit zones (invisible until hovered) */}
+      {cornerItems.map(({ key, p, cornerVec }) => (
+        <circle
+          key={`corner-hit-${key}`}
+          cx={p.x}
+          cy={p.y}
+          r="6.4"
+          fill="rgba(0,0,0,0)"
+          className="cursor-pointer"
+          data-gizmo-interactive="true"
+          onMouseEnter={() => setHovered({ kind: 'corner', key, label: 'Snap Corner View' })}
+          onMouseLeave={() => setHovered(null)}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSnapDirection?.(cornerVec.clone());
+          }}
+        />
+      ))}
+
+      {/* Curved step-rotation arrows around the cube */}
+      <g>
+        <g
+          className="cursor-pointer"
+          data-gizmo-interactive="true"
+          onMouseEnter={() => setHovered({ kind: 'arrow', key: 'left', label: 'Rotate Left' })}
+          onMouseLeave={() => setHovered(null)}
+          onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onClick={(e) => { e.stopPropagation(); onRotateStep?.('left'); }}
+        >
+          <circle cx="10" cy={cy} r="8" fill="rgba(15,23,42,0.88)" stroke="rgba(148,163,184,0.45)" strokeWidth="0.9" />
+          <path d={`M 13.2 ${cy - 3.8} A 4.8 4.8 0 1 0 13.2 ${cy + 3.8}`} fill="none" stroke="rgba(226,232,240,0.92)" strokeWidth="1.2" strokeLinecap="round" />
+          <path d={`M 10.5 ${cy - 2.7} L 12.9 ${cy - 3.4} L 12.3 ${cy - 1.0} Z`} fill="rgba(226,232,240,0.92)" />
+        </g>
+
+        <g
+          className="cursor-pointer"
+          data-gizmo-interactive="true"
+          onMouseEnter={() => setHovered({ kind: 'arrow', key: 'right', label: 'Rotate Right' })}
+          onMouseLeave={() => setHovered(null)}
+          onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onClick={(e) => { e.stopPropagation(); onRotateStep?.('right'); }}
+        >
+          <circle cx={size - 10} cy={cy} r="8" fill="rgba(15,23,42,0.88)" stroke="rgba(148,163,184,0.45)" strokeWidth="0.9" />
+          <path d={`M ${size - 13.2} ${cy + 3.8} A 4.8 4.8 0 1 0 ${size - 13.2} ${cy - 3.8}`} fill="none" stroke="rgba(226,232,240,0.92)" strokeWidth="1.2" strokeLinecap="round" />
+          <path d={`M ${size - 10.5} ${cy + 2.7} L ${size - 12.9} ${cy + 3.4} L ${size - 12.3} ${cy + 1.0} Z`} fill="rgba(226,232,240,0.92)" />
+        </g>
+
+        <g
+          className="cursor-pointer"
+          data-gizmo-interactive="true"
+          onMouseEnter={() => setHovered({ kind: 'arrow', key: 'up', label: 'Rotate Up' })}
+          onMouseLeave={() => setHovered(null)}
+          onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onClick={(e) => { e.stopPropagation(); onRotateStep?.('up'); }}
+        >
+          <circle cx={cx} cy="10" r="8" fill="rgba(15,23,42,0.88)" stroke="rgba(148,163,184,0.45)" strokeWidth="0.9" />
+          <path d={`M ${cx - 3.8} 13.2 A 4.8 4.8 0 1 1 ${cx + 3.8} 13.2`} fill="none" stroke="rgba(226,232,240,0.92)" strokeWidth="1.2" strokeLinecap="round" />
+          <path d={`M ${cx - 2.7} 10.5 L ${cx - 3.4} 12.9 L ${cx - 1.0} 12.3 Z`} fill="rgba(226,232,240,0.92)" />
+        </g>
+
+        <g
+          className="cursor-pointer"
+          data-gizmo-interactive="true"
+          onMouseEnter={() => setHovered({ kind: 'arrow', key: 'down', label: 'Rotate Down' })}
+          onMouseLeave={() => setHovered(null)}
+          onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onClick={(e) => { e.stopPropagation(); onRotateStep?.('down'); }}
+        >
+          <circle cx={cx} cy={size - 10} r="8" fill="rgba(15,23,42,0.88)" stroke="rgba(148,163,184,0.45)" strokeWidth="0.9" />
+          <path d={`M ${cx + 3.8} ${size - 13.2} A 4.8 4.8 0 1 1 ${cx - 3.8} ${size - 13.2}`} fill="none" stroke="rgba(226,232,240,0.92)" strokeWidth="1.2" strokeLinecap="round" />
+          <path d={`M ${cx + 2.7} ${size - 10.5} L ${cx + 3.4} ${size - 12.9} L ${cx + 1.0} ${size - 12.3} Z`} fill="rgba(226,232,240,0.92)" />
+        </g>
+      </g>
+
+      {hovered?.label && (
+        <g>
+          <rect x={cx - 36} y={size - 20} width="72" height="14" rx="3" fill="rgba(2,6,23,0.95)" stroke="rgba(148,163,184,0.45)" strokeWidth="0.8" />
+          <text x={cx} y={size - 10.2} textAnchor="middle" fill="rgba(226,232,240,0.98)" fontSize="7.8" fontWeight="800">{hovered.label}</text>
+        </g>
+      )}
     </svg>
   );
 };
@@ -510,16 +769,31 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
 }) => {
   const containerRef  = useRef<HTMLDivElement>(null);
   const rendererRef   = useRef<THREE.WebGLRenderer | null>(null);
-  const composerRef   = useRef<EffectComposer | null>(null);
   const sceneRef      = useRef<THREE.Scene | null>(null);
   const cameraRef     = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef   = useRef<OrbitControls | null>(null);
   const meshGroupRef  = useRef<THREE.Group | null>(null);
+  const miniHostRef   = useRef<HTMLDivElement>(null);
+  const miniRendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const miniSceneRef  = useRef<THREE.Scene | null>(null);
+  const miniCameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const miniModelGroupRef = useRef<THREE.Group | null>(null);
+  const miniAnimRef = useRef<number | null>(null);
   const isVisibleRef  = useRef(isVisible);
   const frameRef      = useRef(0);
+  const snapAnimRef   = useRef<number | null>(null);
+  const gizmoDragRef  = useRef<{ active: boolean; moved: boolean; pointerId: number | null; x: number; y: number }>({
+    active: false,
+    moved: false,
+    pointerId: null,
+    x: 0,
+    y: 0,
+  });
+  const gizmoLastDragAtRef = useRef(0);
 
   const [loading, setLoading]   = useState(false);
   const [camQ, setCamQ]         = useState<THREE.Quaternion | null>(null);
+  const [isGizmoDragging, setIsGizmoDragging] = useState(false);
   // const [bodyMode, setBodyMode] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   // const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -601,6 +875,296 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     });
   };
 
+  const handleGizmoPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!controlsRef.current) return;
+
+    const targetEl = e.target as Element | null;
+    if (targetEl?.closest('[data-gizmo-interactive="true"]')) {
+      return;
+    }
+
+    e.preventDefault();
+    e.stopPropagation();
+    gizmoDragRef.current = {
+      active: true,
+      moved: false,
+      pointerId: e.pointerId,
+      x: e.clientX,
+      y: e.clientY,
+    };
+    setIsGizmoDragging(true);
+    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+  }, []);
+
+  const handleGizmoPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = gizmoDragRef.current;
+    const controls = controlsRef.current;
+    if (!drag.active || drag.pointerId !== e.pointerId || !controls) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const dx = e.clientX - drag.x;
+    const dy = e.clientY - drag.y;
+    drag.x = e.clientX;
+    drag.y = e.clientY;
+    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) drag.moved = true;
+
+    const camera = cameraRef.current;
+    if (!camera) return;
+
+    const offset = camera.position.clone().sub(controls.target);
+    const spherical = new THREE.Spherical().setFromVector3(offset);
+    const rotateScale = 0.0085;
+    spherical.theta -= dx * rotateScale;
+    spherical.phi -= dy * rotateScale;
+    spherical.phi = THREE.MathUtils.clamp(spherical.phi, 0.05, Math.PI - 0.05);
+
+    offset.setFromSpherical(spherical);
+    camera.position.copy(controls.target).add(offset);
+    camera.lookAt(controls.target);
+    controls.update();
+    if (cameraRef.current) setCamQ(cameraRef.current.quaternion.clone());
+  }, []);
+
+  const handleGizmoPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = gizmoDragRef.current;
+    if (!drag.active || drag.pointerId !== e.pointerId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (drag.moved) gizmoLastDragAtRef.current = performance.now();
+    gizmoDragRef.current = { active: false, moved: false, pointerId: null, x: 0, y: 0 };
+    setIsGizmoDragging(false);
+    (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
+  }, []);
+
+  const snapToDirection = useCallback((direction: THREE.Vector3, up?: THREE.Vector3) => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+
+    if (snapAnimRef.current) {
+      cancelAnimationFrame(snapAnimRef.current);
+      snapAnimRef.current = null;
+    }
+
+    const startPos = camera.position.clone();
+    const target = controls.target.clone();
+    const radius = startPos.distanceTo(target);
+    const endPos = target.clone().add(direction.clone().normalize().multiplyScalar(radius));
+    const startUp = camera.up.clone();
+    const endUp = (up ? up.clone() : camera.up.clone()).normalize();
+
+    const start = performance.now();
+    const duration = 260;
+    const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
+
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const e = easeOut(t);
+
+      camera.position.lerpVectors(startPos, endPos, e);
+      camera.up.copy(startUp).lerp(endUp, e).normalize();
+      camera.lookAt(target);
+      controls.update();
+      setCamQ(camera.quaternion.clone());
+
+      if (t < 1) {
+        snapAnimRef.current = requestAnimationFrame(tick);
+      } else {
+        snapAnimRef.current = null;
+      }
+    };
+
+    snapAnimRef.current = requestAnimationFrame(tick);
+  }, []);
+
+  const handleSnapDirection = useCallback((direction: THREE.Vector3) => {
+    if (performance.now() - gizmoLastDragAtRef.current < 140) return;
+    const dir = direction.clone().normalize();
+    const yDot = Math.abs(dir.dot(new THREE.Vector3(0, 1, 0)));
+    const up = yDot > 0.95
+      ? new THREE.Vector3(0, 0, dir.y >= 0 ? -1 : 1)
+      : new THREE.Vector3(0, 1, 0);
+    snapToDirection(dir, up);
+  }, [snapToDirection]);
+
+  const handleRotateStep = useCallback((dir: 'left' | 'right' | 'up' | 'down') => {
+    if (performance.now() - gizmoLastDragAtRef.current < 140) return;
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+
+    if (snapAnimRef.current) {
+      cancelAnimationFrame(snapAnimRef.current);
+      snapAnimRef.current = null;
+    }
+
+    const startPos = camera.position.clone();
+    const target = controls.target.clone();
+    const startUp = camera.up.clone();
+    const offset = startPos.clone().sub(target);
+    const startSph = new THREE.Spherical().setFromVector3(offset);
+    const endSph = startSph.clone();
+    const step = THREE.MathUtils.degToRad(15);
+
+    if (dir === 'left') endSph.theta += step;
+    if (dir === 'right') endSph.theta -= step;
+    if (dir === 'up') endSph.phi -= step;
+    if (dir === 'down') endSph.phi += step;
+    endSph.phi = THREE.MathUtils.clamp(endSph.phi, 0.05, Math.PI - 0.05);
+
+    const endPos = target.clone().add(new THREE.Vector3().setFromSpherical(endSph));
+
+    const start = performance.now();
+    const duration = 180;
+    const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
+
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const e = easeOut(t);
+      camera.position.lerpVectors(startPos, endPos, e);
+      camera.up.copy(startUp);
+      camera.lookAt(target);
+      controls.update();
+      setCamQ(camera.quaternion.clone());
+
+      if (t < 1) {
+        snapAnimRef.current = requestAnimationFrame(tick);
+      } else {
+        snapAnimRef.current = null;
+      }
+    };
+
+    snapAnimRef.current = requestAnimationFrame(tick);
+  }, []);
+
+  const disposeMiniObject = useCallback((obj: THREE.Object3D) => {
+    obj.traverse(child => {
+      if (!(child instanceof THREE.Mesh)) return;
+      child.geometry?.dispose();
+      if (Array.isArray(child.material)) {
+        child.material.forEach(m => m.dispose());
+      } else {
+        child.material?.dispose();
+      }
+    });
+  }, []);
+
+  const syncMiniModel = useCallback(() => {
+    const miniGroup = miniModelGroupRef.current;
+    const source = meshGroupRef.current;
+    if (!miniGroup) return;
+
+    while (miniGroup.children.length) {
+      const child = miniGroup.children[0];
+      miniGroup.remove(child);
+      disposeMiniObject(child);
+    }
+    if (!source) return;
+
+    const clone = source.clone(true);
+    clone.traverse(child => {
+      if (!(child instanceof THREE.Mesh)) return;
+      child.geometry = child.geometry.clone();
+      const fixedMiniMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+      if (Array.isArray(child.material)) {
+        child.material.forEach(m => m.dispose());
+      } else {
+        child.material.dispose();
+      }
+      child.material = fixedMiniMat;
+      child.castShadow = false;
+      child.receiveShadow = false;
+    });
+
+    clone.updateMatrixWorld(true);
+
+    const box = new THREE.Box3().setFromObject(clone);
+    if (!box.isEmpty()) {
+      const sphere = box.getBoundingSphere(new THREE.Sphere());
+      const safeRadius = Math.max(sphere.radius, 1e-6);
+      const targetRadius = 29.296875;
+      const scale = targetRadius / safeRadius;
+
+      clone.position.copy(sphere.center).multiplyScalar(-1);
+      clone.scale.setScalar(scale);
+    }
+
+    miniGroup.add(clone);
+  }, [disposeMiniObject]);
+
+  useEffect(() => {
+    const host = miniHostRef.current;
+    if (!host) return;
+
+    const scene = new THREE.Scene();
+    miniSceneRef.current = scene;
+
+    const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 600);
+    camera.position.set(0, 0, 134);
+    miniCameraRef.current = camera;
+
+    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: 'low-power' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    renderer.setSize(115, 115, false);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    miniRendererRef.current = renderer;
+    Object.assign(renderer.domElement.style, {
+      width: '100%',
+      height: '100%',
+      display: 'block',
+      position: 'absolute',
+      inset: '0',
+    });
+    host.appendChild(renderer.domElement);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 1));
+
+    const miniGroup = new THREE.Group();
+    miniGroup.position.set(0, 0, 0);
+    miniSceneRef.current.add(miniGroup);
+    miniModelGroupRef.current = miniGroup;
+
+    syncMiniModel();
+
+    const animate = () => {
+      renderer.render(scene, camera);
+      miniAnimRef.current = requestAnimationFrame(animate);
+    };
+    animate();
+
+    return () => {
+      if (miniAnimRef.current) {
+        cancelAnimationFrame(miniAnimRef.current);
+        miniAnimRef.current = null;
+      }
+
+      if (miniModelGroupRef.current) {
+        while (miniModelGroupRef.current.children.length) {
+          const child = miniModelGroupRef.current.children[0];
+          miniModelGroupRef.current.remove(child);
+          disposeMiniObject(child);
+        }
+      }
+
+      renderer.dispose();
+      if (renderer.domElement.parentNode === host) {
+        host.removeChild(renderer.domElement);
+      }
+
+      miniRendererRef.current = null;
+      miniSceneRef.current = null;
+      miniCameraRef.current = null;
+      miniModelGroupRef.current = null;
+    };
+  }, [disposeMiniObject, syncMiniModel]);
+
+  useEffect(() => {
+    if (!camQ || !miniModelGroupRef.current) return;
+    miniModelGroupRef.current.quaternion.copy(camQ).invert();
+  }, [camQ]);
+
   // ── Apply appearance whenever visibility/transparency changes ────
   const applyAppearance = useCallback(() => {
     if (!meshGroupRef.current) return;
@@ -617,21 +1181,24 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
 
       // Standard appearance (ID Bodies disabled)
       const ghost = planeTransparencyEnabled[lid] ?? false;
+      const baseColor = new THREE.Color(color || '#38bdf8');
+      const accentEmissive = baseColor.clone().multiplyScalar(0.35);
       const mat = new THREE.MeshStandardMaterial({
         vertexColors:     false,
-        color:            new THREE.Color(color || '#38bdf8'),
-        emissive:         new THREE.Color(color || '#38bdf8'),
-        emissiveIntensity: 0.02,  // reduced to minimize flare artifacts
-        metalness:        0.45,
-        roughness:        0.25,
-        envMapIntensity:  1.2,
+        color:            baseColor,
+        emissive:         accentEmissive,
+        emissiveIntensity: 0.015,
+        metalness:        0.14,
+        roughness:        0.44,
+        envMapIntensity:  0.36,
         transparent:      ghost,
         opacity:          ghost ? (planeTransparency[lid] ?? 0.12) : 1.0,
         side:             THREE.DoubleSide,
       });
       child.material = mat;
     });
-  }, [planeVisibility, planeTransparency, planeTransparencyEnabled, color]);
+    syncMiniModel();
+  }, [planeVisibility, planeTransparency, planeTransparencyEnabled, color, syncMiniModel]);
 
   useEffect(() => { applyAppearance(); },
     [planeVisibility, planeTransparency, planeTransparencyEnabled, applyAppearance]);
@@ -761,7 +1328,8 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     renderer.setSize(w, h);
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.2;
+    renderer.toneMappingExposure = 0.78;
+    renderer.setClearColor(0x020617, 1);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     rendererRef.current = renderer;
@@ -771,21 +1339,15 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     });
     containerRef.current.appendChild(renderer.domElement);
 
-    const composer = new EffectComposer(renderer);
-    composer.addPass(new RenderPass(scene, camera));
-    // Very subtle bloom — only the absolute brightest specular highlights glow.
-    composer.addPass(new UnrealBloomPass(new THREE.Vector2(w, h), 0.12, 0.8, 1.2));
-    composerRef.current = composer;
-
     // ── Three-point studio lighting ──────────────────────────────────────────
     // Designed for a flat snowflake ornament viewed mostly face-on.
     // Key: strong warm-white from upper-left-front (main definition)
     // Fill: soft cool from lower-right-front (lifts shadows, adds depth)
     // Back/rim: narrow cold blue from behind (separates from background)
-    // Ambient: very low so shadows read clearly
-    scene.add(new THREE.AmbientLight(0xffffff, 0.15));
+    // Slightly higher ambient light keeps faces closer to 2D color while preserving depth.
+    scene.add(new THREE.AmbientLight(0xffffff, 0.16));
 
-    const key = new THREE.DirectionalLight(0xfff8f0, 2.8);  // warm white
+    const key = new THREE.DirectionalLight(0xf9fbff, 1.05);
     key.position.set(-120, 200, 400);
     key.castShadow = true;
     key.shadow.mapSize.set(2048, 2048);
@@ -794,37 +1356,37 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     key.shadow.bias = -0.0005;
     scene.add(key);
 
-    const fill = new THREE.DirectionalLight(0xe8f4ff, 0.9);  // cool blue-white
+    const fill = new THREE.DirectionalLight(0xecf4ff, 0.34);
     fill.position.set(300, -80, 350);
     scene.add(fill);
 
-    const rim = new THREE.DirectionalLight(0x88bbff, 1.4);   // cold blue rim
-    rim.position.set(60, 40, -500);
+    const rim = new THREE.DirectionalLight(0x9fc2ff, 0.24);
+    rim.position.set(60, 70, -460);
     scene.add(rim);
 
-    // Env map
-    const pmrem = new THREE.PMREMGenerator(renderer);
-    const envS = new THREE.Scene();
-    const panel = new THREE.Mesh(new THREE.PlaneGeometry(1000, 1000),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }));
-    panel.position.z = 500; envS.add(panel);
-    scene.environment = pmrem.fromScene(envS).texture;
-    pmrem.dispose();
+    scene.environment = null;
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
+
+    const onControlStart = () => {
+      renderer.shadowMap.autoUpdate = false;
+    };
+    const onControlEnd = () => {
+      renderer.shadowMap.autoUpdate = true;
+      renderer.shadowMap.needsUpdate = true;
+    };
+    controls.addEventListener('start', onControlStart);
+    controls.addEventListener('end', onControlEnd);
+
     controlsRef.current = controls;
 
     const animate = () => {
       requestAnimationFrame(animate);
       if (!isVisibleRef.current) return;
       controls.update();
-      // Use the EffectComposer so the UnrealBloomPass is actually applied.
-      // Fall back to the raw renderer only if the composer isn't ready.
-      if (composerRef.current) {
-        composerRef.current.render();
-      } else if (rendererRef.current && sceneRef.current && cameraRef.current) {
+      if (rendererRef.current && sceneRef.current && cameraRef.current) {
         rendererRef.current.render(sceneRef.current, cameraRef.current);
       }
       // Update gizmo every 2 frames to avoid React overhead
@@ -841,11 +1403,12 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
       camera.aspect = nw / nh;
       camera.updateProjectionMatrix();
       renderer.setSize(nw, nh);
-      composer.setSize(nw, nh);
     };
     window.addEventListener('resize', onResize);
     return () => {
       window.removeEventListener('resize', onResize);
+      controls.removeEventListener('start', onControlStart);
+      controls.removeEventListener('end', onControlEnd);
       renderer.dispose();
       containerRef.current?.removeChild(renderer.domElement);
     };
@@ -878,13 +1441,15 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
           });
         }
 
+        const baseColor = new THREE.Color(color || '#38bdf8');
+        const accentEmissive = baseColor.clone().multiplyScalar(0.35);
         const baseMat = new THREE.MeshStandardMaterial({
-          color: new THREE.Color(color || '#38bdf8'),
-          metalness: 0.45,   // enough metalness to catch the rim light crisply
-          roughness: 0.25,   // low roughness = tight, clean specular highlights
-          emissive: new THREE.Color(color || '#38bdf8'),
-          emissiveIntensity: 0.02,  // reduced to minimize flare artifacts
-          envMapIntensity: 1.2,
+          color: baseColor,
+          metalness: 0.14,
+          roughness: 0.44,
+          emissive: accentEmissive,
+          emissiveIntensity: 0.015,
+          envMapIntensity: 0.3,
           side: THREE.DoubleSide,
           transparent: true, opacity: 1.0,
         });
@@ -937,8 +1502,6 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   }, [config, generateMesh, refreshKey]);
 
   // ── Render ───────────────────────────────────────────────────────────────
-  const enabledLayers = config.layers.filter(l => l.enabled);
-  const dotColors     = ['#38bdf8', '#a78bfa', '#34d399'];
 
   return (
     <div className="relative w-full h-full">
@@ -1000,11 +1563,23 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
       <div className="absolute bottom-4 right-4 z-40 flex flex-col items-end gap-2">
 
         {/* Dynamic orientation gizmo */}
-        <div className="bg-slate-900/80 backdrop-blur p-2 rounded-xl border border-white/10 shadow-xl">
-          <XYZGizmo camQ={camQ} />
-          <p className="text-center text-[8px] font-bold uppercase tracking-widest text-slate-500 mt-0.5">
-            View
-          </p>
+        <div
+          className={`relative w-[115px] h-[115px] p-0 select-none flex items-center justify-center ${isGizmoDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+          style={{ touchAction: 'none' }}
+          onPointerDownCapture={handleGizmoPointerDown}
+          onPointerMoveCapture={handleGizmoPointerMove}
+          onPointerUpCapture={handleGizmoPointerUp}
+          onPointerCancelCapture={handleGizmoPointerUp}
+        >
+          <div
+            ref={miniHostRef}
+            className="absolute inset-0 pointer-events-none rounded-full overflow-hidden"
+          />
+          <XYZGizmo
+            camQ={camQ}
+            onSnapDirection={handleSnapDirection}
+            onRotateStep={handleRotateStep}
+          />
         </div>
 
         {/* Reset camera home + force refresh — side by side */}
