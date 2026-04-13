@@ -682,14 +682,13 @@ const createSlotProfilesForLayer = (
       yOffset: (bridge / 2) + (halfChannel / 2),
       rotationDeg: -armAngle,
     });
-    // rot=-(armAngle+180) flips both x and y, so negate yOffset here so it
-    // lands in the correct upper half-channel after the 180° rotation.
+    // Keep same azimuth as main cut; xOffset places this on the opposite side.
     slots.push({
       length: tipInLength,
       width: halfChannel,
       xOffset: -drawLength,
-      yOffset: -((bridge / 2) + (halfChannel / 2)),
-      rotationDeg: -(armAngle + 180),
+      yOffset: (bridge / 2) + (halfChannel / 2),
+      rotationDeg: -armAngle,
     });
     return slots;
   }
@@ -701,15 +700,14 @@ const createSlotProfilesForLayer = (
       yOffset: -((bridge / 2) + (halfChannel / 2)),
       rotationDeg: -armAngle,
     });
-    // rot=-(armAngle+180) flips both x and y:
-    //   xOffset=-drawLength + length=tipInLength → after flip: x ∈ [tipInStart, drawLength] ✓
-    //   yOffset positive here → flips to negative (lower half-channel) ✓
+    // Opposite-arm extension: start at the origin and cut outward on the
+    // negative-X arm for 75% of slotLength.
     slots.push({
-      length: tipInLength,
+      length: Math.max(0.01, tipInStart),
       width: Math.max(0.12, halfChannel * 0.85),
-      xOffset: -drawLength,
-      yOffset: (bridge / 2) + (halfChannel / 2),
-      rotationDeg: -(armAngle + 180),
+      xOffset: -Math.max(0.01, tipInStart),
+      yOffset: -((bridge / 2) + (halfChannel / 2)),
+      rotationDeg: -armAngle,
     });
     return slots;
   }
@@ -782,13 +780,21 @@ const createAngledSlotCuttersForLayer = (
 
   if (layerIndex === 1) {
     addCutter(0, drawLength, halfChannel, 240, -armAngle, (bridge / 2) + (halfChannel / 2));
-    addCutter(-drawLength, tipInLength, halfChannel, 240, -(armAngle + 180), -((bridge / 2) + (halfChannel / 2)));
+    addCutter(-drawLength, tipInLength, halfChannel, 240, -armAngle, (bridge / 2) + (halfChannel / 2));
     return cutters;
   }
 
   if (layerIndex === 2) {
     addCutter(0, adjLength, halfChannel, 120, -armAngle, -((bridge / 2) + (halfChannel / 2)));
-    addCutter(-drawLength, tipInLength, Math.max(0.12, halfChannel * 0.8), 120, -(armAngle + 180), (bridge / 2) + (halfChannel / 2));
+    // Opposite-arm extension from origin outward for 75% of slotLength.
+    addCutter(
+      -Math.max(0.01, tipInStart),
+      Math.max(0.01, tipInStart),
+      Math.max(0.12, halfChannel * 0.8),
+      120,
+      -armAngle,
+      -((bridge / 2) + (halfChannel / 2))
+    );
     return cutters;
   }
 

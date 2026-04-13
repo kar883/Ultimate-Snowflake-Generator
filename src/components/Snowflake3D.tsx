@@ -67,13 +67,20 @@ function createSlotDebugCuttersForLayer(
 
   if (layerIndex === 1) {
     addCutter(0, drawLength, halfChannel, 240, -armAngle, (bridge / 2) + (halfChannel / 2));
-    addCutter(-drawLength, tipInLength, halfChannel, 240, -(armAngle + 180), -((bridge / 2) + (halfChannel / 2)));
+    addCutter(-drawLength, tipInLength, halfChannel, 240, -armAngle, (bridge / 2) + (halfChannel / 2));
     return cutters;
   }
 
   if (layerIndex === 2) {
     addCutter(0, adjLength, halfChannel, 120, -armAngle, -((bridge / 2) + (halfChannel / 2)));
-    addCutter(-drawLength, tipInLength, Math.max(0.12, halfChannel * 0.8), 120, -(armAngle + 180), (bridge / 2) + (halfChannel / 2));
+    addCutter(
+      -Math.max(0.01, tipInStart),
+      Math.max(0.01, tipInStart),
+      Math.max(0.12, halfChannel * 0.8),
+      120,
+      -armAngle,
+      -((bridge / 2) + (halfChannel / 2))
+    );
     return cutters;
   }
 
