@@ -16,8 +16,14 @@ import opentype from 'opentype.js';
 import JSZip from 'jszip';
 import { GoogleGenAI } from "@google/genai";
 import { getApiKey, loadAiScope, type AiScopeConfig } from './components/ShortcutsModal';
-import { surgicalSlotRepair, getTopologyReport } from './surgicalSlotRepair';
-import { type SlotProfile2D } from './manifoldCSG';
+import {
+  type ShapeInstance2D,
+  type SlotProfile2D,
+  manifoldSubtract,
+  manifoldUnionAndExtrudeShapeInstances,
+  manifoldUnionGeometries,
+} from './manifoldCSG';
+import { getTopologyReport } from './surgicalSlotRepair';
 import { fillSlotHoles } from './slotHoleFiller';
 import { postCSGJob } from './csgWorkerManager';
 // @ts-ignore
@@ -25,6 +31,32 @@ import { postCSGJob } from './csgWorkerManager';
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, /*makeSlotKey,*/ getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, /*slotCutCache,*/ makeUnderlineKey } from './geometryCache';
 
 const MAX_HISTORY = 50;
+// Bump when mesh generation logic changes (slot geometry, CSG sequencing, etc.)
+// so cached groups from older algorithms are not reused.
+const GEOMETRY_ALGO_VERSION = 'slot-2026-04-14-t';
+
+declare global {
+  interface Window {
+    __snowflakeRunManifoldValidation?: () => Promise<ValidationScenarioResult[]>;
+  }
+}
+
+type MeshTopologyValidation = {
+  meshName: string;
+  layerId?: string;
+  vertices: number;
+  faces: number;
+  boundaryEdges: number;
+  nonManifoldEdges: number;
+  isClosedManifold: boolean;
+};
+
+type ValidationScenarioResult = {
+  scenario: string;
+  meshes: MeshTopologyValidation[];
+};
+
+type MeshGenerationMode = 'preview' | 'export' | 'validation';
 
 const DEFAULT_SHORTCUTS: ShortcutConfig = {
     undo: { key: 'z', ctrlKey: true },
@@ -319,6 +351,128 @@ function offsetPathWithValidation(
   }
 
   return offsetPoints;
+}
+
+function makeTranslationMatrix2D(x: number, y: number): THREE_ACTUAL.Matrix3 {
+  return new THREE_ACTUAL.Matrix3().set(
+    1, 0, x,
+    0, 1, y,
+    0, 0, 1
+  );
+}
+
+function makeScaleMatrix2D(x: number, y: number): THREE_ACTUAL.Matrix3 {
+  return new THREE_ACTUAL.Matrix3().set(
+    x, 0, 0,
+    0, y, 0,
+    0, 0, 1
+  );
+}
+
+function makeRotationMatrix2D(radians: number): THREE_ACTUAL.Matrix3 {
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return new THREE_ACTUAL.Matrix3().set(
+    cos, -sin, 0,
+    sin, cos, 0,
+    0, 0, 1
+  );
+}
+
+function composeMatrix2D(...operations: THREE_ACTUAL.Matrix3[]): THREE_ACTUAL.Matrix3 {
+  const matrix = new THREE_ACTUAL.Matrix3().identity();
+  for (const operation of operations) {
+    matrix.premultiply(operation);
+  }
+  return matrix;
+}
+
+function describeTopologyFailure(label: string, geometry: THREE_ACTUAL.BufferGeometry): string | null {
+  const report = getTopologyReport(geometry);
+  if (report.boundaryEdges === 0 && report.nonManifoldEdges === 0) {
+    return null;
+  }
+
+  return `${label} is not a closed manifold (boundary=${report.boundaryEdges}, nonManifold=${report.nonManifoldEdges}, faces=${report.faces})`;
+}
+
+function collectGroupTopology(group: THREE_ACTUAL.Group): MeshTopologyValidation[] {
+  const reports: MeshTopologyValidation[] = [];
+
+  group.traverse((child) => {
+    if (!(child instanceof THREE_ACTUAL.Mesh)) return;
+    const geometry = child.geometry as THREE_ACTUAL.BufferGeometry | undefined;
+    if (!geometry?.attributes?.position) return;
+
+    const topologyGeometry = geometry.index
+      ? geometry
+      : (() => {
+          const indexed = geometry.clone();
+          const index = new Uint32Array(indexed.attributes.position.count);
+          for (let indexIdx = 0; indexIdx < index.length; indexIdx++) {
+            index[indexIdx] = indexIdx;
+          }
+          indexed.setIndex(new THREE_ACTUAL.BufferAttribute(index, 1));
+          return indexed;
+        })();
+
+    const report = getTopologyReport(topologyGeometry);
+    reports.push({
+      meshName: child.name || 'Unnamed Mesh',
+      layerId: child.userData.layerId ? String(child.userData.layerId) : undefined,
+      vertices: report.vertices,
+      faces: report.faces,
+      boundaryEdges: report.boundaryEdges,
+      nonManifoldEdges: report.nonManifoldEdges,
+      isClosedManifold: report.boundaryEdges === 0 && report.nonManifoldEdges === 0,
+    });
+
+    if (topologyGeometry !== geometry) {
+      topologyGeometry.dispose();
+    }
+  });
+
+  return reports;
+}
+
+function disposeGroupResources(group: THREE_ACTUAL.Group) {
+  group.traverse((child) => {
+    if (!(child instanceof THREE_ACTUAL.Mesh)) return;
+    child.geometry?.dispose?.();
+
+    const material = child.material;
+    if (Array.isArray(material)) {
+      material.forEach((entry) => entry?.dispose?.());
+    } else {
+      material?.dispose?.();
+    }
+  });
+}
+
+function cloneValidationConfig(config: SnowflakeConfig): SnowflakeConfig {
+  return JSON.parse(JSON.stringify(config)) as SnowflakeConfig;
+}
+
+function buildManifoldValidationConfigs(baseConfig: SnowflakeConfig): Array<{ scenario: string; config: SnowflakeConfig }> {
+  const slotFillet = cloneValidationConfig(baseConfig);
+  slotFillet.slotEnabled = true;
+  slotFillet.slotMode = '3-plane';
+  slotFillet.bevelEnabled = true;
+  slotFillet.bevelType = 'fillet';
+  slotFillet.slotWidth = 0.2;
+  slotFillet.quality = 'low';
+
+  const slotFlat = cloneValidationConfig(baseConfig);
+  slotFlat.slotEnabled = true;
+  slotFlat.slotMode = '3-plane';
+  slotFlat.bevelEnabled = false;
+  slotFlat.slotWidth = 0.2;
+  slotFlat.quality = 'low';
+
+  return [
+    { scenario: 'slots-fillet', config: slotFillet },
+    { scenario: 'slots-flat', config: slotFlat },
+  ];
 }
 
 /**
@@ -642,34 +796,30 @@ const createSlotProfilesForLayer = (
   const drawLength = Math.max(config.slotLength + (layer.slotLengthAdjustment ?? 0), (modelDiameter / 2) + 20);
   const slotLength = Math.max(2, config.slotLength + (layer.slotLengthAdjustment ?? 0));
   const tipInStart = Math.max(0, slotLength * 0.75);
-  const tipInLength = Math.max(0.01, drawLength - tipInStart);
+  const tipInLength = Math.max(0.01, drawLength * 0.22);
+  const extensionLength = Math.max(0.01, slotLength * 0.6);
   const widthAdjustment = layer.slotWidthOffset ?? 0;
-  const requestedWidth = Math.max(0.5, config.slotWidth + widthAdjustment);
-  const cutThickness = Math.max(materialThickness + 0.2, requestedWidth);
-  const bridge = Math.min(0.4, Math.max(0.15, cutThickness * 0.08));
-  const halfChannel = Math.max(0.12, (cutThickness - bridge) / 2);
+  const slotThickness = Math.max(0.1, materialThickness + (config.globalStrokeWeight || 0) + config.slotWidth + widthAdjustment);
+  const bridge = Math.min(0.4, Math.max(0.15, slotThickness * 0.08));
+  const halfChannel = Math.max(0.12, (slotThickness - bridge) / 2);
   const armAngle = layer.primary.rotationOffset ?? 0;
 
   if (config.slotMode === '2-plane') {
     if (layerIndex === 0) {
-      slots.push({ length: drawLength, width: cutThickness, yOffset: 0, rotationDeg: -armAngle });
+      slots.push({ length: drawLength, width: slotThickness, yOffset: 0, rotationDeg: -armAngle });
     } else if (layerIndex === 1) {
-      slots.push({ length: drawLength, width: cutThickness, yOffset: 0, rotationDeg: -(armAngle + 180) });
+      slots.push({ length: drawLength, width: slotThickness, yOffset: 0, rotationDeg: -(armAngle + 180) });
     }
     return slots;
   }
 
   if (layerIndex === 0) {
+    // Base: one full-width cut from origin outward past the arm end.
     slots.push({
       length: drawLength,
-      width: halfChannel,
-      yOffset: (bridge / 2) + (halfChannel / 2),
-      rotationDeg: -armAngle,
-    });
-    slots.push({
-      length: drawLength,
-      width: halfChannel,
-      yOffset: -((bridge / 2) + (halfChannel / 2)),
+      width: slotThickness,
+      xOffset: -drawLength,
+      yOffset: 0,
       rotationDeg: -armAngle,
     });
     return slots;
@@ -677,17 +827,17 @@ const createSlotProfilesForLayer = (
 
   if (layerIndex === 1) {
     slots.push({
-      length: slotLength,
-      width: halfChannel,
-      yOffset: (bridge / 2) + (halfChannel / 2),
+      length: drawLength,
+      width: slotThickness,
+      yOffset: 0,
       rotationDeg: -armAngle,
     });
-    // Keep same azimuth as main cut; xOffset places this on the opposite side.
+    // Tip-in: outer arm tip inward, stopping where tilt extension begins.
     slots.push({
-      length: tipInLength,
-      width: halfChannel,
+      length: Math.max(0.01, drawLength - extensionLength),
+      width: slotThickness,
       xOffset: -drawLength,
-      yOffset: (bridge / 2) + (halfChannel / 2),
+      yOffset: 0,
       rotationDeg: -armAngle,
     });
     return slots;
@@ -695,18 +845,25 @@ const createSlotProfilesForLayer = (
 
   if (layerIndex === 2) {
     slots.push({
-      length: slotLength,
-      width: halfChannel,
-      yOffset: -((bridge / 2) + (halfChannel / 2)),
+      length: drawLength,
+      width: slotThickness,
+      yOffset: 0,
       rotationDeg: -armAngle,
     });
     // Opposite-arm extension: start at the origin and cut outward on the
     // negative-X arm for 75% of slotLength.
     slots.push({
-      length: Math.max(0.01, tipInStart),
-      width: Math.max(0.12, halfChannel * 0.85),
-      xOffset: -Math.max(0.01, tipInStart),
+      length: extensionLength,
+      width: slotThickness,
+      xOffset: -extensionLength,
       yOffset: -((bridge / 2) + (halfChannel / 2)),
+      rotationDeg: -armAngle,
+    });
+    // Cross-Tilt direct mate: complementary short channel in the opposite half.
+    slots.push({
+      length: extensionLength,
+      width: slotThickness,
+      yOffset: (bridge / 2) + (halfChannel / 2),
       rotationDeg: -armAngle,
     });
     return slots;
@@ -730,14 +887,14 @@ const createAngledSlotCuttersForLayer = (
 
   const modelDiameter = 190;
   const adjLength = Math.max(2, config.slotLength + (layer.slotLengthAdjustment ?? 0));
-  const adjWidth = Math.max(0.5, config.slotWidth + (layer.slotWidthOffset ?? 0));
   const drawLength = Math.max(adjLength, (modelDiameter / 2) + 20);
   const tipInStart = Math.max(0, adjLength * 0.75);
-  const tipInLength = Math.max(0.01, drawLength - tipInStart);
+  const tipInLength = Math.max(0.01, drawLength * 0.22);
+  const extensionLength = Math.max(0.01, adjLength * 0.6);
   const armAngle = layer.primary.rotationOffset ?? 0;
-  const cutThickness = Math.max(materialThickness + 0.25, adjWidth);
-  const bridge = Math.min(0.4, Math.max(0.15, cutThickness * 0.08));
-  const halfChannel = Math.max(0.12, (cutThickness - bridge) / 2);
+  const slotThickness = Math.max(0.1, materialThickness + (config.globalStrokeWeight || 0) + config.slotWidth + (layer.slotWidthOffset ?? 0));
+  const bridge = Math.min(0.4, Math.max(0.15, slotThickness * 0.08));
+  const halfChannel = Math.max(0.12, (slotThickness - bridge) / 2);
   const fullPunch = Math.max(500, drawLength * 4);
 
   const cutters: THREE_ACTUAL.BufferGeometry[] = [];
@@ -765,35 +922,47 @@ const createAngledSlotCuttersForLayer = (
 
   if (config.slotMode === '2-plane') {
     if (layerIndex === 0) {
-      addCutter(0, drawLength, cutThickness, 90, -armAngle, 0);
+      addCutter(0, drawLength, slotThickness, 90, -armAngle, 0);
     } else if (layerIndex === 1) {
-      addCutter(0, drawLength, cutThickness, 270, -(armAngle + 180), 0);
+      addCutter(0, drawLength, slotThickness, 270, -(armAngle + 180), 0);
     }
     return cutters;
   }
 
   if (layerIndex === 0) {
-    addCutter(0, drawLength, halfChannel, 120, -armAngle, (bridge / 2) + (halfChannel / 2));
-    addCutter(0, drawLength, halfChannel, 240, -armAngle, -((bridge / 2) + (halfChannel / 2)));
+    // Base slot angle tuned to match Tilt insertion direction.
+    addCutter(-drawLength, drawLength, slotThickness, 240, -armAngle, 0);
     return cutters;
   }
 
   if (layerIndex === 1) {
-    addCutter(0, drawLength, halfChannel, 240, -armAngle, (bridge / 2) + (halfChannel / 2));
-    addCutter(-drawLength, tipInLength, halfChannel, 240, -armAngle, (bridge / 2) + (halfChannel / 2));
+    addCutter(0, drawLength, slotThickness, 240, -armAngle, 0);
+    // Tip-in single blade: from outer tip inward, stopping where tilt extension begins.
+    const tipInCutLength = Math.max(0.01, drawLength - extensionLength);
+    addCutter(-drawLength, tipInCutLength, slotThickness, 240, -armAngle, 0);
     return cutters;
   }
 
   if (layerIndex === 2) {
-    addCutter(0, adjLength, halfChannel, 120, -armAngle, -((bridge / 2) + (halfChannel / 2)));
+    addCutter(0, drawLength, slotThickness, 240, -armAngle, 0);
+    addCutter(0, drawLength, slotThickness, 120, -armAngle, 0);
     // Opposite-arm extension from origin outward for 75% of slotLength.
     addCutter(
-      -Math.max(0.01, tipInStart),
-      Math.max(0.01, tipInStart),
-      Math.max(0.12, halfChannel * 0.8),
-      120,
+      -extensionLength,
+      extensionLength,
+      slotThickness,
+      240,
       -armAngle,
       -((bridge / 2) + (halfChannel / 2))
+    );
+    // Cross-Tilt direct mate on Tilt plane.
+    addCutter(
+      0,
+      extensionLength,
+      slotThickness,
+      240,
+      -armAngle,
+      (bridge / 2) + (halfChannel / 2)
     );
     return cutters;
   }
@@ -807,7 +976,8 @@ const applyWatertightSlotCuts = async (
   layerIndex: number,
   enabledLayers: LayerConfig[],
   config: SnowflakeConfig,
-  bevelPerSide: number
+  bevelPerSide: number,
+  options?: { baseIsManifold?: boolean; preferWorker?: boolean; fastPreview?: boolean }
 ): Promise<THREE_ACTUAL.BufferGeometry> => {
   const materialThickness = config.extrusionDepth + (config.bevelEnabled ? bevelPerSide * 2 : 0);
   const profiles = createSlotProfilesForLayer(layer, layerIndex, enabledLayers, config, materialThickness);
@@ -850,7 +1020,8 @@ const applyWatertightSlotCuts = async (
     return layerGeo;
   }
 
-  try {
+  const runWorkerCut = async (): Promise<THREE_ACTUAL.BufferGeometry> => {
+    const workerStart = performance.now();
     const baseData = {
       positions: Array.from(layerForCut.attributes.position.array as Float32Array),
       indices: layerForCut.index
@@ -882,8 +1053,17 @@ const applyWatertightSlotCuts = async (
     out.computeVertexNormals();
     out.computeBoundingBox();
 
-    // Worker CSG returns an open shell by design; cap slot openings to make
-    // a printable solid before any topology cleanup.
+    const workerMs = performance.now() - workerStart;
+    if (workerMs > 120) {
+      console.debug(`[slot-csg] Worker cut for ${layer.name} took ${workerMs.toFixed(1)}ms`);
+    }
+
+    // Fast preview mode keeps slot interaction responsive by skipping expensive
+    // hole-fill and weld passes; export path still uses full repair pipeline.
+    if (options?.fastPreview) {
+      return out;
+    }
+
     const capped = fillSlotHoles(out, cutters);
     if (capped !== out) out.dispose();
 
@@ -891,20 +1071,53 @@ const applyWatertightSlotCuts = async (
     if (welded !== capped) capped.dispose();
     welded.computeVertexNormals();
     welded.computeBoundingBox();
+    return welded;
+  };
 
-    const topo = getTopologyReport(welded);
-    if (topo.boundaryEdges > 0 || topo.nonManifoldEdges > 0) {
-      const repaired = surgicalSlotRepair(welded);
-      welded.dispose();
-      repaired.computeVertexNormals();
-      repaired.computeBoundingBox();
-      return repaired;
+  if (options?.preferWorker) {
+    try {
+      return await runWorkerCut();
+    } catch (workerErr) {
+      console.warn(`Worker-first slot cutting failed for ${layer.name}; retrying manifold`, workerErr);
+    }
+  }
+
+  try {
+    // Closed-solid boolean subtraction (watertight by construction).
+    const manifoldStart = performance.now();
+    const manifoldOut = await manifoldSubtract(layerForCut, cutters, {
+      baseIsManifold: options?.baseIsManifold ?? false,
+      // Post-cut smoothOut/refine can introduce notch artifacts on glyph-heavy meshes.
+      // Keep boolean subtraction exact; bevel appearance still comes from base extrusion.
+      filletRadius: 0,
+      filletSegments: config.bevelEnabled
+        ? (config.bevelType === 'chamfer' ? 1 : Math.min(config.bevelSegments, 8))
+        : 1,
+      filletStyle: config.bevelType,
+      maxFilletBaseVertices: 200000,
+    });
+
+    const manifoldFailure = describeTopologyFailure(`${layer.name} slot result`, manifoldOut);
+    if (manifoldFailure) {
+      manifoldOut.dispose();
+      throw new Error(manifoldFailure);
     }
 
-    return welded;
-  } catch (workerErr) {
-    console.warn(`Worker slot cutting failed for ${layer.name}, keeping uncut geometry`, workerErr);
-    return layerGeo;
+    manifoldOut.computeVertexNormals();
+    manifoldOut.computeBoundingBox();
+    const manifoldMs = performance.now() - manifoldStart;
+    if (manifoldMs > 120) {
+      console.debug(`[slot-csg] Manifold cut for ${layer.name} took ${manifoldMs.toFixed(1)}ms`);
+    }
+    return manifoldOut;
+  } catch (manifoldErr) {
+    console.warn(`Manifold slot cutting failed for ${layer.name}`, manifoldErr);
+    try {
+      return await runWorkerCut();
+    } catch (workerErr) {
+      console.warn(`Worker slot cutting failed for ${layer.name}`, workerErr);
+      throw manifoldErr;
+    }
   } finally {
     cutters.forEach((g) => g.dispose());
     layerForCut.dispose();
@@ -1665,7 +1878,7 @@ const App: React.FC = () => {
     bevelSegments: 5,
     slotEnabled: false,
     slotLength: 95,
-    slotWidth: 4.0,
+    slotWidth: 0.2,
     slotMode: '3-plane',
     quality: 'low',
     syncAllLayers: true, // Default ON
@@ -2051,13 +2264,20 @@ const App: React.FC = () => {
     }
   }, [history, historyIndex, viewMode]);
 
-  const generateMesh = useCallback(async (onProgress: (p: number) => void, overrideQuality?: DesignQuality, overrideConfig?: SnowflakeConfig): Promise<THREE_ACTUAL.Group> => {
+  const generateMesh = useCallback(async (
+    onProgress: (p: number) => void,
+    overrideQuality?: DesignQuality,
+    overrideConfig?: SnowflakeConfig,
+    generationMode: MeshGenerationMode = 'preview'
+  ): Promise<THREE_ACTUAL.Group> => {
     const config = overrideConfig || rendered3DConfig;
 
     // Full-config cache key — any property change invalidates the cache.
     // Previously used a partial key that missed hub/abstract parameters,
     // causing 3D to show stale mesh when those values changed.
-    const meshKey = hashConfig(config) + '|q:' + (overrideQuality || config.quality);
+    const meshKey = hashConfig(config)
+      + '|q:' + (overrideQuality || config.quality)
+      + '|algo:' + GEOMETRY_ALGO_VERSION;
 
     // Check cache first
     const cached = modelCache3D.get(meshKey);
@@ -2071,6 +2291,7 @@ const App: React.FC = () => {
       clearGeometryCache();
     }
     const qualityToUse = overrideQuality || rendered3DConfig.quality;
+    const interactiveSlotPreview = generationMode === 'preview' && config.slotEnabled;
     let qMult = 1;
     let curveSeg = 12;
     let bevelSegCap = 10;
@@ -2121,6 +2342,17 @@ const App: React.FC = () => {
     for (let lIdx = 0; lIdx < layersToGenerate.length; lIdx++) {
       const layer = layersToGenerate[lIdx];
       const layerGeometries: THREE_ACTUAL.BufferGeometry[] = [];
+      const layerShapeInstances: ShapeInstance2D[] = [];
+      const addShapeInstances = (
+        shapes: THREE_ACTUAL.Shape[],
+        transform: THREE_ACTUAL.Matrix3,
+        strokeWidth = 0
+      ) => {
+        if (!config.slotEnabled || shapes.length === 0) return;
+        shapes.forEach((shape) => {
+          layerShapeInstances.push({ shape, transform: transform.clone(), strokeWidth });
+        });
+      };
 
       const processTextGroup = async (textGroup: TextGroupConfig) => {
   if (!textGroup.enabled) return;
@@ -2203,6 +2435,8 @@ const App: React.FC = () => {
           finalBevelSize: textExtrudeSettings.bevelSize
         });
       }
+
+      const unionTextShapes = shapes;
       // ==================================================================
 
       const textKey = makeTextKey(layer.id, textGroup, textGroup.fontSize, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight, textGroup.thickness);
@@ -2428,11 +2662,31 @@ const App: React.FC = () => {
                 inst.translate(textGroup.textX, textGroup.mirrorOffset / 2, centerZOffset);
                 inst.rotateX(Math.PI); inst.rotateZ(-angle);
                 layerGeometries.push(inst);
+
+                addShapeInstances(
+                  unionTextShapes,
+                  composeMatrix2D(
+                    makeTranslationMatrix2D(textGroup.textX, textGroup.mirrorOffset / 2),
+                    makeScaleMatrix2D(1, -1),
+                    makeRotationMatrix2D(-angle)
+                  ),
+                  totalStrokeWeight
+                );
+
                 if (textGroup.mirrorEnabled) {
                   const mirrored = groupGeo.clone();
                   mirrored.translate(textGroup.textX, -textGroup.mirrorOffset / 2, centerZOffset);
                   mirrored.rotateZ(-angle);
                   layerGeometries.push(mirrored);
+
+                  addShapeInstances(
+                    unionTextShapes,
+                    composeMatrix2D(
+                      makeTranslationMatrix2D(textGroup.textX, -textGroup.mirrorOffset / 2),
+                      makeRotationMatrix2D(-angle)
+                    ),
+                    totalStrokeWeight
+                  );
                 }
                 if (underlineGeo && underlineGeo.attributes.position?.count > 0) {
                     const uInst = underlineGeo.clone();
@@ -2440,6 +2694,15 @@ const App: React.FC = () => {
                     uInst.rotateX(Math.PI);
                     uInst.rotateZ(-angle);
                     layerGeometries.push(uInst);
+
+                    addShapeInstances(
+                      underlineShapes,
+                      composeMatrix2D(
+                        makeScaleMatrix2D(1, -1),
+                        makeRotationMatrix2D(-angle)
+                      ),
+                      0
+                    );
                 }
               }
             }
@@ -2494,6 +2757,7 @@ const App: React.FC = () => {
 
              // Apply boldness to hub shapes using same approach as text
              const hubStrokeWeight = (rendered3DConfig.globalStrokeWeight || 0);
+             const hubShapes = [shape];
              if (hubStrokeWeight > 0.1) {
                const boldedShapes = applyBoldnessToShapes([shape], hubStrokeWeight);
                if (boldedShapes.length > 0) {
@@ -2512,6 +2776,12 @@ const App: React.FC = () => {
                geo.rotateZ(hub.rotationOffset * Math.PI / 180);
                geo.translate(0, 0, centerZOffset);
                layerGeometries.push(geo);
+
+               addShapeInstances(
+                 hubShapes,
+                 composeMatrix2D(makeRotationMatrix2D(hub.rotationOffset * Math.PI / 180)),
+                 hubStrokeWeight
+               );
              }
          });
       };
@@ -2651,12 +2921,32 @@ const App: React.FC = () => {
                              absInst.translate(0, abs.mirrorOffset/2, centerZOffset);
                              absInst.rotateZ(angle);
                              layerGeometries.push(absInst);
+
+                             addShapeInstances(
+                               shapes,
+                               composeMatrix2D(
+                                 makeTranslationMatrix2D(0, abs.mirrorOffset / 2),
+                                 makeRotationMatrix2D(angle)
+                               ),
+                               fractalStrokeWeight
+                             );
+
                              if (abs.mirrorEnabled) {
                                  const mir = fractalGeo.clone();
                                  mir.scale(1, -1, 1);
                                  mir.translate(0, -abs.mirrorOffset/2, centerZOffset);
                                  mir.rotateZ(angle);
                                  layerGeometries.push(mir);
+
+                                 addShapeInstances(
+                                   shapes,
+                                   composeMatrix2D(
+                                     makeScaleMatrix2D(1, -1),
+                                     makeTranslationMatrix2D(0, -abs.mirrorOffset / 2),
+                                     makeRotationMatrix2D(angle)
+                                   ),
+                                   fractalStrokeWeight
+                                 );
                              }
                          }
                        }
@@ -2718,6 +3008,8 @@ const App: React.FC = () => {
                }
 
                const mirroredGeo = getOrCreateGeometry(geometryCache.abstracts, abstractKey + '_mirrored', () => new THREE_ACTUAL.ExtrudeGeometry(finalMirroredShape as any, extrudeSettings));
+               const unionNormalShapes = [normalShape];
+               const unionMirroredShapes = [mirroredShape];
                const angleStep = (Math.PI * 2) / abs.arms;
 
                // Only push abstract geometries if they have vertices
@@ -2728,11 +3020,30 @@ const App: React.FC = () => {
                      absInst.translate(0, abs.mirrorOffset/2, centerZOffset);
                      absInst.rotateZ(angle);
                      layerGeometries.push(absInst);
+
+                     addShapeInstances(
+                       unionNormalShapes,
+                       composeMatrix2D(
+                         makeTranslationMatrix2D(0, abs.mirrorOffset / 2),
+                         makeRotationMatrix2D(angle)
+                       ),
+                       abstractStrokeWeight
+                     );
+
                      if (abs.mirrorEnabled && mirroredGeo.attributes.position?.count > 0) {
                          const mir = mirroredGeo.clone();
                          mir.translate(0, -abs.mirrorOffset/2, centerZOffset);
                          mir.rotateZ(angle);
                          layerGeometries.push(mir);
+
+                         addShapeInstances(
+                           unionMirroredShapes,
+                           composeMatrix2D(
+                             makeTranslationMatrix2D(0, -abs.mirrorOffset / 2),
+                             makeRotationMatrix2D(angle)
+                           ),
+                           abstractStrokeWeight
+                         );
                      }
                  }
                }
@@ -2879,24 +3190,126 @@ const App: React.FC = () => {
           continue;
         }
 
-        layerGeometries.forEach((g) => {
-          if (g !== mergedLayerGeo) g.dispose();
-        });
-
         let cutSourceGeo = mergedLayerGeo;
         if (config.slotEnabled) {
-          const cutLayerGeo = await applyWatertightSlotCuts(
-            mergedLayerGeo,
-            layer,
-            lIdx,
-            layersToGenerate,
-            config,
-            bevelPerSide
-          );
-          if (cutLayerGeo !== mergedLayerGeo) {
-            mergedLayerGeo.dispose();
+          let unioned2DLayerGeo: THREE_ACTUAL.BufferGeometry | null = null;
+          try {
+            if (layerShapeInstances.length > 0) {
+              const slotUnionCurveSegments = qualityToUse === 'low'
+                ? 24
+                : qualityToUse === 'med'
+                  ? 32
+                  : 48;
+              unioned2DLayerGeo = await manifoldUnionAndExtrudeShapeInstances(
+                layerShapeInstances,
+                effectiveDepth,
+                slotUnionCurveSegments,
+                {
+                  bevelEnabled: config.bevelEnabled,
+                  bevelSize: bevelPerSide,
+                  bevelThickness: bevelPerSide,
+                  bevelSegments: config.bevelEnabled
+                    ? (config.bevelType === 'chamfer' ? 1 : Math.min(config.bevelSegments, bevelSegCap))
+                    : 1,
+                }
+              );
+            }
+          } catch (shapeUnionErr) {
+            console.warn(`2D pre-union/extrude failed for ${layer.name}, using 3D fallback path`, shapeUnionErr);
           }
+
+          let unionedLayerGeo: THREE_ACTUAL.BufferGeometry | null = null;
+          if (!unioned2DLayerGeo) {
+            try {
+              // Legacy 3D manifold pre-union remains as a fallback when the new
+              // 2D-first path cannot produce a valid single profile.
+              unionedLayerGeo = await manifoldUnionGeometries(layerGeometries);
+            } catch (unionErr) {
+              console.warn(`Manifold pre-union failed for ${layer.name}, using merged geometry`, unionErr);
+            }
+          }
+
+          layerGeometries.forEach((g) => {
+            if (g !== mergedLayerGeo) g.dispose();
+          });
+
+          // Retry strategy: prefer manifold-pre-unioned base, but if that specific
+          // subtract fails, retry against the plain merged base before giving up.
+          let cutLayerGeo: THREE_ACTUAL.BufferGeometry | null = null;
+
+          if (unioned2DLayerGeo) {
+            try {
+              cutLayerGeo = await applyWatertightSlotCuts(
+                unioned2DLayerGeo,
+                layer,
+                lIdx,
+                layersToGenerate,
+                config,
+                bevelPerSide,
+                {
+                  baseIsManifold: true,
+                  preferWorker: interactiveSlotPreview,
+                  fastPreview: interactiveSlotPreview,
+                }
+              );
+            } catch (shapeCutErr) {
+              console.warn(`2D-unioned slot cut failed for ${layer.name}; retrying with 3D fallback bases`, shapeCutErr);
+            }
+          }
+
+          if (!cutLayerGeo && unionedLayerGeo) {
+            try {
+              cutLayerGeo = await applyWatertightSlotCuts(
+                unionedLayerGeo,
+                layer,
+                lIdx,
+                layersToGenerate,
+                config,
+                bevelPerSide,
+                {
+                  baseIsManifold: true,
+                  preferWorker: interactiveSlotPreview,
+                  fastPreview: interactiveSlotPreview,
+                }
+              );
+            } catch (unionCutErr) {
+              console.warn(`Manifold slot cut on pre-unioned base failed for ${layer.name}; retrying with merged base`, unionCutErr);
+            }
+          }
+
+          if (!cutLayerGeo) {
+            try {
+              cutLayerGeo = await applyWatertightSlotCuts(
+                mergedLayerGeo,
+                layer,
+                lIdx,
+                layersToGenerate,
+                config,
+                bevelPerSide,
+                {
+                  baseIsManifold: false,
+                  preferWorker: interactiveSlotPreview,
+                  fastPreview: interactiveSlotPreview,
+                }
+              );
+            } catch (mergedCutErr) {
+              console.warn(`Manifold slot cut failed for ${layer.name}; keeping uncut geometry`, mergedCutErr);
+              cutLayerGeo = mergedLayerGeo;
+            }
+          }
+
+          if (unioned2DLayerGeo && cutLayerGeo !== unioned2DLayerGeo) {
+            unioned2DLayerGeo.dispose();
+          }
+          if (unionedLayerGeo && cutLayerGeo !== unionedLayerGeo) {
+            unionedLayerGeo.dispose();
+          }
+
           cutSourceGeo = cutLayerGeo;
+        } else {
+          layerGeometries.forEach((g) => {
+            if (g !== mergedLayerGeo) g.dispose();
+          });
         }
 
         const finalGeo = cutSourceGeo.clone();
@@ -2976,6 +3389,37 @@ const App: React.FC = () => {
     return group;
   }, [config, rendered3DConfig, dynamicFonts, loadFont, viewMode]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    window.__snowflakeRunManifoldValidation = async () => {
+      const scenarios = buildManifoldValidationConfigs(rendered3DConfig);
+      const results: ValidationScenarioResult[] = [];
+
+      for (const { scenario, config: scenarioConfig } of scenarios) {
+        const group = await generateMesh(() => {}, scenarioConfig.quality, scenarioConfig, 'validation');
+        const meshes = collectGroupTopology(group);
+        results.push({ scenario, meshes });
+
+        const failures = meshes.filter((mesh) => !mesh.isClosedManifold);
+        disposeGroupResources(group);
+
+        if (failures.length > 0) {
+          const details = failures
+            .map((mesh) => `${mesh.meshName}: boundary=${mesh.boundaryEdges}, nonManifold=${mesh.nonManifoldEdges}`)
+            .join('; ');
+          throw new Error(`Scenario ${scenario} failed manifold validation: ${details}`);
+        }
+      }
+
+      return results;
+    };
+
+    return () => {
+      delete window.__snowflakeRunManifoldValidation;
+    };
+  }, [generateMesh, rendered3DConfig]);
+
   const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -2990,7 +3434,7 @@ const App: React.FC = () => {
   const handleExportSTL = async (quality?: DesignQuality) => {
     setExportLoading(true);
     try {
-        const group = await generateMesh(() => {}, quality);
+        const group = await generateMesh(() => {}, quality, undefined, 'export');
         const flatGeoms: THREE_ACTUAL.BufferGeometry[] = [];
         group.traverse((child) => {
             if (child instanceof THREE_ACTUAL.Mesh && child.geometry) {
@@ -3055,7 +3499,7 @@ const App: React.FC = () => {
     if (!layer) return;
     setExportLoading(true);
     try {
-        const group = await generateMesh(() => {}, quality);
+        const group = await generateMesh(() => {}, quality, undefined, 'export');
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
         if (mesh) {
             if (mesh.geometry) {
@@ -3083,7 +3527,7 @@ const App: React.FC = () => {
   const handleExportAllLayersZip = async (quality?: DesignQuality) => {
       setExportLoading(true);
       try {
-          const group = await generateMesh(() => {}, quality);
+          const group = await generateMesh(() => {}, quality, undefined, 'export');
           const zip = new JSZip();
           // const exporter = new STLExporter();
 

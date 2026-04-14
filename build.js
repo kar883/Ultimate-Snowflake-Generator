@@ -44,7 +44,7 @@ async function main() {
     await runCommand('npm install', 'Install dependencies');
     
     // Step 2: Build Vite frontend
-    await runCommand('npm run build', 'Build Vite frontend');
+    await runCommand('npm run build:clean', 'Build Vite frontend');
     
     // Step 3: Build Electron packages
     await runCommand('npm run electron:build', 'Build Electron packages');

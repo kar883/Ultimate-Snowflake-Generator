@@ -7,7 +7,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:clean": "npm run build",
     "preview": "vite preview",
+    "verify:manifold": "node ./node_modules/electron/cli.js scripts/verify-manifold.cjs && node scripts/assert-manifold-report.cjs",
     "electron:start": "electron .",
     "electron:build": "electron-builder",
     "package": "npm run build && npm run electron:build",

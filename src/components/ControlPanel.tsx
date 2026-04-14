@@ -165,7 +165,7 @@ const DESCRIPTIONS: Record<string, string> = {
   "Thickness Decay": "Controls how much thinner the branches get at each new generation.",
   "Rounded Tips": "Adds rounded caps to the ends of the final branches.",
   "Cut Slots": "Toggles the automatic slot cutting operation for assembly.",
-  "Slot Width": "Sets the total width of the cut slot. This should match your material thickness plus a small tolerance.",
+  "Slot Width": "Extra clearance added on top of the model extrusion height. 0.2 mm gives a snug fit; increase for a looser assembly.",
   // ── Auto-fit / Fixed-size ──────────────────────────────────────────────────
   "Auto-fit": "Automatically rescales the font size whenever you change fonts, letter spacing, or boldness to keep the arms exactly at the target outer radius.",
   "Fixed-size": "One-shot manual set. The outer radius slider adjusts the font size once, but further edits (font changes, spacing) will not rescale automatically.",
@@ -2355,7 +2355,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                     <div className="p-3 bg-slate-800/30 rounded-xl border border-white/5 space-y-4 mt-4">
                         <div className="text-[10px] font-black uppercase text-slate-500 border-b border-white/5 pb-2 mb-2">{t('All Planes')}</div>
                         {renderSlider(t('Slot Length'), config.slotLength, 10, 200, 1, (v, c) => onUpdate({ slotLength: v }, c), "mm", false, 95)}
-                        {renderSlider(t('Slot Width'), config.slotWidth, 0.5, 20, 0.1, (v, c) => onUpdate({ slotWidth: v }, c), "mm", false, 3.2)}
+                        {renderSlider(t('Slot Width'), config.slotWidth, 0, 3, 0.05, (v, c) => onUpdate({ slotWidth: v }, c), "mm", false, 0.2)}
                     </div>
                 )}
              </div>

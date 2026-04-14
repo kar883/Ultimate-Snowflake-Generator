@@ -312,6 +312,6 @@ export function getTopologyReport(geometry: THREE.BufferGeometry): {
     boundaryEdges,
     interiorEdges,
     nonManifoldEdges,
-    isManifold: nonManifoldEdges === 0
+    isManifold: boundaryEdges === 0 && nonManifoldEdges === 0
   };
 }

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import * as THREE from 'three';
 // @ts-ignore
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
@@ -6,7 +6,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
 import { SnowflakeConfig, ShortcutConfig, DesignQuality } from '../types';
 
-const SLOT_DEBUG_OVERLAY_ENABLED = true;
+const SLOT_DEBUG_OVERLAY_ENABLED = false;
+const CONFLICT_DEBUG_OVERLAY_ENABLED = false;
 
 function createSlotDebugCuttersForLayer(
   layer: SnowflakeConfig['layers'][number],
@@ -22,14 +23,15 @@ function createSlotDebugCuttersForLayer(
 
   const modelDiameter = 190;
   const adjLength = Math.max(2, config.slotLength + (layer.slotLengthAdjustment ?? 0));
-  const adjWidth = Math.max(0.5, config.slotWidth + (layer.slotWidthOffset ?? 0));
+  const widthAdjustment = layer.slotWidthOffset ?? 0;
   const drawLength = Math.max(adjLength, (modelDiameter / 2) + 20);
   const tipInStart = Math.max(0, adjLength * 0.75);
-  const tipInLength = Math.max(0.01, drawLength - tipInStart);
+  const tipInLength = Math.max(0.01, drawLength * 0.22);
+  const extensionLength = Math.max(0.01, adjLength * 0.6);
   const armAngle = layer.primary.rotationOffset ?? 0;
-  const cutThickness = Math.max(materialThickness + 0.25, adjWidth);
-  const bridge = Math.min(0.4, Math.max(0.15, cutThickness * 0.08));
-  const halfChannel = Math.max(0.12, (cutThickness - bridge) / 2);
+  const slotThickness = Math.max(0.1, materialThickness + (config.globalStrokeWeight || 0) + config.slotWidth + widthAdjustment);
+  const bridge = Math.min(0.4, Math.max(0.15, slotThickness * 0.08));
+  const halfChannel = Math.max(0.12, (slotThickness - bridge) / 2);
   const fullPunch = Math.max(500, drawLength * 4);
 
   const cutters: THREE.BufferGeometry[] = [];
@@ -52,39 +54,172 @@ function createSlotDebugCuttersForLayer(
 
   if (config.slotMode === '2-plane') {
     if (layerIndex === 0) {
-      addCutter(0, drawLength, cutThickness, 90, -armAngle, 0);
+      addCutter(0, drawLength, slotThickness, 90, -armAngle, 0);
     } else if (layerIndex === 1) {
-      addCutter(0, drawLength, cutThickness, 270, -(armAngle + 180), 0);
+      addCutter(0, drawLength, slotThickness, 270, -(armAngle + 180), 0);
     }
     return cutters;
   }
 
   if (layerIndex === 0) {
-    addCutter(0, drawLength, halfChannel, 120, -armAngle, (bridge / 2) + (halfChannel / 2));
-    addCutter(0, drawLength, halfChannel, 240, -armAngle, -((bridge / 2) + (halfChannel / 2)));
+    addCutter(-drawLength, drawLength, slotThickness, 240, -armAngle, 0);
     return cutters;
   }
 
   if (layerIndex === 1) {
-    addCutter(0, drawLength, halfChannel, 240, -armAngle, (bridge / 2) + (halfChannel / 2));
-    addCutter(-drawLength, tipInLength, halfChannel, 240, -armAngle, (bridge / 2) + (halfChannel / 2));
+    addCutter(0, drawLength, slotThickness, 240, -armAngle, 0);
+    const tipInCutLength = Math.max(0.01, drawLength - extensionLength);
+    addCutter(-drawLength, tipInCutLength, slotThickness, 240, -armAngle, 0);
     return cutters;
   }
 
   if (layerIndex === 2) {
-    addCutter(0, adjLength, halfChannel, 120, -armAngle, -((bridge / 2) + (halfChannel / 2)));
+    addCutter(0, drawLength, slotThickness, 240, -armAngle, 0);
+    addCutter(0, drawLength, slotThickness, 120, -armAngle, 0);
     addCutter(
-      -Math.max(0.01, tipInStart),
-      Math.max(0.01, tipInStart),
-      Math.max(0.12, halfChannel * 0.8),
-      120,
+      -extensionLength,
+      extensionLength,
+      slotThickness,
+      240,
       -armAngle,
       -((bridge / 2) + (halfChannel / 2))
+    );
+    addCutter(
+      0,
+      extensionLength,
+      slotThickness,
+      240,
+      -armAngle,
+      (bridge / 2) + (halfChannel / 2)
     );
     return cutters;
   }
 
   return cutters;
+}
+
+function createConflictDebugVolumes(group: THREE.Group): { meshes: THREE.Mesh[]; count: number } {
+  const perLayerMeshes = new Map<string, THREE.Mesh[]>();
+  const perLayerBounds = new Map<string, THREE.Box3>();
+
+  group.traverse(child => {
+    if (!(child instanceof THREE.Mesh)) return;
+    if (!child.userData.layerId || child.userData.slotDebug) return;
+
+    const layerId = String(child.userData.layerId);
+    const bounds = new THREE.Box3().setFromObject(child);
+    if (bounds.isEmpty()) return;
+
+    if (!perLayerMeshes.has(layerId)) perLayerMeshes.set(layerId, []);
+    perLayerMeshes.get(layerId)!.push(child);
+
+    const existing = perLayerBounds.get(layerId);
+    if (existing) existing.union(bounds);
+    else perLayerBounds.set(layerId, bounds.clone());
+  });
+
+  const pointInsideMesh = (mesh: THREE.Mesh, pointWorld: THREE.Vector3, ray: THREE.Raycaster): boolean => {
+    const dir = new THREE.Vector3(1, 0.123, 0.071).normalize();
+    const start = pointWorld.clone().addScaledVector(dir, -2000);
+    ray.set(start, dir);
+    const hits = ray.intersectObject(mesh, false);
+    let crossings = 0;
+    for (const hit of hits) {
+      if (hit.distance > 1e-4) crossings++;
+    }
+    return (crossings % 2) === 1;
+  };
+
+  const pointInsideLayer = (layerMeshes: THREE.Mesh[], pointWorld: THREE.Vector3, ray: THREE.Raycaster): boolean => {
+    for (const m of layerMeshes) {
+      if (pointInsideMesh(m, pointWorld, ray)) return true;
+    }
+    return false;
+  };
+
+  const layerIds = Array.from(perLayerBounds.keys());
+  const meshes: THREE.Mesh[] = [];
+  let totalCells = 0;
+
+  for (let i = 0; i < layerIds.length; i++) {
+    for (let j = i + 1; j < layerIds.length; j++) {
+      const idA = layerIds[i];
+      const idB = layerIds[j];
+      const boundsA = perLayerBounds.get(idA);
+      const boundsB = perLayerBounds.get(idB);
+      const meshesA = perLayerMeshes.get(idA);
+      const meshesB = perLayerMeshes.get(idB);
+      if (!boundsA || !boundsB || !meshesA || !meshesB || !boundsA.intersectsBox(boundsB)) continue;
+
+      const overlap = boundsA.clone().intersect(boundsB);
+      if (overlap.isEmpty()) continue;
+
+      const size = new THREE.Vector3();
+      overlap.getSize(size);
+      if (size.x < 0.05 || size.y < 0.05 || size.z < 0.05) continue;
+
+      const targetStep = 1.4;
+      const nx = Math.min(28, Math.max(1, Math.ceil(size.x / targetStep)));
+      const ny = Math.min(28, Math.max(1, Math.ceil(size.y / targetStep)));
+      const nz = Math.min(18, Math.max(1, Math.ceil(size.z / targetStep)));
+
+      const sx = size.x / nx;
+      const sy = size.y / ny;
+      const sz = size.z / nz;
+
+      const ray = new THREE.Raycaster();
+      const occupiedWorldCenters: THREE.Vector3[] = [];
+      const p = new THREE.Vector3();
+
+      for (let ix = 0; ix < nx; ix++) {
+        for (let iy = 0; iy < ny; iy++) {
+          for (let iz = 0; iz < nz; iz++) {
+            p.set(
+              overlap.min.x + (ix + 0.5) * sx,
+              overlap.min.y + (iy + 0.5) * sy,
+              overlap.min.z + (iz + 0.5) * sz
+            );
+
+            if (!pointInsideLayer(meshesA, p, ray)) continue;
+            if (!pointInsideLayer(meshesB, p, ray)) continue;
+            occupiedWorldCenters.push(p.clone());
+          }
+        }
+      }
+
+      if (occupiedWorldCenters.length === 0) continue;
+
+      const inst = new THREE.InstancedMesh(
+        new THREE.BoxGeometry(Math.max(0.08, sx), Math.max(0.08, sy), Math.max(0.08, sz)),
+        new THREE.MeshBasicMaterial({
+          color: 0xff3b30,
+          wireframe: false,
+          transparent: true,
+          opacity: 0.4,
+          depthWrite: false,
+        }),
+        occupiedWorldCenters.length
+      );
+
+      const mtx = new THREE.Matrix4();
+      const local = new THREE.Vector3();
+      occupiedWorldCenters.forEach((wc, idx) => {
+        local.copy(group.worldToLocal(wc.clone()));
+        mtx.makeTranslation(local.x, local.y, local.z);
+        inst.setMatrixAt(idx, mtx);
+      });
+
+      inst.instanceMatrix.needsUpdate = true;
+      inst.userData.conflictDebug = true;
+      inst.userData.conflictLayers = [idA, idB];
+      inst.name = `Conflict ${idA} x ${idB}`;
+      inst.renderOrder = 1000;
+      meshes.push(inst);
+      totalCells += occupiedWorldCenters.length;
+    }
+  }
+
+  return { meshes, count: totalCells };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -660,7 +795,12 @@ const XYZGizmo: React.FC<{
 // ─────────────────────────────────────────────────────────────────────────────
 interface Snowflake3DProps {
   config: SnowflakeConfig;
-  generateMesh: (onProgress: (p: number) => void, overrideQuality?: DesignQuality, overrideConfig?: SnowflakeConfig) => Promise<THREE.Group>;
+  generateMesh: (
+    onProgress: (p: number) => void,
+    overrideQuality?: DesignQuality,
+    overrideConfig?: SnowflakeConfig,
+    generationMode?: 'preview' | 'export' | 'validation'
+  ) => Promise<THREE.Group>;
   color: string;
   undo?: () => void;
   redo?: () => void;
@@ -848,6 +988,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   undo, redo, canUndo, canRedo,
   initialDiameter, isVisible,
 }) => {
+  const generateMeshRef = useRef(generateMesh);
   const containerRef  = useRef<HTMLDivElement>(null);
   const rendererRef   = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef      = useRef<THREE.Scene | null>(null);
@@ -875,6 +1016,8 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   const [loading, setLoading]   = useState(false);
   const [camQ, setCamQ]         = useState<THREE.Quaternion | null>(null);
   const [isGizmoDragging, setIsGizmoDragging] = useState(false);
+  const [conflictCount, setConflictCount] = useState(0);
+  const [showSlotDebug, setShowSlotDebug] = useState(true);
   // const [bodyMode, setBodyMode] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   // const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -957,6 +1100,11 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   };
 
   const viewportLayers = config.layers.filter(l => l.enabled);
+  const configKey = useMemo(() => JSON.stringify(config), [config]);
+
+  useEffect(() => {
+    generateMeshRef.current = generateMesh;
+  }, [generateMesh]);
 
   const handleGizmoPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!controlsRef.current) return;
@@ -1263,6 +1411,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
       if (old && !old.disposed) old.dispose();
 
       if (child.userData.slotDebug) {
+        child.visible = (planeVisibility[lid] ?? true) && showSlotDebug;
         child.material = new THREE.MeshBasicMaterial({
           color: 0x10e8a8,
           wireframe: true,
@@ -1293,10 +1442,10 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
       child.material = mat;
     });
     syncMiniModel();
-  }, [planeVisibility, planeTransparency, planeTransparencyEnabled, color, syncMiniModel]);
+  }, [planeVisibility, planeTransparency, planeTransparencyEnabled, color, showSlotDebug, syncMiniModel]);
 
   useEffect(() => { applyAppearance(); },
-    [planeVisibility, planeTransparency, planeTransparencyEnabled, applyAppearance]);
+    [planeVisibility, planeTransparency, planeTransparencyEnabled, showSlotDebug, applyAppearance]);
 
   // Stable ref to the launch function so it can be called from both
   // the bodyMode toggle effect and the mesh load effect without stale closures.
@@ -1516,8 +1665,9 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     let cancelled = false;
     const load = async () => {
       setLoading(true);
+      setConflictCount(0);
       try {
-        const group = await generateMesh(() => {}, undefined, config);
+        const groupFromGenerator = await generateMeshRef.current(() => {}, undefined, config, 'preview');
         if (cancelled || !sceneRef.current) return;
 
         if (meshGroupRef.current) {
@@ -1551,7 +1701,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
 
         const enabledLayers = config.layers.filter(l => l.enabled);
 
-        group.traverse(child => {
+        groupFromGenerator.traverse(child => {
           if (!(child instanceof THREE.Mesh)) return;
           child.material = baseMat.clone();
           child.castShadow = true;
@@ -1573,10 +1723,10 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
         // XY origin (arms radiate from 0,0), so subtracting the full 3D centroid
         // would shift the piece off-centre when arms are asymmetric.
         // We only need to zero out the Z offset introduced by centerZOffset.
-        const box = new THREE.Box3().setFromObject(group);
+        const box = new THREE.Box3().setFromObject(groupFromGenerator);
         const ctr = new THREE.Vector3();
         box.getCenter(ctr);
-        group.position.set(0, 0, -ctr.z); // XY stays at 0, only Z is centred
+        groupFromGenerator.position.set(0, 0, -ctr.z); // XY stays at 0, only Z is centred
 
         if (SLOT_DEBUG_OVERLAY_ENABLED && config.slotEnabled) {
           const enabledLayers = config.layers.filter(l => l.enabled);
@@ -1584,7 +1734,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
 
           enabledLayers.forEach((layer, layerIndex) => {
             let layerMesh: THREE.Mesh | null = null;
-            group.traverse(child => {
+            groupFromGenerator.traverse(child => {
               if (layerMesh || !(child instanceof THREE.Mesh)) return;
               if (child.userData.layerId === layer.id && !child.userData.slotDebug) {
                 layerMesh = child;
@@ -1622,13 +1772,19 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
               debugMesh.userData.slotDebugIndex = cutterIndex;
               debugMesh.name = `${layer.name} Slot Debug ${cutterIndex + 1}`;
               debugMesh.renderOrder = 999;
-              group.add(debugMesh);
+              groupFromGenerator.add(debugMesh);
             });
           });
         }
 
-        sceneRef.current.add(group);
-        meshGroupRef.current = group;
+        if (CONFLICT_DEBUG_OVERLAY_ENABLED && config.slotEnabled && config.slotMode === '3-plane') {
+          const conflicts = createConflictDebugVolumes(groupFromGenerator);
+          conflicts.meshes.forEach((mesh) => groupFromGenerator.add(mesh));
+          setConflictCount(conflicts.count);
+        }
+
+        sceneRef.current.add(groupFromGenerator);
+        meshGroupRef.current = groupFromGenerator;
         // Apply current appearance state after a short defer
         setTimeout(() => {
           applyAppearance();
@@ -1643,7 +1799,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     };
     const t = setTimeout(load, 100);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [config, generateMesh, refreshKey]);
+  }, [configKey, refreshKey]);
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -1671,6 +1827,19 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
             <span className="text-xs text-sky-400 ml-1">mm</span>
           </span>
         </div>
+
+        {CONFLICT_DEBUG_OVERLAY_ENABLED && config.slotEnabled && config.slotMode === '3-plane' && (
+          <div className={`backdrop-blur px-3 py-2 rounded-lg border shadow-xl ${
+            conflictCount > 0
+              ? 'bg-red-900/65 border-red-400/45'
+              : 'bg-emerald-900/45 border-emerald-400/35'
+          }`}>
+            <span className="text-[9px] font-extrabold uppercase tracking-widest text-slate-200 block leading-none mb-0.5">Conflict Check</span>
+            <span className={`text-xs font-bold leading-none ${conflictCount > 0 ? 'text-red-200' : 'text-emerald-200'}`}>
+              {conflictCount > 0 ? `${conflictCount} conflict cell${conflictCount === 1 ? '' : 's'}` : 'No conflict cells'}
+            </span>
+          </div>
+        )}
 
         {viewportLayers.length > 0 && (
           <div className="bg-slate-900/85 backdrop-blur px-3 py-2.5 rounded-lg border border-white/10 shadow-xl min-w-[220px]">
