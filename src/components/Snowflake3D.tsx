@@ -77,6 +77,7 @@ function createSlotDebugCuttersForLayer(
     addCutter(0, drawLength, slotThickness, 240, -armAngle, 0);
     const tipInCutLength = Math.max(0.01, drawLength - extensionLength);
     addCutter(-drawLength, tipInCutLength, slotThickness, 240, -armAngle, 0);
+    addCutter(-drawLength, tipInCutLength, slotThickness, 120, -armAngle, 0);
     return cutters;
   }
 

@@ -953,9 +953,11 @@ const createAngledSlotCuttersForLayer = (
 
   if (layerIndex === 1) {
     addCutter(0, drawLength, slotThickness, 240, -armAngle, 0);
-    // Tip-in single blade: from outer tip inward, stopping where tilt extension begins.
+    // Tip-in X-blade: from outer tip inward, stopping where tilt extension begins.
+    // Use paired 240°/120° blades so the entry cut aligns with the crossing mate.
     const tipInCutLength = Math.max(0.01, drawLength - extensionLength);
     addCutter(-drawLength, tipInCutLength, slotThickness, 240, -armAngle, 0);
+    addCutter(-drawLength, tipInCutLength, slotThickness, 120, -armAngle, 0);
     return cutters;
   }
 
