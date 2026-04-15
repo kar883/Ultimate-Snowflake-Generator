@@ -977,7 +977,7 @@ const applyWatertightSlotCuts = async (
   enabledLayers: LayerConfig[],
   config: SnowflakeConfig,
   bevelPerSide: number,
-  options?: { baseIsManifold?: boolean; preferWorker?: boolean; fastPreview?: boolean }
+  options?: { baseIsManifold?: boolean; preferWorker?: boolean }
 ): Promise<THREE_ACTUAL.BufferGeometry> => {
   const materialThickness = config.extrusionDepth + (config.bevelEnabled ? bevelPerSide * 2 : 0);
   const profiles = createSlotProfilesForLayer(layer, layerIndex, enabledLayers, config, materialThickness);
@@ -1056,12 +1056,6 @@ const applyWatertightSlotCuts = async (
     const workerMs = performance.now() - workerStart;
     if (workerMs > 120) {
       console.debug(`[slot-csg] Worker cut for ${layer.name} took ${workerMs.toFixed(1)}ms`);
-    }
-
-    // Fast preview mode keeps slot interaction responsive by skipping expensive
-    // hole-fill and weld passes; export path still uses full repair pipeline.
-    if (options?.fastPreview) {
-      return out;
     }
 
     const capped = fillSlotHoles(out, cutters);
@@ -3249,7 +3243,6 @@ const App: React.FC = () => {
                 {
                   baseIsManifold: true,
                   preferWorker: interactiveSlotPreview,
-                  fastPreview: interactiveSlotPreview,
                 }
               );
             } catch (shapeCutErr) {
@@ -3269,7 +3262,6 @@ const App: React.FC = () => {
                 {
                   baseIsManifold: true,
                   preferWorker: interactiveSlotPreview,
-                  fastPreview: interactiveSlotPreview,
                 }
               );
             } catch (unionCutErr) {
@@ -3289,7 +3281,6 @@ const App: React.FC = () => {
                 {
                   baseIsManifold: false,
                   preferWorker: interactiveSlotPreview,
-                  fastPreview: interactiveSlotPreview,
                 }
               );
             } catch (mergedCutErr) {
