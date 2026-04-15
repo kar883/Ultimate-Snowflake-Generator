@@ -85,8 +85,8 @@ function checkForUpdates() {
       res.on('end', () => {
         try {
           const release = JSON.parse(data);
-          const latestVersion = release.tag_name.replace('v', '');
-          const currentVersion = '1.0.4';
+          const latestVersion = (release.tag_name || '').replace('v', '');
+          const currentVersion = app.getVersion();
           
           resolve({
             latestVersion,
@@ -102,6 +102,32 @@ function checkForUpdates() {
     }).on('error', reject);
   });
 }
+
+// IPC: renderer asks main process to check update status.
+ipcMain.handle('app:check-for-updates', async () => {
+  try {
+    const result = await checkForUpdates();
+    return { ok: true, ...result };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error?.message || 'Failed to check for updates',
+      currentVersion: app.getVersion(),
+      hasUpdate: false,
+      latestVersion: null,
+      releaseUrl: 'https://github.com/kar883/Ultimate-Snowflake-Generator/releases/latest',
+    };
+  }
+});
+
+// IPC: open URLs in the OS browser from renderer requests.
+ipcMain.handle('app:open-external', async (_event, url) => {
+  if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+    await shell.openExternal(url);
+    return { ok: true };
+  }
+  return { ok: false, error: 'Invalid URL' };
+});
 
 // Helper function to show About dialog
 function showAbout() {

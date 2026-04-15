@@ -343,7 +343,24 @@ export async function manifoldUnionAndExtrudeShapeInstances(
   }
 
   try {
-    const solid = unionProfile.extrude(Math.max(0.01, extrusionDepth), 0, 0, [1, 1], true);
+    let solid = unionProfile.extrude(Math.max(0.01, extrusionDepth), 0, 0, [1, 1], true);
+
+    // Optional manifold-native edge profiling. This keeps topology closed while
+    // restoring visible bevel when slot bases are built from 2D profile unions.
+    const bevelEnabled = options?.bevelEnabled ?? false;
+    const bevelSize = Math.max(0, options?.bevelSize ?? 0);
+    if (bevelEnabled && bevelSize > 1e-5) {
+      const bevelSegments = Math.max(1, options?.bevelSegments ?? 1);
+      const minSharpAngle = bevelSegments === 1 ? 0 : 55;
+      const smoothness = Math.min(0.92, Math.max(0.22, bevelSize / (bevelSize + 0.35)));
+      const targetEdgeLength = Math.max(0.35, (bevelSize * 1.45) / bevelSegments);
+
+      const smoothed = solid.smoothOut(minSharpAngle, smoothness);
+      solid.delete?.();
+      solid = smoothed.refineToLength(targetEdgeLength);
+      smoothed.delete?.();
+    }
+
     const finalMesh = solid.getMesh();
     solid.delete?.();
     return meshToBufferGeometry(finalMesh);

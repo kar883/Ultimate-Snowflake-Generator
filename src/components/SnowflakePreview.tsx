@@ -61,6 +61,21 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   // incremented once per newly-loaded font so the SVG paths re-render exactly once.
   const fontsRef = useRef<Record<string, opentype.Font>>({});
   const [fontLoadCount, setFontLoadCount] = useState(0);
+  // Batch font-load re-renders: instead of each font load firing a separate
+  // setState (causing N visible intermediate preview states on startup), we
+  // coalesce them into a single update within a 60ms window.
+  const fontLoadBatchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingFontLoadRef = useRef(0);
+  const triggerFontLoadUpdate = () => {
+    pendingFontLoadRef.current += 1;
+    if (fontLoadBatchTimer.current) return; // already pending
+    fontLoadBatchTimer.current = setTimeout(() => {
+      fontLoadBatchTimer.current = null;
+      const count = pendingFontLoadRef.current;
+      pendingFontLoadRef.current = 0;
+      setFontLoadCount(c => c + count);
+    }, 60);
+  };
   // Convenience alias so all existing `fonts[name]` reads below work unchanged.
   const fonts = fontsRef.current;
   const [viewTransform, setViewTransform] = useState({ x: 0, y: 0, scale: 1.8 });
@@ -157,7 +172,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
         const preloadedFont = fontPreloader.getFont(name);
         if (preloadedFont) {
           fontsRef.current[name] = preloadedFont;
-          setFontLoadCount(c => c + 1);
+          triggerFontLoadUpdate();
           return;
         }
         
@@ -167,8 +182,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
           delete (fontsRef.current as any)[`__loading_${name}`];
           if (!e && f) {
             fontsRef.current[name] = f;
-            // Trigger exactly one re-render per newly loaded font
-            setFontLoadCount(c => c + 1);
+            triggerFontLoadUpdate();
           }
         });
       };
@@ -204,7 +218,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
       });
       
       if (foundPreloaded) {
-        setFontLoadCount(c => c + 1);
+        triggerFontLoadUpdate();
       }
     };
 
@@ -648,7 +662,11 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   const centerX = containerSize.width / 2;
   const centerY = containerSize.height / 2;
   const hasEnabledLayers = enabledLayers.length > 0;
-  const showInitialLoadingMask = hasEnabledLayers && !initialPreviewReady;
+  // Keep layer content invisible until all required fonts are loaded so the
+  // user never sees intermediate partial-font states. All re-renders during
+  // font loading happen at opacity 0; the final result fades in once ready.
+  const showInitialLoadingMask = false;
+  const layersVisible = initialPreviewReady;
 
   return (
     <div
@@ -675,8 +693,11 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
             No 2D content enabled (enable layer or add elements)
           </text>
         )}
-        <g transform={`translate(${centerX + viewTransform.x}, ${centerY + viewTransform.y}) scale(${viewTransform.scale})`}>
-          {!showInitialLoadingMask && enabledLayers.map((layer, index) => {
+        <g
+          transform={`translate(${centerX + viewTransform.x}, ${centerY + viewTransform.y}) scale(${viewTransform.scale})`}
+          style={{ opacity: layersVisible ? 1 : 0, transition: layersVisible ? 'opacity 0.2s ease' : 'none' }}
+        >
+          {enabledLayers.map((layer, index) => {
             const offsetX = (index - (enabledLayers.length - 1) / 2) * layerSpacing;
             const layerColor = globalColor;
             const zRotation = (slotEnabled && index === 0) ? 180 : 0;
@@ -708,10 +729,10 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
           })}
         </g>
       </svg>
-      {showInitialLoadingMask && (
+      {!layersVisible && (
         <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
           <div className="bg-slate-900/80 border border-white/10 rounded-lg px-4 py-3 shadow-xl backdrop-blur">
-            <span className="text-xs font-bold text-slate-200 uppercase tracking-wide">Preparing final preview...</span>
+            <span className="text-xs font-bold text-slate-200 uppercase tracking-wide">Loading fonts...</span>
           </div>
         </div>
       )}

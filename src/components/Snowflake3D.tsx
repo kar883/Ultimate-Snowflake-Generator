@@ -548,6 +548,14 @@ const XYZGizmo: React.FC<{
     pz: 'Snap Front Face',
     nz: 'Snap Back Face',
   };
+  const faceShortLabelByKey: Record<string, string> = {
+    px: 'RIGHT',
+    nx: 'LEFT',
+    py: 'TOP',
+    ny: 'BOTTOM',
+    pz: 'FRONT',
+    nz: 'BACK',
+  };
 
   const edgeItems = edgeDefs.map(([a, b], i) => {
     const pa = projected.get(a)!;
@@ -562,6 +570,29 @@ const XYZGizmo: React.FC<{
     const key = `${a}-${b}`;
     return { key, i, pa, pb, snapVec };
   });
+
+  // Draw a tiny XYZ triad from the front-most cube corner so orientation
+  // remains readable even when face labels are partially occluded.
+  const frontCorner = Array.from(projected.entries()).reduce((best, cur) =>
+    !best || cur[1].depth > best[1].depth ? cur : best
+  , null as [string, { x: number; y: number; depth: number; world: THREE.Vector3 }] | null);
+
+  const axisLine = (cornerKey: string, axis: 'x' | 'y' | 'z') => {
+    const keyChars = cornerKey.split('') as Array<'p' | 'n'>;
+    const idx = axis === 'x' ? 0 : axis === 'y' ? 1 : 2;
+    keyChars[idx] = keyChars[idx] === 'p' ? 'n' : 'p';
+    const targetKey = keyChars.join('');
+    const from = projected.get(cornerKey);
+    const to = projected.get(targetKey);
+    if (!from || !to) return null;
+    const t = 0.34;
+    return {
+      x1: from.x,
+      y1: from.y,
+      x2: from.x + (to.x - from.x) * t,
+      y2: from.y + (to.y - from.y) * t,
+    };
+  };
 
   const cornerItems = Array.from(projected.entries()).map(([key, p]) => {
     const s = parseKey(key);
@@ -587,18 +618,43 @@ const XYZGizmo: React.FC<{
           fill={face.color}
           stroke="rgba(148,163,184,0.28)"
           strokeWidth="0.9"
-          className="cursor-pointer"
-          data-gizmo-interactive="true"
-          onPointerDown={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          onClick={(e) => {
-            e.stopPropagation();
-            onSnapDirection?.(face.normal.clone());
-          }}
+          style={{ pointerEvents: 'none' }}
         />
       ))}
+
+      {frontCorner && (() => {
+        const xAxis = axisLine(frontCorner[0], 'x');
+        const yAxis = axisLine(frontCorner[0], 'y');
+        const zAxis = axisLine(frontCorner[0], 'z');
+        return (
+          <g style={{ pointerEvents: 'none' }}>
+            {xAxis && <line x1={xAxis.x1} y1={xAxis.y1} x2={xAxis.x2} y2={xAxis.y2} stroke="rgba(239,68,68,0.95)" strokeWidth="1.8" strokeLinecap="round" />}
+            {yAxis && <line x1={yAxis.x1} y1={yAxis.y1} x2={yAxis.x2} y2={yAxis.y2} stroke="rgba(34,197,94,0.95)" strokeWidth="1.8" strokeLinecap="round" />}
+            {zAxis && <line x1={zAxis.x1} y1={zAxis.y1} x2={zAxis.x2} y2={zAxis.y2} stroke="rgba(59,130,246,0.95)" strokeWidth="1.8" strokeLinecap="round" />}
+          </g>
+        );
+      })()}
+
+      {faceDefs.filter(face => face.depth > -0.15).map(face => {
+        const cxFace = face.points.reduce((sum, p) => sum + p.x, 0) / face.points.length;
+        const cyFace = face.points.reduce((sum, p) => sum + p.y, 0) / face.points.length;
+        const textSize = face.key === 'py' ? 8.2 : 7.6;
+        return (
+          <text
+            key={`label-${face.key}`}
+            x={cxFace}
+            y={cyFace + 2.5}
+            textAnchor="middle"
+            fill="rgba(241,245,249,0.92)"
+            fontSize={textSize}
+            fontWeight="800"
+            letterSpacing="0.55"
+            style={{ pointerEvents: 'none', userSelect: 'none' }}
+          >
+            {faceShortLabelByKey[face.key]}
+          </text>
+        );
+      })}
 
       {/* Base cube edge wireframe (subtle, always visible) */}
       {edgeItems.map(({ key, pa, pb }) => (
@@ -1044,33 +1100,37 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     config.layers.forEach(l => { m[l.id] = false; });
     return m;
   });
+  const prevLayerEnabledRef = useRef<Record<string, boolean>>(() => {
+    const m: Record<string, boolean> = {};
+    config.layers.forEach(l => { m[l.id] = l.enabled; });
+    return m;
+  }) as React.MutableRefObject<Record<string, boolean>>;
 
   useEffect(() => { isVisibleRef.current = isVisible; }, [isVisible]);
 
   // Sync visibility state with config:
-  //  • New layer IDs → default to layer.enabled
-  //  • Existing IDs that become disabled in config → force hidden
-  //  • Existing IDs that are (re-)enabled in config → show them
-  //  • Manual user toggle is only reset when the layer's enabled state changes
+  //  • New layer IDs -> default to layer.enabled
+  //  • Existing IDs that become disabled in config -> force hidden
+  //  • Existing IDs that transition disabled->enabled in config -> show
+  //  • Otherwise preserve manual viewport toggles
   useEffect(() => {
     setPlaneVisibility(prev => {
       const next = { ...prev };
+      const prevEnabledMap = prevLayerEnabledRef.current;
       config.layers.forEach(layer => {
         if (!(layer.id in prev)) {
-          // Brand-new layer — default to its enabled state
+          // Brand-new layer: default to its enabled state
           next[layer.id] = layer.enabled;
         } else {
-          // Layer exists — track enabled state from config directly
-          // If the plane is enabled in config → show it (respect what the planes tab says)
-          // If the plane is disabled in config → hide it always
-          if (layer.enabled && !prev[layer.id]) {
-            // Was hidden, now config says enabled → turn it on
-            next[layer.id] = true;
-          } else if (!layer.enabled) {
-            // Config says disabled → force off
+          const wasEnabledInConfig = prevEnabledMap[layer.id];
+          if (!layer.enabled) {
+            // Config says disabled: force off
             next[layer.id] = false;
+          } else if (wasEnabledInConfig === false && layer.enabled === true) {
+            // Actual config transition disabled->enabled: auto-show
+            next[layer.id] = true;
           }
-          // else: was visible and still enabled → leave user toggle alone
+          // else: keep manual viewport state as-is
         }
       });
       return next;
@@ -1085,6 +1145,13 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
       config.layers.forEach(l => { if (!(l.id in prev)) next[l.id] = 1.0; });
       return next;
     });
+
+    // Update snapshot used to detect true enabled-state transitions next run.
+    const nextEnabledMap: Record<string, boolean> = {};
+    config.layers.forEach(l => {
+      nextEnabledMap[l.id] = l.enabled;
+    });
+    prevLayerEnabledRef.current = nextEnabledMap;
   }, [config.layers]);
 
   const togglePlaneVisibility = (layerId: string) => {
@@ -1433,11 +1500,12 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
         emissive:         accentEmissive,
         emissiveIntensity: 0.015,
         metalness:        0.14,
-        roughness:        0.44,
+        roughness:        0.52,
         envMapIntensity:  0.36,
         transparent:      ghost,
         opacity:          ghost ? (planeTransparency[lid] ?? 0.12) : 1.0,
         side:             THREE.DoubleSide,
+        flatShading:      false,
       });
       child.material = mat;
     });
@@ -1667,7 +1735,9 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
       setLoading(true);
       setConflictCount(0);
       try {
-        const groupFromGenerator = await generateMeshRef.current(() => {}, undefined, config, 'preview');
+        const generatedGroup = await generateMeshRef.current(() => {}, undefined, config, 'preview');
+        // Keep cached/export geometry immutable by operating on a preview clone.
+        const groupFromGenerator = generatedGroup.clone(true);
         if (cancelled || !sceneRef.current) return;
 
         if (meshGroupRef.current) {
@@ -1688,14 +1758,16 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
 
         const baseColor = new THREE.Color(color || '#38bdf8');
         const accentEmissive = baseColor.clone().multiplyScalar(0.35);
+        const bevelVisualMode = config.bevelEnabled;
         const baseMat = new THREE.MeshStandardMaterial({
           color: baseColor,
-          metalness: 0.14,
-          roughness: 0.44,
+          metalness: bevelVisualMode ? 0.2 : 0.14,
+          roughness: bevelVisualMode ? 0.42 : 0.52,
           emissive: accentEmissive,
           emissiveIntensity: 0.015,
-          envMapIntensity: 0.3,
+          envMapIntensity: bevelVisualMode ? 0.42 : 0.3,
           side: THREE.DoubleSide,
+          flatShading: false,
           transparent: true, opacity: 1.0,
         });
 
@@ -1703,11 +1775,34 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
 
         groupFromGenerator.traverse(child => {
           if (!(child instanceof THREE.Mesh)) return;
+
+          // `Object3D.clone(true)` keeps geometry/material references by default.
+          // Clone per-mesh geometry so preview shading tweaks never affect cache/export.
+          child.geometry = child.geometry.clone();
+
           child.material = baseMat.clone();
           child.castShadow = true;
           child.receiveShadow = true;
           child.frustumCulled = false;
-          child.geometry.computeVertexNormals();
+
+          // Smooth shading pass for preview.
+          // toCreasedNormals at 45-60° is the key to removing visible faceting
+          // on curved/beveled text surfaces while preserving hard cap edges.
+          // With reduced preview vertex counts (4 curve segments), this is essential.
+          const geometry = child.geometry as THREE.BufferGeometry;
+          const vertexCount = geometry.attributes.position?.count ?? 0;
+          const needsCurvedShading = config.bevelEnabled || (config.globalStrokeWeight || 0) > 0.05;
+          const creaseAngle = config.bevelEnabled ? Math.PI / 4 : Math.PI / 3;
+
+          if (needsCurvedShading && vertexCount > 0 && vertexCount <= 500000) {
+            // toCreasedNormals returns a new non-indexed geometry; dispose the clone.
+            const creased = BufferGeometryUtils.toCreasedNormals(geometry, creaseAngle) as THREE.BufferGeometry;
+            geometry.dispose();
+            child.geometry = creased;
+          } else if (!needsCurvedShading) {
+            // For non-curved shading cases, default normals are sufficient.
+            child.geometry.computeVertexNormals();
+          }
 
           const lid: string = child.userData.layerId;
 

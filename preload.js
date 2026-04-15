@@ -17,6 +17,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onExportDxf: (callback) => ipcRenderer.on('menu-export-dxf', callback),
   onAbout: (callback) => ipcRenderer.on('menu-about', callback),
   onShortcuts: (callback) => ipcRenderer.on('menu-shortcuts', callback),
+
+  // App utilities
+  checkForUpdates: () => ipcRenderer.invoke('app:check-for-updates'),
+  openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
   
   // Remove all listeners
   removeAllListeners: () => {

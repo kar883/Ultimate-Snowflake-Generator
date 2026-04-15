@@ -58,10 +58,22 @@ export function hashSlotCut(layer: any, slotLength: number, slotWidth: number, e
 }
 
 // Helper to generate cache key for text geometries
-export function makeTextKey(layerId: string, textGroup: any, fontSize: number, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, globalStrokeWeight: number, textStrokeWeight: number): string {
+export function makeTextKey(
+  layerId: string,
+  textGroup: any,
+  fontSize: number,
+  extrusionDepth: number,
+  bevelEnabled: boolean,
+  bevelAmount: number,
+  globalStrokeWeight: number,
+  textStrokeWeight: number,
+  bevelType?: string,
+  bevelSegments?: number,
+  curveSegments?: number,
+): string {
   const underline = textGroup.underline;
   const underlineStr = underline ? `${underline.enabled}_${underline.thickness}_${underline.startXOffset}_${underline.length}_${underline.yOffset}_${underline.capType}_${underline.capWidth}` : 'none';
-  return `${layerId}::text::${textGroup.text}::${textGroup.fontFamily}::${fontSize}::${extrusionDepth}::${bevelEnabled}::${bevelAmount}::${textGroup.arms}::${textGroup.mirrorEnabled}::${textGroup.mirrorOffset}::${textGroup.textX}::${textGroup.letterSpacing}::${underlineStr}::${globalStrokeWeight}::${textStrokeWeight}`;
+  return `${layerId}::text::${textGroup.text}::${textGroup.fontFamily}::${fontSize}::${extrusionDepth}::${bevelEnabled}::${bevelAmount}::${bevelType || 'none'}::${bevelSegments ?? 0}::${curveSegments ?? 0}::${textGroup.arms}::${textGroup.mirrorEnabled}::${textGroup.mirrorOffset}::${textGroup.textX}::${textGroup.letterSpacing}::${underlineStr}::${globalStrokeWeight}::${textStrokeWeight}`;
 }
 
 // Helper to generate cache key for underline geometries

@@ -11,17 +11,29 @@ const UpdateNotification: React.FC<UpdateNotificationProps> = ({ currentVersion,
   const [error, setError] = useState<string | null>(null);
   const [isVisible, setIsVisible] = useState(false);
 
+  const electronAPI = (window as any).electronAPI;
+
   useEffect(() => {
     const checkForUpdates = async () => {
       try {
         setIsLoading(true);
-        const response = await fetch('https://api.github.com/repos/kar883/Ultimate-Snowflake-Generator/releases/latest');
-        const release = await response.json();
-        const latest = release.tag_name.replace('v', '');
+        if (!electronAPI?.checkForUpdates) {
+          // Web/Vite mode: no update banner; update checking is Electron-owned.
+          setIsVisible(false);
+          return;
+        }
+
+        const result = await electronAPI.checkForUpdates();
+        if (!result?.ok) {
+          throw new Error(result?.error || 'Failed to check for updates');
+        }
+
+        const latest = result.latestVersion;
+        const runningVersion = result.currentVersion || currentVersion;
         
-        console.log('Current version:', currentVersion, 'Latest version:', latest);
+        console.log('Current version:', runningVersion, 'Latest version:', latest);
         
-        if (latest !== currentVersion) {
+        if (result.hasUpdate && latest !== runningVersion) {
           setLatestVersion(latest);
           setIsVisible(true);
           console.log('New version available:', latest);
@@ -40,10 +52,15 @@ const UpdateNotification: React.FC<UpdateNotificationProps> = ({ currentVersion,
     const timer = setTimeout(checkForUpdates, 3000);
     
     return () => clearTimeout(timer);
-  }, [currentVersion]);
+  }, [currentVersion, electronAPI]);
 
   const handleDownload = () => {
-    window.open('https://github.com/kar883/Ultimate-Snowflake-Generator/releases/latest', '_blank');
+    const url = 'https://github.com/kar883/Ultimate-Snowflake-Generator/releases/latest';
+    if (electronAPI?.openExternal) {
+      electronAPI.openExternal(url);
+    } else {
+      window.open(url, '_blank');
+    }
     handleDismiss();
   };
 

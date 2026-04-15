@@ -33,7 +33,7 @@ import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, /*makeSlotKey,
 const MAX_HISTORY = 50;
 // Bump when mesh generation logic changes (slot geometry, CSG sequencing, etc.)
 // so cached groups from older algorithms are not reused.
-const GEOMETRY_ALGO_VERSION = 'slot-2026-04-14-t';
+const GEOMETRY_ALGO_VERSION = 'slot-2026-04-15-k';
 
 declare global {
   interface Window {
@@ -1022,6 +1022,7 @@ const applyWatertightSlotCuts = async (
 
   const runWorkerCut = async (): Promise<THREE_ACTUAL.BufferGeometry> => {
     const workerStart = performance.now();
+
     const baseData = {
       positions: Array.from(layerForCut.attributes.position.array as Float32Array),
       indices: layerForCut.index
@@ -1058,11 +1059,13 @@ const applyWatertightSlotCuts = async (
       console.debug(`[slot-csg] Worker cut for ${layer.name} took ${workerMs.toFixed(1)}ms`);
     }
 
-    const capped = fillSlotHoles(out, cutters);
-    if (capped !== out) out.dispose();
+    // Use original fillSlotHoles (time-tested, correct) rather than worker version.
+    // The worker does fast BSP subtraction; the original hole-filler is already fast enough.
+    const filled = fillSlotHoles(out, cutters);
+    if (filled !== out) out.dispose();
 
-    const welded = BufferGeometryUtils.mergeVertices(capped, 0.0001) as THREE_ACTUAL.BufferGeometry;
-    if (welded !== capped) capped.dispose();
+    const welded = BufferGeometryUtils.mergeVertices(filled, 0.0001) as THREE_ACTUAL.BufferGeometry;
+    if (welded !== filled) filled.dispose();
     welded.computeVertexNormals();
     welded.computeBoundingBox();
     return welded;
@@ -2132,6 +2135,16 @@ const App: React.FC = () => {
     setConfig(prev => {
       const next = { ...prev, ...updates };
 
+      // IMPORTANT: cancel any queued background 3D updates so an older
+      // snapshot cannot overwrite a newer visibility toggle (layer.enabled).
+      if (debounce150Timer.current) {
+        clearTimeout(debounce150Timer.current);
+        debounce150Timer.current = null;
+      }
+      if (debounce500Timer.current) {
+        clearTimeout(debounce500Timer.current);
+        debounce500Timer.current = null;
+      }
 
       if (debounceTimer.current) {
           clearTimeout(debounceTimer.current);
@@ -2286,22 +2299,46 @@ const App: React.FC = () => {
     }
     const qualityToUse = overrideQuality || rendered3DConfig.quality;
     const interactiveSlotPreview = generationMode === 'preview' && config.slotEnabled;
+    
+    // For preview + slots: aggressively reduce vertex count to prevent manifold crashes
+    // and lag. Font glyphs × curve segments × bevel segments = millions of verts; preview
+    // doesn't need export-quality smoothness.
     let qMult = 1;
     let curveSeg = 12;
     let bevelSegCap = 10;
 
-    if (qualityToUse === 'low') {
+    if (interactiveSlotPreview) {
+      // Interactive preview with slots: balanced setting that avoids manifold OOM
+      // while keeping curved text from visibly notching.
+      qMult = 0.45;
+      curveSeg = 6;
+      bevelSegCap = 4;
+    } else if (qualityToUse === 'low') {
         qMult = 0.5;
-        curveSeg = 6;
+        curveSeg = 8;
         bevelSegCap = 4;
     } else if (qualityToUse === 'med') {
         qMult = 0.8;
-        curveSeg = 12;
+        curveSeg = 14;
         bevelSegCap = 6;
     } else {
         qMult = 1.0;
         curveSeg = 24;
         bevelSegCap = 12;
+    }
+
+    // Optional floor for preview-only (no slots) to maintain minimum smoothness.
+    // When slots are enabled, the hard cutoff above already handles it.
+    const previewNeedsSmoothCurves = generationMode === 'preview'
+      && !interactiveSlotPreview
+      && (config.bevelEnabled || (config.globalStrokeWeight || 0) > 0.05);
+    if (previewNeedsSmoothCurves) {
+      const minCurveSeg = 6;
+      const minBevelSeg = 4;
+      const minQMult = 0.6;
+      curveSeg = Math.max(curveSeg, minCurveSeg);
+      bevelSegCap = Math.max(bevelSegCap, minBevelSeg);
+      qMult = Math.max(qMult, minQMult);
     }
 
     // `extrusionDepth` represents the overall material thickness INCLUDING any bevel.
@@ -2411,13 +2448,15 @@ const App: React.FC = () => {
       const boldnessBevel = totalStrokeWeight > 0.1 ? totalStrokeWeight / 2 : 0;
       const shouldApplyBoldness = totalStrokeWeight > 0.1 && !(totalStrokeWeight >= BOLD_FONT_THRESHOLD && boldUrl);
 
-      // Create extrude settings with boldness bevel added to regular bevel
+      // Create extrude settings with boldness bevel added to regular bevel.
+      // Cap boldness bevelSegments to 3 to prevent vertex count explosion when
+      // boldness adds a large bevel on top of the regular bevel.
       const textExtrudeSettings = {
         ...extrudeSettings,
         bevelEnabled: true, // Always enable when boldness is applied
         bevelThickness: bevelPerSide + boldnessBevel,
         bevelSize: bevelPerSide + boldnessBevel,
-        bevelSegments: Math.max(2, bevelSegCap), // Ensure enough segments for smoothness
+        bevelSegments: Math.min(3, Math.max(2, bevelSegCap)),
       };
 
       if (shouldApplyBoldness) {
@@ -2433,7 +2472,19 @@ const App: React.FC = () => {
       const unionTextShapes = shapes;
       // ==================================================================
 
-      const textKey = makeTextKey(layer.id, textGroup, textGroup.fontSize, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight, textGroup.thickness);
+      const textKey = makeTextKey(
+        layer.id,
+        textGroup,
+        textGroup.fontSize,
+        effectiveDepth,
+        rendered3DConfig.bevelEnabled,
+        bevelPerSide,
+        rendered3DConfig.globalStrokeWeight,
+        textGroup.thickness,
+        rendered3DConfig.bevelType,
+        textExtrudeSettings.bevelSegments,
+        textExtrudeSettings.curveSegments,
+      );
       const groupGeo = getOrCreateGeometry(geometryCache.text, textKey, () => new THREE_ACTUAL.ExtrudeGeometry(shapes, textExtrudeSettings));
 
             // Underline Logic
@@ -3186,14 +3237,45 @@ const App: React.FC = () => {
 
         let cutSourceGeo = mergedLayerGeo;
         if (config.slotEnabled) {
+          if (interactiveSlotPreview) {
+            // Hot path for interactive 3D preview: avoid manifold pre-union/extrude,
+            // which can freeze on dense glyph meshes. Go straight to worker-first cut.
+            layerGeometries.forEach((g) => {
+              if (g !== mergedLayerGeo) g.dispose();
+            });
+
+            try {
+              cutSourceGeo = await applyWatertightSlotCuts(
+                mergedLayerGeo,
+                layer,
+                lIdx,
+                layersToGenerate,
+                config,
+                bevelPerSide,
+                {
+                  baseIsManifold: false,
+                  preferWorker: true,
+                }
+              );
+            } catch (previewCutErr) {
+              console.warn(`Interactive slot preview cut failed for ${layer.name}; keeping uncut geometry`, previewCutErr);
+              cutSourceGeo = mergedLayerGeo;
+            }
+          } else {
           let unioned2DLayerGeo: THREE_ACTUAL.BufferGeometry | null = null;
+          const canUseFlat2DPreUnion = true;
+          // For interactive slot preview, always prefer worker-first cutting.
+          // Manifold on very dense text meshes can OOM and stall the UI.
+          const preferWorkerPreviewCut = interactiveSlotPreview;
           try {
-            if (layerShapeInstances.length > 0) {
-              const slotUnionCurveSegments = qualityToUse === 'low'
-                ? 24
-                : qualityToUse === 'med'
-                  ? 32
-                  : 48;
+            if (canUseFlat2DPreUnion && layerShapeInstances.length > 0) {
+              const slotUnionCurveSegments = interactiveSlotPreview
+                ? Math.max(4, Math.min(8, curveSeg))
+                : qualityToUse === 'low'
+                  ? 14
+                  : qualityToUse === 'med'
+                    ? 20
+                    : 28;
               unioned2DLayerGeo = await manifoldUnionAndExtrudeShapeInstances(
                 layerShapeInstances,
                 effectiveDepth,
@@ -3242,7 +3324,7 @@ const App: React.FC = () => {
                 bevelPerSide,
                 {
                   baseIsManifold: true,
-                  preferWorker: interactiveSlotPreview,
+                  preferWorker: preferWorkerPreviewCut,
                 }
               );
             } catch (shapeCutErr) {
@@ -3261,7 +3343,7 @@ const App: React.FC = () => {
                 bevelPerSide,
                 {
                   baseIsManifold: true,
-                  preferWorker: interactiveSlotPreview,
+                  preferWorker: preferWorkerPreviewCut,
                 }
               );
             } catch (unionCutErr) {
@@ -3280,7 +3362,7 @@ const App: React.FC = () => {
                 bevelPerSide,
                 {
                   baseIsManifold: false,
-                  preferWorker: interactiveSlotPreview,
+                  preferWorker: preferWorkerPreviewCut,
                 }
               );
             } catch (mergedCutErr) {
@@ -3297,6 +3379,7 @@ const App: React.FC = () => {
           }
 
           cutSourceGeo = cutLayerGeo;
+          }
         } else {
           layerGeometries.forEach((g) => {
             if (g !== mergedLayerGeo) g.dispose();
