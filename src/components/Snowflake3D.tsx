@@ -29,7 +29,14 @@ function createSlotDebugCuttersForLayer(
   const tipInLength = Math.max(0.01, drawLength * 0.22);
   const extensionLength = Math.max(0.01, adjLength * 0.6);
   const armAngle = layer.primary.rotationOffset ?? 0;
-  const slotThickness = Math.max(0.1, materialThickness + (config.globalStrokeWeight || 0) + config.slotWidth + widthAdjustment);
+  const enabledTextThicknesses = [
+    layer.primary.enabled ? (layer.primary.thickness || 0) : 0,
+    (layer.secondaryEnabled && layer.secondary.enabled) ? (layer.secondary.thickness || 0) : 0,
+  ];
+  const maxLayerTextThickness = Math.max(...enabledTextThicknesses);
+  const textThicknessOverBaseline = Math.max(0, maxLayerTextThickness - 1.0);
+  const effectiveBoldnessForSlot = Math.max(0, (config.globalStrokeWeight || 0) + textThicknessOverBaseline);
+  const slotThickness = Math.max(0.1, materialThickness + effectiveBoldnessForSlot + config.slotWidth + widthAdjustment);
   const bridge = Math.min(0.4, Math.max(0.15, slotThickness * 0.08));
   const halfChannel = Math.max(0.12, (slotThickness - bridge) / 2);
   const fullPunch = Math.max(500, drawLength * 4);
