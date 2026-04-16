@@ -995,8 +995,11 @@ const applyWatertightSlotCuts = async (
   enabledLayers: LayerConfig[],
   config: SnowflakeConfig,
   bevelPerSide: number,
-  options?: { baseIsManifold?: boolean; preferWorker?: boolean }
+  options?: { baseIsManifold?: boolean; preferWorker?: boolean },
+  signal?: AbortSignal
 ): Promise<THREE_ACTUAL.BufferGeometry> => {
+  if (signal?.aborted) throw new DOMException('Slot cut aborted', 'AbortError');
+  
   const materialThickness = config.extrusionDepth + (config.bevelEnabled ? bevelPerSide * 2 : 0);
   const profiles = createSlotProfilesForLayer(layer, layerIndex, enabledLayers, config, materialThickness);
   if (profiles.length === 0) return layerGeo;
@@ -1056,7 +1059,8 @@ const applyWatertightSlotCuts = async (
       rotation: { x: 0, y: 0, z: 0 },
     }));
 
-    const workerResult = await postCSGJob(baseData, slotsData, { x: 0, y: 0, z: 0 });
+    const workerResult = await postCSGJob(baseData, slotsData, { x: 0, y: 0, z: 0 }, signal);
+    
     if (!workerResult?.success || !workerResult?.geometry?.positions?.length) {
       throw new Error(workerResult?.error || 'Worker CSG returned empty geometry');
     }
@@ -1093,6 +1097,9 @@ const applyWatertightSlotCuts = async (
     try {
       return await runWorkerCut();
     } catch (workerErr) {
+      if (workerErr instanceof DOMException && workerErr.name === 'AbortError') {
+        throw workerErr;
+      }
       console.warn(`Worker-first slot cutting failed for ${layer.name}; retrying manifold`, workerErr);
     }
   }
@@ -1759,6 +1766,7 @@ const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isEnabled 
 
 const App: React.FC = () => {
   const defaultDepth = 3.0;
+  const MAX_SLOT_CUT_CACHE_ENTRIES = 36;
 
   // Debug: Track app initialization only once
   useEffect(() => {
@@ -2014,6 +2022,44 @@ const App: React.FC = () => {
   // and never reset their internal timer on re-render.
   const debounce150Timer = useRef<NodeJS.Timeout | null>(null);
   const debounce500Timer = useRef<NodeJS.Timeout | null>(null);
+  const slotCutResultCacheRef = useRef<Map<string, THREE_ACTUAL.BufferGeometry>>(new Map());
+  const slotCutInFlightRef = useRef<Map<string, Promise<THREE_ACTUAL.BufferGeometry>>>(new Map());
+  const slotCutAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const slotCutIsPreviewRef = useRef<Map<string, boolean>>(new Map());
+  const [isComputingSlots, setIsComputingSlots] = useState(false);
+
+  const clearSlotCutResultCache = useCallback(() => {
+    for (const geo of slotCutResultCacheRef.current.values()) {
+      geo.dispose();
+    }
+    slotCutResultCacheRef.current.clear();
+    slotCutInFlightRef.current.clear();
+  }, []);
+
+  const cancelAllSlotCuts = useCallback(() => {
+    for (const [key, controller] of slotCutAbortControllersRef.current.entries()) {
+      // Only cancel non-preview slot cuts (full render / export operations)
+      const isPreview = slotCutIsPreviewRef.current.get(key);
+      if (!isPreview) {
+        controller.abort();
+      }
+    }
+    slotCutAbortControllersRef.current.clear();
+    slotCutIsPreviewRef.current.clear();
+    setIsComputingSlots(false);
+  }, []);
+
+  // Escape key handler to stop ongoing computation — placed after cancelAllSlotCuts is declared
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isComputingSlots) {
+        e.preventDefault();
+        cancelAllSlotCuts();
+      }
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isComputingSlots, cancelAllSlotCuts]);
 
   const debouncedUpdate3D = useCallback((next: SnowflakeConfig) => {
     if (debounce150Timer.current) clearTimeout(debounce150Timer.current);
@@ -2039,6 +2085,178 @@ const App: React.FC = () => {
     }
 
     return enabledLayersCache.current.get(configHash) || [];
+  }, []);
+
+  const makeGeometryFingerprint = useCallback((geo: THREE_ACTUAL.BufferGeometry): string => {
+    const posAttr = geo.attributes.position as THREE_ACTUAL.BufferAttribute | undefined;
+    const idxAttr = geo.index as THREE_ACTUAL.BufferAttribute | null;
+    if (!posAttr || posAttr.count === 0) return 'empty';
+
+    const pos = posAttr.array as ArrayLike<number>;
+    const idx = idxAttr?.array as ArrayLike<number> | undefined;
+
+    let posChecksum = 0;
+    const posStep = Math.max(1, Math.floor(pos.length / 96));
+    for (let i = 0; i < pos.length; i += posStep) {
+      posChecksum = ((posChecksum * 31) + Math.round(pos[i] * 1000)) | 0;
+    }
+
+    let idxChecksum = 0;
+    if (idx && idx.length > 0) {
+      const idxStep = Math.max(1, Math.floor(idx.length / 96));
+      for (let i = 0; i < idx.length; i += idxStep) {
+        idxChecksum = ((idxChecksum * 31) + (idx[i] | 0)) | 0;
+      }
+    }
+
+    geo.computeBoundingBox();
+    const bb = geo.boundingBox;
+    const bbSig = bb
+      ? [
+          bb.min.x.toFixed(3),
+          bb.min.y.toFixed(3),
+          bb.min.z.toFixed(3),
+          bb.max.x.toFixed(3),
+          bb.max.y.toFixed(3),
+          bb.max.z.toFixed(3),
+        ].join(',')
+      : 'no-bb';
+
+    return [
+      `pc=${posAttr.count}`,
+      `ic=${idxAttr?.count ?? 0}`,
+      `ps=${posChecksum}`,
+      `is=${idxChecksum}`,
+      `bb=${bbSig}`,
+    ].join('|');
+  }, []);
+
+  const makeSlotCutCacheKey = useCallback((
+    sourceGeo: THREE_ACTUAL.BufferGeometry,
+    layer: LayerConfig,
+    layerIndex: number,
+    enabledLayers: LayerConfig[],
+    cfg: SnowflakeConfig,
+    bevelPerSide: number,
+    options: { baseIsManifold?: boolean; preferWorker?: boolean }
+  ): string => {
+    const enabledLayerSummary = enabledLayers.map((l) => ({
+      id: l.id,
+      slotType: l.slotType,
+      rotX: l.rotation3D.x,
+      rotY: l.rotation3D.y,
+      slotLengthAdjustment: l.slotLengthAdjustment ?? 0,
+      slotWidthOffset: l.slotWidthOffset ?? 0,
+      primaryEnabled: l.primary.enabled,
+      primaryThickness: l.primary.thickness ?? 0,
+      primaryRotationOffset: l.primary.rotationOffset ?? 0,
+      secondaryEnabled: l.secondaryEnabled && l.secondary.enabled,
+      secondaryThickness: l.secondary.thickness ?? 0,
+    }));
+
+    const layerSummary = {
+      id: layer.id,
+      slotType: layer.slotType,
+      rotX: layer.rotation3D.x,
+      rotY: layer.rotation3D.y,
+      slotLengthAdjustment: layer.slotLengthAdjustment ?? 0,
+      slotWidthOffset: layer.slotWidthOffset ?? 0,
+      primaryEnabled: layer.primary.enabled,
+      primaryThickness: layer.primary.thickness ?? 0,
+      primaryRotationOffset: layer.primary.rotationOffset ?? 0,
+      secondaryEnabled: layer.secondaryEnabled && layer.secondary.enabled,
+      secondaryThickness: layer.secondary.thickness ?? 0,
+    };
+
+    const slotRelevant = {
+      layerIndex,
+      layerSummary,
+      enabledLayerSummary,
+      sourceSig: makeGeometryFingerprint(sourceGeo),
+      slotMode: cfg.slotMode,
+      slotEnabled: cfg.slotEnabled,
+      slotLength: cfg.slotLength,
+      slotWidth: cfg.slotWidth,
+      extrusionDepth: cfg.extrusionDepth,
+      bevelEnabled: cfg.bevelEnabled,
+      bevelType: cfg.bevelType,
+      bevelPerSide,
+      globalStrokeWeight: cfg.globalStrokeWeight,
+      baseIsManifold: options.baseIsManifold ?? false,
+      preferWorker: options.preferWorker ?? false,
+      algo: GEOMETRY_ALGO_VERSION,
+    };
+
+    return JSON.stringify(slotRelevant);
+  }, [makeGeometryFingerprint]);
+
+  const getOrCreateSlotCutGeometry = useCallback(async (
+    key: string,
+    isPreview: boolean,
+    creator: (signal: AbortSignal) => Promise<THREE_ACTUAL.BufferGeometry>
+  ): Promise<THREE_ACTUAL.BufferGeometry> => {
+    const cached = slotCutResultCacheRef.current.get(key);
+    if (cached) {
+      return cached.clone();
+    }
+
+    let inflight = slotCutInFlightRef.current.get(key);
+    if (!inflight) {
+      const abortController = new AbortController();
+      slotCutAbortControllersRef.current.set(key, abortController);
+      slotCutIsPreviewRef.current.set(key, isPreview);
+      setIsComputingSlots(true);
+
+      inflight = (async () => {
+        try {
+          const produced = await creator(abortController.signal);
+          if (abortController.signal.aborted) {
+            produced?.dispose();
+            throw new DOMException('Slot cut was cancelled', 'AbortError');
+          }
+
+          const existing = slotCutResultCacheRef.current.get(key);
+          if (existing) {
+            produced.dispose();
+            return existing;
+          }
+
+          if (slotCutResultCacheRef.current.size >= MAX_SLOT_CUT_CACHE_ENTRIES) {
+            const oldestKey = slotCutResultCacheRef.current.keys().next().value;
+            if (oldestKey) {
+              const oldestGeo = slotCutResultCacheRef.current.get(oldestKey);
+              oldestGeo?.dispose();
+              slotCutResultCacheRef.current.delete(oldestKey);
+              slotCutAbortControllersRef.current.delete(oldestKey);
+            }
+          }
+
+          slotCutResultCacheRef.current.set(key, produced);
+          return produced;
+        } finally {
+          slotCutAbortControllersRef.current.delete(key);
+          slotCutIsPreviewRef.current.delete(key);
+          if (slotCutInFlightRef.current.size === 1) {
+            setIsComputingSlots(false);
+          }
+        }
+      })();
+      slotCutInFlightRef.current.set(key, inflight);
+    }
+
+    try {
+      const canonical = await inflight;
+      return canonical.clone();
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        console.log(`🛑 Slot cut cancelled: ${key}`);
+      }
+      throw err;
+    } finally {
+      if (slotCutInFlightRef.current.get(key) === inflight) {
+        slotCutInFlightRef.current.delete(key);
+      }
+    }
   }, []);
 
   // Diameter Calculation Logic
@@ -2138,17 +2356,25 @@ const App: React.FC = () => {
     // Clear geometry cache if boldness settings change
     if ('globalStrokeWeight' in updates && updates.globalStrokeWeight !== config.globalStrokeWeight) {
       clearGeometryCache();
+      clearSlotCutResultCache();
     }
     // Clear geometry and model caches when quality changes so the new resolution
     // is actually applied rather than serving the old cached mesh
     if ('quality' in updates && updates.quality !== lastQuality.current) {
       clearGeometryCache();
+      clearSlotCutResultCache();
       modelCache3D.clear();
       lastQuality.current = updates.quality!;
     }
     // if ('slotEnabled' in updates || 'slotLength' in updates || ...) {
     //   clearSlotCache(); slotCutCache.clear();
     // }
+
+    // Cancel in-flight slot cuts if config is about to change fundamentally
+    if ('layers' in updates || 'slotEnabled' in updates || 'slotLength' in updates || 
+        'slotWidth' in updates || 'slotMode' in updates || 'globalStrokeWeight' in updates) {
+      cancelAllSlotCuts();
+    }
 
     setConfig(prev => {
       const next = { ...prev, ...updates };
@@ -2306,7 +2532,7 @@ const App: React.FC = () => {
 
     // Check cache first
     const cached = modelCache3D.get(meshKey);
-    if (cached && !overrideQuality && !overrideConfig) {
+    if (cached) {
       onProgress(1);
       return cached;
     }
@@ -2314,6 +2540,7 @@ const App: React.FC = () => {
     // Clear geometry cache if quality changes (different curve/bevel segments)
     if (overrideQuality && overrideQuality !== rendered3DConfig.quality) {
       clearGeometryCache();
+      clearSlotCutResultCache();
     }
     const qualityToUse = overrideQuality || rendered3DConfig.quality;
     const interactiveSlotPreview = generationMode === 'preview' && config.slotEnabled;
@@ -3255,6 +3482,37 @@ const App: React.FC = () => {
 
         let cutSourceGeo = mergedLayerGeo;
         if (config.slotEnabled) {
+          const cutWithSlotCache = async (
+            sourceGeo: THREE_ACTUAL.BufferGeometry,
+            isPreview: boolean,
+            opts: { baseIsManifold?: boolean; preferWorker?: boolean }
+          ) => {
+            const slotCutKey = makeSlotCutCacheKey(
+              sourceGeo,
+              layer,
+              lIdx,
+              layersToGenerate,
+              config,
+              bevelPerSide,
+              opts
+            );
+
+            return getOrCreateSlotCutGeometry(slotCutKey, isPreview, async (signal) => {
+              const cut = await applyWatertightSlotCuts(
+                sourceGeo,
+                layer,
+                lIdx,
+                layersToGenerate,
+                config,
+                bevelPerSide,
+                opts,
+                signal
+              );
+              // Cache owns this geometry instance; clone if cut path returns source directly.
+              return cut === sourceGeo ? sourceGeo.clone() : cut;
+            });
+          };
+
           if (interactiveSlotPreview) {
             // Hot path for interactive 3D preview: avoid manifold pre-union/extrude,
             // which can freeze on dense glyph meshes. Go straight to worker-first cut.
@@ -3263,18 +3521,10 @@ const App: React.FC = () => {
             });
 
             try {
-              cutSourceGeo = await applyWatertightSlotCuts(
-                mergedLayerGeo,
-                layer,
-                lIdx,
-                layersToGenerate,
-                config,
-                bevelPerSide,
-                {
-                  baseIsManifold: false,
-                  preferWorker: true,
-                }
-              );
+              cutSourceGeo = await cutWithSlotCache(mergedLayerGeo, true, {
+                baseIsManifold: false,
+                preferWorker: true,
+              });
             } catch (previewCutErr) {
               console.warn(`Interactive slot preview cut failed for ${layer.name}; keeping uncut geometry`, previewCutErr);
               cutSourceGeo = mergedLayerGeo;
@@ -3299,12 +3549,13 @@ const App: React.FC = () => {
                 effectiveDepth,
                 slotUnionCurveSegments,
                 {
-                  bevelEnabled: config.bevelEnabled,
-                  bevelSize: bevelPerSide,
-                  bevelThickness: bevelPerSide,
-                  bevelSegments: config.bevelEnabled
-                    ? (config.bevelType === 'chamfer' ? 1 : Math.min(config.bevelSegments, bevelSegCap))
-                    : 1,
+                  // Slot-cut bases must stay as plain manifold extrusions.
+                  // Applying edge profiling before subtraction reintroduces
+                  // non-manifold topology on dense text meshes.
+                  bevelEnabled: false,
+                  bevelSize: 0,
+                  bevelThickness: 0,
+                  bevelSegments: 1,
                 }
               );
             }
@@ -3333,18 +3584,10 @@ const App: React.FC = () => {
 
           if (unioned2DLayerGeo) {
             try {
-              cutLayerGeo = await applyWatertightSlotCuts(
-                unioned2DLayerGeo,
-                layer,
-                lIdx,
-                layersToGenerate,
-                config,
-                bevelPerSide,
-                {
-                  baseIsManifold: true,
-                  preferWorker: preferWorkerPreviewCut,
-                }
-              );
+              cutLayerGeo = await cutWithSlotCache(unioned2DLayerGeo, false, {
+                baseIsManifold: true,
+                preferWorker: preferWorkerPreviewCut,
+              });
             } catch (shapeCutErr) {
               console.warn(`2D-unioned slot cut failed for ${layer.name}; retrying with 3D fallback bases`, shapeCutErr);
             }
@@ -3352,18 +3595,10 @@ const App: React.FC = () => {
 
           if (!cutLayerGeo && unionedLayerGeo) {
             try {
-              cutLayerGeo = await applyWatertightSlotCuts(
-                unionedLayerGeo,
-                layer,
-                lIdx,
-                layersToGenerate,
-                config,
-                bevelPerSide,
-                {
-                  baseIsManifold: true,
-                  preferWorker: preferWorkerPreviewCut,
-                }
-              );
+              cutLayerGeo = await cutWithSlotCache(unionedLayerGeo, false, {
+                baseIsManifold: true,
+                preferWorker: preferWorkerPreviewCut,
+              });
             } catch (unionCutErr) {
               console.warn(`Manifold slot cut on pre-unioned base failed for ${layer.name}; retrying with merged base`, unionCutErr);
             }
@@ -3371,18 +3606,10 @@ const App: React.FC = () => {
 
           if (!cutLayerGeo) {
             try {
-              cutLayerGeo = await applyWatertightSlotCuts(
-                mergedLayerGeo,
-                layer,
-                lIdx,
-                layersToGenerate,
-                config,
-                bevelPerSide,
-                {
-                  baseIsManifold: false,
-                  preferWorker: preferWorkerPreviewCut,
-                }
-              );
+              cutLayerGeo = await cutWithSlotCache(mergedLayerGeo, false, {
+                baseIsManifold: false,
+                preferWorker: preferWorkerPreviewCut,
+              });
             } catch (mergedCutErr) {
               console.warn(`Manifold slot cut failed for ${layer.name}; keeping uncut geometry`, mergedCutErr);
               cutLayerGeo = mergedLayerGeo;
@@ -3846,6 +4073,7 @@ const App: React.FC = () => {
       
       // Clear caches
       clearGeometryCache();
+      clearSlotCutResultCache();
       
       // Restore shortcuts and settings (preserve user preferences)
       setShortcuts(currentShortcuts);
@@ -4601,6 +4829,7 @@ const App: React.FC = () => {
     },
     forceRegenerate: () => {
         clearGeometryCache();
+      clearSlotCutResultCache();
         setRendered3DIfChanged(config);
         showNotification("Models Regenerated", "info", 1000);
     },
@@ -4716,7 +4945,7 @@ const App: React.FC = () => {
                     </div>
                     <div className={`absolute inset-0 w-full h-full transition-opacity duration-300 ${viewMode === '3d' ? 'opacity-100 z-10' : 'opacity-0 z-0'}`}>
                         <Snowflake3D
-                            config={config}
+                          config={rendered3DConfig}
                             generateMesh={generateMesh}
                             color={config.color}
                             undo={undo}
@@ -4729,8 +4958,17 @@ const App: React.FC = () => {
                         />
                     </div>
 
-                    {/* View Toggle */}
-                    <div className="absolute top-4 right-4 z-50 flex bg-slate-900/80 rounded-lg p-1 border border-white/10 shadow-lg backdrop-blur">
+                    {/* View Toggle + Stop Button */}
+                    <div className="absolute top-4 right-4 z-50 flex gap-2 bg-slate-900/80 rounded-lg p-1 border border-white/10 shadow-lg backdrop-blur">
+                        {isComputingSlots && (
+                          <button
+                            onClick={() => cancelAllSlotCuts()}
+                            className="px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all bg-rose-600 text-white hover:bg-rose-700 shadow-md animate-pulse"
+                            title="Stop ongoing slot computation (Esc)"
+                          >
+                            ⏹ Stop
+                          </button>
+                        )}
                         <button
                             onClick={() => setViewMode('2d')}
                             className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${viewMode === '2d' ? 'bg-sky-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}

@@ -229,10 +229,11 @@ interface ExportMenuProps {
   show2D?: boolean;
   shortcut?: any;
   t?: (key: string) => string;
+  compact?: boolean;
 }
 
 const ExportMenu: React.FC<ExportMenuProps> = ({
-  label, onExportSTL, onExport2D, isLoading, disabled, className, baseColor = "bg-sky-600", direction = 'up', show2D = false, shortcut, t
+  label, onExportSTL, onExport2D, isLoading, disabled, className, baseColor = "bg-sky-600", direction = 'up', show2D = false, shortcut, t, compact = false
 }) => {
   const [quality, setQuality] = useState<DesignQuality>('med');
   const [format, setFormat] = useState<'stl' | 'svg' | 'dxf'>('stl');
@@ -278,30 +279,46 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
       }
   }, [isOpen, updatePosition]);
 
+  const handleToggleOpen = () => {
+    if (disabled || isLoading) return;
+    if (!isOpen) {
+      updatePosition();
+    }
+    setIsOpen(!isOpen);
+  };
+
   const handleMainClick = () => {
     if (disabled || isLoading) return;
     if (format === 'stl') onExportSTL(quality);
     else onExport2D?.(format);
   };
 
+  const mainButtonClass = compact
+    ? `w-full h-full px-2 py-1.5 rounded-l-lg text-[9px] font-black uppercase tracking-normal transition-all flex items-center justify-center gap-1 ${baseColor} hover:brightness-110 text-white whitespace-nowrap min-w-0`
+    : `w-full h-full px-3 py-1.5 rounded-l-lg text-[10px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 ${baseColor} hover:brightness-110 text-white`;
+
+  const toggleButtonClass = compact
+    ? `px-1.5 rounded-r-lg flex items-center justify-center transition-all border-l border-black/10 ${baseColor} hover:brightness-110 text-white shrink-0`
+    : `px-2 rounded-r-lg flex items-center justify-center transition-all border-l border-black/10 ${baseColor} hover:brightness-110 text-white`;
+
   return (
     <div ref={containerRef} className={`relative flex rounded-lg shadow-lg ${disabled ? 'opacity-50 pointer-events-none' : ''} ${className}`}>
       <InfoTooltip label={label} description={getDescription('Export', t)} shortcut={shortcut} className="flex-1">
         <button
           onClick={handleMainClick}
-          className={`w-full h-full px-3 py-1.5 rounded-l-lg text-[10px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 ${baseColor} hover:brightness-110 text-white`}
+          className={mainButtonClass}
         >
           {isLoading ? (
             <><div className="w-3 h-3 border-2 border-white/60 border-t-white rounded-full animate-spin" /><span>Exporting…</span></>
           ) : (
-            <><svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-            <span>{label}</span></>
+            <><svg className={`${compact ? 'w-3 h-3' : 'w-3.5 h-3.5'} shrink-0`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            <span className="truncate">{label}</span></>
           )}
         </button>
       </InfoTooltip>
       <button
-        onClick={() => setIsOpen(!isOpen)}
-        className={`px-2 rounded-r-lg flex items-center justify-center transition-all border-l border-black/10 ${baseColor} hover:brightness-110 text-white`}
+        onClick={handleToggleOpen}
+        className={toggleButtonClass}
       >
         <svg className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -2284,7 +2301,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                    {config.layers.map((layer, idx) => (
                       <div key={layer.id} className={`p-2 rounded-lg border transition-all ${config.activeLayerIndex === idx ? 'bg-sky-900/20 border-sky-500/30' : 'bg-slate-800/30 border-white/5'}`}>
                          <div className="flex items-center gap-2 w-full">
-                            <InfoTooltip label={t('Active Plane Selector')} description={getDescription('Active Plane Selector', t)}>
+                           <InfoTooltip label={t('Active Plane Selector')} description={getDescription('Active Plane Selector', t)}>
                               <input
                                 type="radio"
                                 checked={config.activeLayerIndex === idx}
@@ -2300,6 +2317,9 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                               t={t}
                             />
                             <div className="flex items-center gap-2 ml-auto">
+                                <span className={`text-[9px] font-black uppercase tracking-wide ${layer.enabled ? 'text-emerald-400' : 'text-slate-500'}`}>
+                                  {layer.enabled ? t('ON') : t('OFF')}
+                                </span>
                                 <div className="shrink-0 flex items-center">
                                   <label className="cursor-pointer" title={layer.enabled ? t('Visible') : t('Hidden')}>
                                     <div className={`w-7 h-4 rounded-full border transition-colors relative ${layer.enabled ? 'bg-emerald-600/20 border-emerald-500/50' : 'bg-slate-800 border-white/10'}`}>
@@ -2315,23 +2335,19 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                     />
                                   </label>
                                 </div>
-                                {layer.enabled && (
-                                    <div className="flex items-center gap-2 px-2 border-r border-white/5 mr-1">
-                                        <button onClick={() => onExport2D?.(idx, 'svg')} className="text-[10px] font-bold text-sky-500 hover:text-sky-400 underline decoration-sky-500/30 hover:decoration-sky-400 underline-offset-2 transition-all">SVG</button>
-                                        <button onClick={() => onExport2D?.(idx, 'dxf')} className="text-[10px] font-bold text-sky-500 hover:text-sky-400 underline decoration-sky-500/30 hover:decoration-sky-400 underline-offset-2 transition-all">DXF</button>
-                                    </div>
-                                )}
                                 <ExportMenu
-                                   label={t('Export')}
-                                   onExportSTL={(q) => onExportLayerSTL(idx, q)}
-                                   isLoading={exportLoading}
-                                   t={t}
-                                   disabled={!layer.enabled}
-                                   className="w-24 h-7 shrink-0"
-                                   baseColor="bg-slate-700"
-                                   direction="down"
-                                   show2D={false}
-                                   shortcut={getLayerShortcut(idx)}
+                                  label={t('Export')}
+                                  onExportSTL={(q) => onExportLayerSTL(idx, q)}
+                                  onExport2D={(format) => onExport2D?.(idx, format)}
+                                  isLoading={exportLoading}
+                                  t={t}
+                                  disabled={!layer.enabled}
+                                  className="w-[5.5rem] h-7 shrink-0"
+                                  baseColor="bg-slate-700"
+                                  direction="down"
+                                  show2D={true}
+                                  shortcut={getLayerShortcut(idx)}
+                                  compact={true}
                                 />
                             </div>
                          </div>

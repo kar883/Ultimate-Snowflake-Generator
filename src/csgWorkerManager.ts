@@ -97,10 +97,29 @@ function processNext() {
   }
 }
 
-export function postCSGJob(base: any, slots: any[], rotation: any): Promise<any> {
+export function postCSGJob(base: any, slots: any[], rotation: any, signal?: AbortSignal): Promise<any> {
+  if (signal?.aborted) return Promise.reject(new DOMException('CSG job aborted before queuing', 'AbortError'));
   const payload: CSGPayload = { base, slots, rotation: { ...(rotation || {}), __enqueueAt: Date.now() } };
   return new Promise((resolve, reject) => {
-    QUEUE.push({ payload, resolve, reject });
+    if (signal?.aborted) { reject(new DOMException('CSG job aborted', 'AbortError')); return; }
+    const onAbort = () => {
+      // Remove from queue if not yet dispatched
+      const idx = QUEUE.findIndex(j => j.resolve === resolve);
+      if (idx !== -1) {
+        QUEUE.splice(idx, 1);
+        reject(new DOMException('CSG job aborted', 'AbortError'));
+      } else {
+        // Already dispatched to worker — reject now; worker result will be discarded
+        reject(new DOMException('CSG job aborted', 'AbortError'));
+      }
+      signal!.removeEventListener('abort', onAbort);
+    };
+    signal?.addEventListener('abort', onAbort);
+    QUEUE.push({
+      payload,
+      resolve: (v: any) => { signal?.removeEventListener('abort', onAbort); resolve(v); },
+      reject: (e: any) => { signal?.removeEventListener('abort', onAbort); reject(e); },
+    });
     if (!busy) processNext();
   });
 }
