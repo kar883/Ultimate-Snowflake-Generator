@@ -438,20 +438,9 @@ function findConnectedBodies(geo: THREE.BufferGeometry): {
 }
 
 // Build per-vertex colour attribute.
-// The largest connected body gets the design color; each isolated floating body
-// gets a stark, high-contrast color so it's immediately obvious.
-const FLOAT_PALETTE = [
-  '#ff1744', // red
-  '#ffea00', // yellow
-  '#00e676', // green
-  '#e040fb', // purple
-  '#ff6d00', // orange
-  '#00b0ff', // light blue
-  '#f50057', // pink
-  '#76ff03', // lime
-  '#1de9b6', // teal
-  '#ff9100', // amber
-];
+// The largest connected body keeps the design color; all floating bodies share
+// one highlight color for a clear binary visual signal.
+const FLOAT_HIGHLIGHT_COLOR = '#f97316';
 
 function buildBodyColors(
   geo: THREE.BufferGeometry,
@@ -467,13 +456,12 @@ function buildBodyColors(
   let mainBody = 0;
   for (let b = 1; b < bodyCount; b++) if (sizes[b] > sizes[mainBody]) mainBody = b;
 
-  // Map: main body → design color, all others → distinct stark palette colors
+  // Map: main body -> design color, all others -> one floating highlight color
   const bodyToColor = new Array<THREE.Color>(bodyCount);
   const mainCol = new THREE.Color(designColor);
-  const pal = FLOAT_PALETTE.map(h => new THREE.Color(h));
-  let slot = 0;
+  const floatCol = new THREE.Color(FLOAT_HIGHLIGHT_COLOR);
   for (let b = 0; b < bodyCount; b++) {
-    bodyToColor[b] = (b === mainBody) ? mainCol : pal[slot++ % pal.length];
+    bodyToColor[b] = (b === mainBody) ? mainCol : floatCol;
   }
 
   const arr = new Float32Array(posCount * 3);
@@ -863,7 +851,7 @@ interface Snowflake3DProps {
     onProgress: (p: number) => void,
     overrideQuality?: DesignQuality,
     overrideConfig?: SnowflakeConfig,
-    generationMode?: 'preview' | 'export' | 'validation'
+    generationMode?: 'preview' | 'export' | 'validation' | 'refresh'
   ) => Promise<THREE.Group>;
   color: string;
   undo?: () => void;
@@ -873,6 +861,9 @@ interface Snowflake3DProps {
   initialDiameter?: number;
   shortcuts?: ShortcutConfig;
   isVisible: boolean;
+  identifyBodiesMode?: boolean;
+  onFloatingBodiesChange?: (floatingByLayer: Record<string, boolean>) => void;
+  emergencyStopSeq?: number;
 }
 
 // Worker code at module scope — array of lines avoids Babel TSX template-literal parsing.
@@ -963,42 +954,93 @@ const BODIES_WORKER_CODE = [
   "        [origBody.buffer,colorArr.buffer]); return;",
   "    }",
   "",
-  "    // ------------ Step 3: Check for shared vertices (physical connection) ------",
-  "    // Two bodies are connected if they share any deduplicated (canonical) vertices.",
-  "    // This correctly identifies touching/overlapping geometry.",
-  "    const bodyCanonVerts = Array.from({length:rawCount},()=>new Set());",
-  "    const bodyEdges = Array.from({length:rawCount},()=>new Set());",
+  "    // ------------ Step 3: geometric overlap/touch merge in projected 2D ------",
+  "    // Shared edges are too strict for extruded text meshes; two glyph parts can",
+  "    // physically touch/overlap without reusing identical triangle edges.",
+  "    // For rotated planes (cross/tilt), XY projection can collapse geometry, so",
+  "    // pick the best projection plane (largest spread area) per mesh.",
+  "",
+  "    let minX=Infinity,minY=Infinity,minZ=Infinity,maxX=-Infinity,maxY=-Infinity,maxZ=-Infinity;",
   "    for(let i=0;i<origCount;i++){",
-  "      const b=origBody[i];",
-  "      const cv=posToCanon[i];",
-  "      bodyCanonVerts[b].add(cv);",
+  "      const x=positions[i*3], y=positions[i*3+1], z=positions[i*3+2];",
+  "      if(x<minX)minX=x; if(y<minY)minY=y; if(z<minZ)minZ=z;",
+  "      if(x>maxX)maxX=x; if(y>maxY)maxY=y; if(z>maxZ)maxZ=z;",
   "    }",
-  "    // Build edge list per body: for each triangle, add its three edges",
+  "    const ranges=[maxX-minX,maxY-minY,maxZ-minZ];",
+  "    let a0=0,a1=1;",
+  "    for(let i=0;i<3;i++){",
+  "      for(let j=i+1;j<3;j++){",
+  "        if(ranges[i]*ranges[j] > ranges[a0]*ranges[a1]){ a0=i; a1=j; }",
+  "      }",
+  "    }",
+  "    const getU = (idx) => positions[idx*3 + a0];",
+  "    const getV = (idx) => positions[idx*3 + a1];",
+  "",
+  "    // Build per-body triangle projected buffers and AABBs",
+  "    const bodyTris = Array.from({length:rawCount},()=>[]);",
+  "    const bodyAabb = Array.from({length:rawCount},()=>({minU:Infinity,minV:Infinity,maxU:-Infinity,maxV:-Infinity}));",
   "    for(let t=0;t<triCount;t++){",
-  "      const a=posToCanon[vi(t,0)], b_v=posToCanon[vi(t,1)], c=posToCanon[vi(t,2)];",
+  "      const oa=vi(t,0), ob=vi(t,1), oc=vi(t,2);",
+  "      const a=posToCanon[oa], b_v=posToCanon[ob], c=posToCanon[oc];",
   "      if(a===b_v || b_v===c || a===c) continue;",
-  "      const b=origBody[vi(t,0)];",
-  "      // Create edge hashes (order-invariant)",
-  "      const e1=a<b_v ? a+','+b_v : b_v+','+a;",
-  "      const e2=b_v<c ? b_v+','+c : c+','+b_v;",
-  "      const e3=a<c ? a+','+c : c+','+a;",
-  "      bodyEdges[b].add(e1); bodyEdges[b].add(e2); bodyEdges[b].add(e3);",
+  "      const body = origBody[oa];",
+  "      const au=getU(oa), av=getV(oa);",
+  "      const bu=getU(ob), bv=getV(ob);",
+  "      const cu=getU(oc), cv=getV(oc);",
+  "      bodyTris[body].push(au,av,bu,bv,cu,cv);",
+  "      const bb = bodyAabb[body];",
+  "      if(au<bb.minU) bb.minU=au; if(av<bb.minV) bb.minV=av;",
+  "      if(bu<bb.minU) bb.minU=bu; if(bv<bb.minV) bb.minV=bv;",
+  "      if(cu<bb.minU) bb.minU=cu; if(cv<bb.minV) bb.minV=cv;",
+  "      if(au>bb.maxU) bb.maxU=au; if(av>bb.maxV) bb.maxV=av;",
+  "      if(bu>bb.maxU) bb.maxU=bu; if(bv>bb.maxV) bb.maxV=bv;",
+  "      if(cu>bb.maxU) bb.maxU=cu; if(cv>bb.maxV) bb.maxV=cv;",
   "    }",
   "",
-  "    // ------------ Step 4: Union-Find merge on shared edges ------",
+  "    const pointInBody = (pu,pv,body)=>{",
+  "      const bb = bodyAabb[body];",
+  "      const eps = 1e-4;",
+  "      if(pu < bb.minU - eps || pu > bb.maxU + eps || pv < bb.minV - eps || pv > bb.maxV + eps) return false;",
+  "      const tris = bodyTris[body];",
+  "      for(let i=0;i<tris.length;i+=6){",
+  "        if(ptInTri2D(pu,pv,tris[i],tris[i+1],tris[i+2],tris[i+3],tris[i+4],tris[i+5])) return true;",
+  "      }",
+  "      return false;",
+  "    };",
+  "",
+  "    // ------------ Step 4: Union-Find merge on geometric contact ------",
   "    const parent=Int32Array.from({length:rawCount},(_,i)=>i);",
   "    const find=x=>{while(parent[x]!==x){parent[x]=parent[parent[x]];x=parent[x];}return x;};",
   "    const union=(a,b)=>{a=find(a);b=find(b);if(a!==b)parent[a]=b;};",
   "",
+  "    const SAMPLE_STRIDE = 4;",
   "    for(let a=0;a<rawCount;a++){",
-  "      const aEdges=bodyEdges[a];",
+  "      const aTris = bodyTris[a];",
+  "      if(aTris.length===0) continue;",
   "      for(let b=a+1;b<rawCount;b++){",
   "        if(find(a)===find(b)) continue;",
-  "        const bEdges=bodyEdges[b];",
-  "        // Check if the two bodies share any edges (which means they touch)",
-  "        let sharesEdge=false;",
-  "        for(const e of aEdges){if(bEdges.has(e)){sharesEdge=true;break;}}",
-  "        if(sharesEdge) union(a,b);",
+  "        const bbA = bodyAabb[a], bbB = bodyAabb[b];",
+  "        const overlap = !(bbA.maxU < bbB.minU || bbB.maxU < bbA.minU || bbA.maxV < bbB.minV || bbB.maxV < bbA.minV);",
+  "        if(!overlap) continue;",
+  "",
+  "        let touching = false;",
+  "",
+  "        for(let i=0;i<aTris.length;i+=6*SAMPLE_STRIDE){",
+  "          const pu=(aTris[i]+aTris[i+2]+aTris[i+4])/3;",
+  "          const pv=(aTris[i+1]+aTris[i+3]+aTris[i+5])/3;",
+  "          if(pointInBody(pu,pv,b)){ touching=true; break; }",
+  "        }",
+  "",
+  "        if(!touching){",
+  "          const bTris = bodyTris[b];",
+  "          for(let i=0;i<bTris.length;i+=6*SAMPLE_STRIDE){",
+  "            const pu=(bTris[i]+bTris[i+2]+bTris[i+4])/3;",
+  "            const pv=(bTris[i+1]+bTris[i+3]+bTris[i+5])/3;",
+  "            if(pointInBody(pu,pv,a)){ touching=true; break; }",
+  "          }",
+  "        }",
+  "",
+  "        if(touching) union(a,b);",
   "      }",
   "    }",
   "",
@@ -1024,17 +1066,17 @@ const BODIES_WORKER_CODE = [
   "};",
   "",
   "function buildBodyColors(bpv,bodyCount,designColor,origCount){",
-  "  const PALETTE=['#ff1744','#ffea00','#00e676','#e040fb','#ff6d00',",
-  "                 '#00b0ff','#f50057','#76ff03','#1de9b6','#ff9100'];",
+  "  const FLOAT_COLOR='#f97316';",
   "  const hexToRgb=h=>{const n=parseInt(h.replace('#',''),16);",
   "    return[(n>>16&255)/255,(n>>8&255)/255,(n&255)/255];};",
   "  const sizes=new Int32Array(bodyCount);",
   "  for(let i=0;i<origCount;i++) if(bpv[i]>=0&&bpv[i]<bodyCount) sizes[bpv[i]]++;",
   "  let mainBody=0;",
   "  for(let b=1;b<bodyCount;b++) if(sizes[b]>sizes[mainBody]) mainBody=b;",
-  "  const colors=[];let slot=0;",
+  "  const colors=[];",
+  "  const floatRgb=hexToRgb(FLOAT_COLOR);",
   "  for(let b=0;b<bodyCount;b++)",
-  "    colors.push(b===mainBody?hexToRgb(designColor):hexToRgb(PALETTE[slot++%PALETTE.length]));",
+  "    colors.push(b===mainBody?hexToRgb(designColor):floatRgb);",
   "  const arr=new Float32Array(origCount*3);",
   "  for(let i=0;i<origCount;i++){",
   "    const idx=bpv[i]>=0&&bpv[i]<bodyCount?bpv[i]:0;",
@@ -1051,6 +1093,9 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   config, generateMesh, color,
   undo, redo, canUndo, canRedo,
   initialDiameter, isVisible,
+  identifyBodiesMode = false,
+  onFloatingBodiesChange,
+  emergencyStopSeq = 0,
 }) => {
   const generateMeshRef = useRef(generateMesh);
   const containerRef  = useRef<HTMLDivElement>(null);
@@ -1082,9 +1127,13 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   const [isGizmoDragging, setIsGizmoDragging] = useState(false);
   const [conflictCount, setConflictCount] = useState(0);
   const [showSlotDebug, setShowSlotDebug] = useState(true);
-  // const [bodyMode, setBodyMode] = useState(false);
+  const [isAnalyzingBodies, setIsAnalyzingBodies] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
-  // const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const prevRefreshKeyRef = useRef(0);
+  const hardStopTokenRef = useRef(0);
+  const bodiesWorkersRef = useRef<Worker[]>([]);
+  const bodiesAnalysisTokenRef = useRef(0);
+  const runBodiesAnalysisRef = useRef<() => void>(() => {});
   // Bump this counter to trigger applyAppearance after worker completes
   // const [bodyResultKey, setBodyResultKey] = useState(0);
 
@@ -1498,15 +1547,16 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
         return;
       }
 
-      // Standard appearance (ID Bodies disabled)
+      // Standard appearance (or floating-body color mode when enabled)
+      const hasBodyColors = identifyBodiesMode && !!(child.geometry as THREE.BufferGeometry).getAttribute('color');
       const ghost = planeTransparencyEnabled[lid] ?? false;
       const baseColor = new THREE.Color(color || '#38bdf8');
       const accentEmissive = baseColor.clone().multiplyScalar(0.35);
       const mat = new THREE.MeshStandardMaterial({
-        vertexColors:     false,
-        color:            baseColor,
-        emissive:         accentEmissive,
-        emissiveIntensity: 0.015,
+        vertexColors:     hasBodyColors,
+        color:            hasBodyColors ? new THREE.Color(0xffffff) : baseColor,
+        emissive:         hasBodyColors ? new THREE.Color(0x000000) : accentEmissive,
+        emissiveIntensity: hasBodyColors ? 0 : 0.015,
         metalness:        0.14,
         roughness:        0.52,
         envMapIntensity:  0.36,
@@ -1518,116 +1568,167 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
       child.material = mat;
     });
     syncMiniModel();
-  }, [planeVisibility, planeTransparency, planeTransparencyEnabled, color, showSlotDebug, syncMiniModel]);
+  }, [planeVisibility, planeTransparency, planeTransparencyEnabled, color, showSlotDebug, syncMiniModel, identifyBodiesMode]);
 
   useEffect(() => { applyAppearance(); },
     [planeVisibility, planeTransparency, planeTransparencyEnabled, showSlotDebug, applyAppearance]);
 
-  // Stable ref to the launch function so it can be called from both
-  // the bodyMode toggle effect and the mesh load effect without stale closures.
-  // const launchBodiesWorkerRef = useRef<(() => void) | null>(null);
+  // Keep a stable ref to the latest appearance applier so async mesh loads
+  // never apply stale visibility/transparency state captured by an older render.
+  const applyAppearanceRef = useRef(applyAppearance);
+  useEffect(() => {
+    applyAppearanceRef.current = applyAppearance;
+  }, [applyAppearance]);
 
-  /*
-  const runBodiesWorker = useCallback(() => {
-    if (!meshGroupRef.current) return;
+  const terminateBodiesWorkers = useCallback(() => {
+    bodiesWorkersRef.current.forEach((worker) => worker.terminate());
+    bodiesWorkersRef.current = [];
+  }, []);
 
-    // Terminate any previous run
-    if (bodiesWorkerRef.current) {
-      bodiesWorkerRef.current.terminate();
-      bodiesWorkerRef.current = null;
+  const clearFloatingBodyHighlights = useCallback((notify = true) => {
+    if (meshGroupRef.current) {
+      meshGroupRef.current.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        if (!child.userData.layerId || child.userData.slotDebug) return;
+        const geo = child.geometry as THREE.BufferGeometry;
+        if (geo.getAttribute('color')) {
+          geo.deleteAttribute('color');
+        }
+        child.userData.hasFloatingBodies = false;
+      });
+      applyAppearanceRef.current();
+    }
+    if (notify) onFloatingBodiesChange?.({});
+  }, [onFloatingBodiesChange]);
+
+  const runBodiesAnalysis = useCallback(() => {
+    if (!meshGroupRef.current) {
+      onFloatingBodiesChange?.({});
+      return;
     }
 
+    const token = ++bodiesAnalysisTokenRef.current;
+    terminateBodiesWorkers();
+
     const meshes: THREE.Mesh[] = [];
-    meshGroupRef.current.traverse(child => {
-      if (child instanceof THREE.Mesh && child.userData.layerId) meshes.push(child);
+    meshGroupRef.current.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (!child.userData.layerId || child.userData.slotDebug) return;
+      meshes.push(child);
     });
-    if (meshes.length === 0) return;
 
-    meshes.forEach(mesh => {
-      const geo = mesh.geometry;
-      const posAttr = geo.attributes.position;
-      const idxAttr = geo.index;
-      if (!posAttr) return;
+    if (meshes.length === 0) {
+      onFloatingBodiesChange?.({});
+      setIsAnalyzingBodies(false);
+      return;
+    }
 
-      const positions = new Float32Array(posAttr.array);
-      const indices = idxAttr
-        ? (idxAttr.array instanceof Uint16Array
-            ? new Uint32Array(idxAttr.array)
-            : new Uint32Array(idxAttr.array))
-        : null;
+    setIsAnalyzingBodies(true);
+    const floatingByLayer: Record<string, boolean> = {};
 
-      const workerCode = BODIES_WORKER_CODE;
-      const blob = new Blob([workerCode], { type: 'application/javascript' });
-      const url  = URL.createObjectURL(blob);
+    const jobs = meshes.map((mesh) => new Promise<void>((resolve) => {
+      const geo = mesh.geometry as THREE.BufferGeometry;
+      const posAttr = geo.attributes.position as THREE.BufferAttribute | undefined;
+      if (!posAttr) {
+        mesh.userData.hasFloatingBodies = false;
+        resolve();
+        return;
+      }
+
+      const idxAttr = geo.index as THREE.BufferAttribute | null;
+      const positions = new Float32Array(posAttr.array as ArrayLike<number>);
+      const indices = idxAttr ? new Uint32Array(idxAttr.array as ArrayLike<number>) : null;
+
+      const blob = new Blob([BODIES_WORKER_CODE], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
       const worker = new Worker(url);
-      bodiesWorkerRef.current = worker;
-      setIsAnalyzing(true);
-      console.log(`[ID Bodies] Worker started. Mesh: ${mesh.name}, verts: ${positions.length/3}, indices: ${indices ? indices.length/3 : 'none'} tris`);
+      bodiesWorkersRef.current.push(worker);
 
-      worker.onmessage = (ev) => {
+      const cleanup = () => {
         URL.revokeObjectURL(url);
-        setIsAnalyzing(false);
-        bodiesWorkerRef.current = null;
-        if (!ev.data.success) {
-          console.warn('[ID Bodies] Worker error:', ev.data.error);
-          return;
-        }
-        const { bodyPerVertex: bpv, bodyCount: bc, colorArr } = ev.data;
-        console.log(`[ID Bodies] Result: bodyCount=${bc}, colorArr length=${colorArr?.length}`);
-        mesh.userData.bodyPerVertex = bpv;
-        mesh.userData.bodyCount     = bc;
-        mesh.userData.bfsAnalysed   = true;
-        if (bc > 1) {
-          mesh.geometry.setAttribute('color', new THREE.BufferAttribute(colorArr, 3));
-          mesh.geometry.attributes.color.needsUpdate = true;
-          console.log(`[ID Bodies] Set vertex colors on geometry. bc=${bc}`);
-        } else {
-          console.log(`[ID Bodies] Only 1 body found — no color change needed`);
-        }
-        setBodyResultKey(k => k + 1);
+        worker.terminate();
+        bodiesWorkersRef.current = bodiesWorkersRef.current.filter((w) => w !== worker);
       };
 
-      worker.onerror = (err) => {
-        URL.revokeObjectURL(url);
-        setIsAnalyzing(false);
-        bodiesWorkerRef.current = null;
-        console.warn('Bodies worker failed:', err);
-        mesh.userData.bodyCount   = 1;
-        mesh.userData.bfsAnalysed = true;
-        setBodyResultKey(k => k + 1);
+      worker.onmessage = (ev) => {
+        cleanup();
+        if (token !== bodiesAnalysisTokenRef.current) {
+          resolve();
+          return;
+        }
+
+        const { success, bodyCount, colorArr } = ev.data || {};
+        const layerId = String(mesh.userData.layerId ?? '');
+        const isFloating = !!success && typeof bodyCount === 'number' && bodyCount > 1;
+
+        mesh.userData.hasFloatingBodies = isFloating;
+        if (layerId) {
+          floatingByLayer[layerId] = (floatingByLayer[layerId] ?? false) || isFloating;
+        }
+
+        if (isFloating && colorArr?.length === posAttr.count * 3) {
+          geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colorArr), 3));
+          geo.attributes.color.needsUpdate = true;
+        } else if (geo.getAttribute('color')) {
+          geo.deleteAttribute('color');
+        }
+
+        resolve();
+      };
+
+      worker.onerror = () => {
+        cleanup();
+        if (token === bodiesAnalysisTokenRef.current) {
+          mesh.userData.hasFloatingBodies = false;
+          if ((mesh.geometry as THREE.BufferGeometry).getAttribute('color')) {
+            (mesh.geometry as THREE.BufferGeometry).deleteAttribute('color');
+          }
+        }
+        resolve();
       };
 
       const transferList: Transferable[] = [positions.buffer];
       if (indices) transferList.push(indices.buffer);
       worker.postMessage({ positions, indices, designColor: color || '#38bdf8' }, transferList);
+    }));
+
+    Promise.allSettled(jobs).then(() => {
+      if (token !== bodiesAnalysisTokenRef.current) return;
+      setIsAnalyzingBodies(false);
+      onFloatingBodiesChange?.(floatingByLayer);
+      applyAppearanceRef.current();
     });
-  }, [color]);
-  */
+  }, [color, onFloatingBodiesChange, terminateBodiesWorkers]);
 
-  // Keep the ref up to date so the mesh load effect can call the latest version
-  // launchBodiesWorkerRef.current = runBodiesWorker;
-
-  // Fire when bodyMode turns on
-  /*
   useEffect(() => {
-    if (bodyMode) runBodiesWorker();
-    else {
-      // Cancel any running analysis when turning off
-      if (bodiesWorkerRef.current) {
-        bodiesWorkerRef.current.terminate();
-        bodiesWorkerRef.current = null;
-        // setIsAnalyzing(false);
-      }
+    runBodiesAnalysisRef.current = runBodiesAnalysis;
+  }, [runBodiesAnalysis]);
+
+  useEffect(() => {
+    if (identifyBodiesMode) {
+      runBodiesAnalysisRef.current();
+    } else {
+      bodiesAnalysisTokenRef.current += 1;
+      terminateBodiesWorkers();
+      setIsAnalyzingBodies(false);
+      clearFloatingBodyHighlights();
     }
-  }, []);//[bodyMode, runBodiesWorker]);
-  */
+  }, [identifyBodiesMode, terminateBodiesWorkers, clearFloatingBodyHighlights]);
 
-  // Terminate worker on unmount
-  /*
   useEffect(() => {
-    return () => { bodiesWorkerRef.current?.terminate(); };
-  }, []);
-  */
+    return () => {
+      bodiesAnalysisTokenRef.current += 1;
+      terminateBodiesWorkers();
+    };
+  }, [terminateBodiesWorkers]);
+
+  useEffect(() => {
+    hardStopTokenRef.current += 1;
+    bodiesAnalysisTokenRef.current += 1;
+    terminateBodiesWorkers();
+    setIsAnalyzingBodies(false);
+    setLoading(false);
+  }, [emergencyStopSeq, terminateBodiesWorkers]);
 
   // ── Three.js scene (runs once) ───────────────────────────────────────────
   useEffect(() => {
@@ -1740,13 +1841,17 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
+      const loadToken = hardStopTokenRef.current;
+      const isForcedRefresh = refreshKey !== prevRefreshKeyRef.current;
+      prevRefreshKeyRef.current = refreshKey;
       setLoading(true);
       setConflictCount(0);
       try {
-        const generatedGroup = await generateMeshRef.current(() => {}, undefined, config, 'preview');
+        const mode: 'preview' | 'refresh' = isForcedRefresh ? 'refresh' : 'preview';
+        const generatedGroup = await generateMeshRef.current(() => {}, undefined, config, mode);
         // Keep cached/export geometry immutable by operating on a preview clone.
         const groupFromGenerator = generatedGroup.clone(true);
-        if (cancelled || !sceneRef.current) return;
+        if (cancelled || loadToken !== hardStopTokenRef.current || !sceneRef.current) return;
 
         if (meshGroupRef.current) {
           sceneRef.current.remove(meshGroupRef.current);
@@ -1888,13 +1993,18 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
 
         sceneRef.current.add(groupFromGenerator);
         meshGroupRef.current = groupFromGenerator;
-        // Apply current appearance state after a short defer
-        setTimeout(() => {
-          applyAppearance();
-          // If body mode is already on, re-run analysis against the new mesh
-          // if (bodyMode) launchBodiesWorkerRef.current?.();
-        }, 50);
+        // Apply the latest appearance state (not a stale closure captured at
+        // effect start) so plane visibility remains accurate after regen.
+        applyAppearanceRef.current();
+        if (identifyBodiesMode) {
+          runBodiesAnalysisRef.current();
+        }
+        // If body mode is already on, re-run analysis against the new mesh
+        // if (bodyMode) launchBodiesWorkerRef.current?.();
       } catch (err) {
+        if ((err as any)?.name === 'AbortError') {
+          return;
+        }
         console.error('Snowflake3D: mesh gen failed', err);
       } finally {
         if (!cancelled) setLoading(false);
@@ -2056,36 +2166,11 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
           </button>
         </div>
 
-        {/* ID Bodies button DISABLED - needs complete rewrite
-        <button
-          onClick={() => setBodyMode(b => !b)}
-          title={bodyMode
-            ? 'Exit body mode (show normal snowflake)'
-            : 'Identify disconnected mesh bodies (useful for 3D printing diagnostics)'}
-          className={`px-3 py-2 rounded-lg font-black text-[10px] uppercase transition-all flex items-center gap-2 min-w-[120px] justify-center ${
-            bodyMode
-              ? 'bg-sky-500 text-white shadow-lg shadow-sky-500/25'
-              : 'bg-slate-800 text-slate-300 hover:bg-slate-700 border border-white/10'
-          }`}
-        >
-          {isAnalyzing ? (
-            <>
-              <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
-              <span>Analyzing…</span>
-            </>
-          ) : (
-            <>
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <rect x="1" y="1" width="6" height="6" rx="1" fill={bodyMode ? '#ef4444' : '#64748b'} opacity="0.95" />
-                <rect x="9" y="1" width="6" height="6" rx="1" fill={bodyMode ? '#22c55e' : '#64748b'} opacity="0.95" />
-                <rect x="1" y="9" width="6" height="6" rx="1" fill={bodyMode ? '#60a5fa' : '#64748b'} opacity="0.95" />
-                <rect x="9" y="9" width="6" height="6" rx="1" fill={bodyMode ? '#fbbf24' : '#64748b'} opacity="0.95" />
-              </svg>
-              {bodyMode ? 'Bodies ON' : 'ID Bodies'}
-            </>
-          )}
-        </button>
-        */}
+        {isAnalyzingBodies && (
+          <div className="px-3 py-1.5 rounded-lg text-[10px] font-black uppercase bg-slate-900/85 text-sky-300 border border-white/10 shadow-xl">
+            Analyzing Bodies...
+          </div>
+        )}
       </div>
     </div>
   );

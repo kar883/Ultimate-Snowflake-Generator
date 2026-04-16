@@ -575,31 +575,13 @@ const CutSlotsMenu: React.FC<{
     }
   }, [isOpen, updatePosition]);
 
-  const ensureMinEnabled = (mode: '2-plane' | '3-plane') => {
-    const required = mode === '3-plane' ? 3 : 2;
-    const enabledCount = config.layers.filter(l => l.enabled).length;
-    if (enabledCount >= required) return config.layers;
-
-    const nextLayers = [...config.layers];
-    for (let i = 0; i < nextLayers.length && nextLayers.filter(l => l.enabled).length < required; i++) {
-      nextLayers[i] = { ...nextLayers[i], enabled: true };
-    }
-    return nextLayers;
-  };
-
   const handleToggle = () => {
     const nextEnabled = !config.slotEnabled;
-    if (nextEnabled) {
-      const layers = ensureMinEnabled(config.slotMode);
-      onUpdate({ slotEnabled: true, layers }, true);
-    } else {
-      onUpdate({ slotEnabled: false }, true);
-    }
+    onUpdate({ slotEnabled: nextEnabled }, true);
   };
 
   const handleModeChange = (mode: '2-plane' | '3-plane') => {
-    const layers = config.slotEnabled ? ensureMinEnabled(mode) : config.layers;
-    onUpdate({ slotMode: mode, layers }, true);
+    onUpdate({ slotMode: mode }, true);
   };
 
   return (

@@ -41,6 +41,7 @@ interface SnowflakePreviewProps {
   calculatedDiameter?: number;
   shortcuts?: ShortcutConfig;
   fontsPreloaded?: boolean;
+  identifyBodiesMode?: boolean;
 }
 
 const seededRandom = (seed: number) => {
@@ -52,7 +53,7 @@ const seededRandom = (seed: number) => {
 };
 
 const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
-  config, globalColor, globalBevel, globalBevelAmount, slotEnabled, slotLength, slotWidth, svgRef, dynamicFonts, undo, redo, canUndo, canRedo, calculatedDiameter, shortcuts, fontsPreloaded
+  config, globalColor, globalBevel, globalBevelAmount, slotEnabled, slotLength, slotWidth, svgRef, dynamicFonts, undo, redo, canUndo, canRedo, calculatedDiameter, shortcuts, fontsPreloaded, identifyBodiesMode = false
 }) => {
   const { t } = useTranslation(config.language || 'en');
   // Use a ref for the font cache so loading a font never triggers an infinite
@@ -88,6 +89,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   // const { rotatedPaths, isRotating, rotateSvg } = useSvgRotationWorker();
 
   const modelDiameter = calculatedDiameter || 200;
+  const floatingColor = '#f97316';
 
   const isDragging = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
@@ -313,7 +315,11 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
       const fontName = group.fontFamily.replace(/'/g, '').split(',')[0].trim();
       const font = fonts[fontName];
 
-      const buildSvgInstances = (pathData: string | null, fallback = false) => {
+      const buildSvgInstances = (
+        pathData: string | null,
+        fallback = false,
+        glyphPaths?: Array<{ d: string; floating: boolean }>
+      ) => {
         const angleStep = 360 / group.arms;
         const instances = [] as React.ReactNode[];
         for (let i = 0; i < group.arms; i++) {
@@ -357,6 +363,46 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
                 </g>
               );
             }
+          } else if (glyphPaths && glyphPaths.length > 0) {
+            const strokeWidth = Math.max(0.5, (config.globalStrokeWeight || 0) + (group.thickness || 0));
+            instances.push(
+              <g key={`arm-${i}`} transform={transform}>
+                {glyphPaths.map((glyphPath, gi) => {
+                  const glyphColor = glyphPath.floating ? floatingColor : color;
+                  return (
+                    <path
+                      key={`g-${gi}`}
+                      d={glyphPath.d}
+                      fill={glyphColor}
+                      stroke={glyphColor}
+                      strokeWidth={strokeWidth}
+                      strokeLinejoin="round"
+                      strokeLinecap="round"
+                    />
+                  );
+                })}
+              </g>
+            );
+            if (group.mirrorEnabled) {
+              instances.push(
+                <g key={`arm-mirror-${i}`} transform={`rotate(${angle}) translate(${group.textX}, ${-group.mirrorOffset / 2}) scale(1, -1)`}>
+                  {glyphPaths.map((glyphPath, gi) => {
+                    const glyphColor = glyphPath.floating ? floatingColor : color;
+                    return (
+                      <path
+                        key={`mg-${gi}`}
+                        d={glyphPath.d}
+                        fill={glyphColor}
+                        stroke={glyphColor}
+                        strokeWidth={strokeWidth}
+                        strokeLinejoin="round"
+                        strokeLinecap="round"
+                      />
+                    );
+                  })}
+                </g>
+              );
+            }
           } else if (pathData) {
             const strokeWidth = Math.max(0.5, (config.globalStrokeWeight || 0) + (group.thickness || 0));
             instances.push(
@@ -377,19 +423,84 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
       };
 
       if (font) {
-        let d = '';
         const scale = group.fontSize / font.unitsPerEm;
         const glyphs = font.stringToGlyphs(group.text);
         let currentX = 0;
+        const glyphEntries: Array<{ d: string; minX: number; minY: number; maxX: number; maxY: number }> = [];
 
         glyphs.forEach((glyph, i) => {
           const offset = group.charOffsets[i] || { x: 0, y: 0 };
-          const path = glyph.getPath(currentX + offset.x, offset.y, group.fontSize);
-          d += path.toPathData(2) + ' ';
+          const glyphX = currentX + offset.x;
+          const glyphY = offset.y;
+          const path = glyph.getPath(glyphX, glyphY, group.fontSize);
+          const d = path.toPathData(2);
+
+          const bbox = glyph.getBoundingBox();
+          const minX = glyphX + (bbox.x1 * scale);
+          const minY = glyphY + (bbox.y1 * scale);
+          const maxX = glyphX + (bbox.x2 * scale);
+          const maxY = glyphY + (bbox.y2 * scale);
+
+          glyphEntries.push({ d, minX, minY, maxX, maxY });
           currentX += (glyph.advanceWidth * scale) + group.letterSpacing;
         });
 
-        textPaths = buildSvgInstances(d, false);
+        const floatingFlags = new Array(glyphEntries.length).fill(false);
+        if (identifyBodiesMode && glyphEntries.length > 1) {
+          const pad = Math.max(0.6, (config.globalStrokeWeight || 0) + (group.thickness || 0));
+          const adjacency: number[][] = Array.from({ length: glyphEntries.length }, () => []);
+
+          for (let a = 0; a < glyphEntries.length; a++) {
+            for (let b = a + 1; b < glyphEntries.length; b++) {
+              const A = glyphEntries[a];
+              const B = glyphEntries[b];
+              const overlaps = !(
+                A.maxX + pad < B.minX ||
+                B.maxX + pad < A.minX ||
+                A.maxY + pad < B.minY ||
+                B.maxY + pad < A.minY
+              );
+              if (overlaps) {
+                adjacency[a].push(b);
+                adjacency[b].push(a);
+              }
+            }
+          }
+
+          const compId = new Array(glyphEntries.length).fill(-1);
+          const compArea: number[] = [];
+          let compCount = 0;
+          for (let i = 0; i < glyphEntries.length; i++) {
+            if (compId[i] !== -1) continue;
+            const queue = [i];
+            compId[i] = compCount;
+            let q = 0;
+            let area = 0;
+            while (q < queue.length) {
+              const cur = queue[q++];
+              const g = glyphEntries[cur];
+              area += Math.max(0.0001, (g.maxX - g.minX) * (g.maxY - g.minY));
+              for (const nb of adjacency[cur]) {
+                if (compId[nb] === -1) {
+                  compId[nb] = compCount;
+                  queue.push(nb);
+                }
+              }
+            }
+            compArea[compCount] = area;
+            compCount++;
+          }
+
+          let mainComp = 0;
+          for (let c = 1; c < compArea.length; c++) {
+            if ((compArea[c] ?? 0) > (compArea[mainComp] ?? 0)) mainComp = c;
+          }
+          for (let i = 0; i < glyphEntries.length; i++) {
+            floatingFlags[i] = compId[i] !== mainComp;
+          }
+        }
+
+        textPaths = buildSvgInstances(null, false, glyphEntries.map((g, i) => ({ d: g.d, floating: floatingFlags[i] })));
       } else {
         // Font not loaded yet, use fallback text rendering silently
         textPaths = buildSvgInstances(null, true);

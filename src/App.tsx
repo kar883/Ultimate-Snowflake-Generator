@@ -25,7 +25,7 @@ import {
 } from './manifoldCSG';
 import { getTopologyReport } from './surgicalSlotRepair';
 import { fillSlotHoles } from './slotHoleFiller';
-import { postCSGJob } from './csgWorkerManager';
+import { postCSGJob, terminateWorker } from './csgWorkerManager';
 // @ts-ignore
 // import { fillHolesManifold } from './holeFillingRepair'; // Temporarily commented
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, /*makeSlotKey,*/ getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, /*slotCutCache,*/ makeUnderlineKey } from './geometryCache';
@@ -56,7 +56,7 @@ type ValidationScenarioResult = {
   meshes: MeshTopologyValidation[];
 };
 
-type MeshGenerationMode = 'preview' | 'export' | 'validation';
+type MeshGenerationMode = 'preview' | 'export' | 'validation' | 'refresh';
 
 const DEFAULT_SHORTCUTS: ShortcutConfig = {
     undo: { key: 'z', ctrlKey: true },
@@ -1740,30 +1740,6 @@ const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isEnabled 
   images: [],
 });
 
-// // ============================================================
-// // REPLACE calculateOptimalSlots in App.tsx
-// // (Re-enables automatic 3-plane mode switching)
-// // ============================================================
-
-// const calculateOptimalSlots = (layers: LayerConfig[]): LayerConfig[] => {
-//   const updatedLayers = JSON.parse(JSON.stringify(layers)) as LayerConfig[];
-//   const enabled = updatedLayers.filter(l => l.enabled);
-//   const count = enabled.length;
-//   if (count < 2) { console.warn('Need at least 2 enabled layers for slot calculation'); return updatedLayers; }
-//   if (count === 2) {
-//     enabled[0].rotation3D = { x: 0, y: 0 }; enabled[0].slotType = 'half-back';
-//     enabled[1].rotation3D = { x: 90, y: 0 }; enabled[1].slotType = 'half-front';
-//   } else if (count === 3) {
-//     enabled[0].rotation3D = { x: 0, y: 0 }; enabled[0].slotType = 'third-back';
-//     enabled[1].rotation3D = { x: 120, y: 0 }; enabled[1].slotType = 'third-middle';
-//     enabled[2].rotation3D = { x: 240, y: 0 }; enabled[2].slotType = 'third-front';
-//   } else {
-//     enabled.forEach((layer, index) => { const angle = (360 / count) * index; layer.rotation3D = { x: angle, y: 0 }; layer.slotType = 'custom'; });
-//   }
-//   return updatedLayers;
-// };
-
-
 const App: React.FC = () => {
   const defaultDepth = 3.0;
   const MAX_SLOT_CUT_CACHE_ENTRIES = 36;
@@ -1912,12 +1888,14 @@ const App: React.FC = () => {
   const [config, setConfig] = useState<SnowflakeConfig>(initialState);
   const [config3D, setConfig3D] = useState<SnowflakeConfig>(initialState);
   const [rendered3DConfig, setRendered3DConfig] = useState<SnowflakeConfig>(initialState);
-  // Guarded setter: skip update when config hash is unchanged (avoids full deepEqual on main thread).
-  const lastRendered3DHash = useRef<string>(hashConfig(initialState));
+  // Guarded setter based on full serialized config so 3D never misses updates.
+  const lastRendered3DSerialized = useRef<string>(JSON.stringify(initialState));
+  const emergencyStopSeqRef = useRef(0);
+  const [emergencyStopSeq, setEmergencyStopSeq] = useState(0);
   const setRendered3DIfChanged = useCallback((next: SnowflakeConfig) => {
-    const h = hashConfig(next);
-    if (h === lastRendered3DHash.current) return;
-    lastRendered3DHash.current = h;
+    const serialized = JSON.stringify(next);
+    if (serialized === lastRendered3DSerialized.current) return;
+    lastRendered3DSerialized.current = serialized;
     setRendered3DConfig(next);
   }, []);
   const [designDiameter, setDesignDiameter] = useState(0);
@@ -1938,6 +1916,12 @@ const App: React.FC = () => {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiProgress, setAiProgress] = useState(0);
   const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d');
+  const [identifyBodiesMode, setIdentifyBodiesMode] = useState(false);
+  const [floatingBodiesByLayer, setFloatingBodiesByLayer] = useState<Record<string, boolean>>({});
+  const anyFloatingBodies = useMemo(
+    () => Object.values(floatingBodiesByLayer).some(Boolean),
+    [floatingBodiesByLayer]
+  );
   const [dynamicFonts, setDynamicFonts] = useState<Record<string, string>>(FONT_TTF_URLS);
   const [fontsPreloaded, setFontsPreloaded] = useState(false);
 
@@ -2026,6 +2010,8 @@ const App: React.FC = () => {
   const slotCutInFlightRef = useRef<Map<string, Promise<THREE_ACTUAL.BufferGeometry>>>(new Map());
   const slotCutAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const slotCutIsPreviewRef = useRef<Map<string, boolean>>(new Map());
+  const tiltLayerSnapshotRef = useRef<LayerConfig | null>(null);
+  const tiltAutoManagedRef = useRef(false);
   const [isComputingSlots, setIsComputingSlots] = useState(false);
 
   const clearSlotCutResultCache = useCallback(() => {
@@ -2036,30 +2022,40 @@ const App: React.FC = () => {
     slotCutInFlightRef.current.clear();
   }, []);
 
-  const cancelAllSlotCuts = useCallback(() => {
+  const cancelAllSlotCuts = useCallback((options?: { includePreview?: boolean; terminateCSGWorker?: boolean }) => {
+    const includePreview = options?.includePreview ?? false;
     for (const [key, controller] of slotCutAbortControllersRef.current.entries()) {
-      // Only cancel non-preview slot cuts (full render / export operations)
       const isPreview = slotCutIsPreviewRef.current.get(key);
-      if (!isPreview) {
+      if (includePreview || !isPreview) {
         controller.abort();
       }
     }
+    if (options?.terminateCSGWorker) {
+      terminateWorker();
+    }
+    slotCutInFlightRef.current.clear();
     slotCutAbortControllersRef.current.clear();
     slotCutIsPreviewRef.current.clear();
     setIsComputingSlots(false);
   }, []);
+
+  const emergencyStopAllProcessing = useCallback(() => {
+    emergencyStopSeqRef.current += 1;
+    setEmergencyStopSeq((s) => s + 1);
+    cancelAllSlotCuts({ includePreview: true, terminateCSGWorker: true });
+  }, [cancelAllSlotCuts]);
 
   // Escape key handler to stop ongoing computation — placed after cancelAllSlotCuts is declared
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isComputingSlots) {
         e.preventDefault();
-        cancelAllSlotCuts();
+        emergencyStopAllProcessing();
       }
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [isComputingSlots, cancelAllSlotCuts]);
+  }, [isComputingSlots, emergencyStopAllProcessing]);
 
   const debouncedUpdate3D = useCallback((next: SnowflakeConfig) => {
     if (debounce150Timer.current) clearTimeout(debounce150Timer.current);
@@ -2377,7 +2373,94 @@ const App: React.FC = () => {
     }
 
     setConfig(prev => {
-      const next = { ...prev, ...updates };
+      let next = { ...prev, ...updates };
+
+      // Single authoritative slot-mode enforcement:
+      // - 2-plane => Base/Cross enabled, Tilt disabled, fixed mating orientation
+      // - 3-plane => Base/Cross/Tilt enabled, fixed mating orientation
+      // This replaces older UI-side "min enabled layers" behavior.
+      if (next.layers.length >= 3 && (next.slotEnabled || ('slotMode' in updates))) {
+        const shouldEnforceSlotPlanes =
+          ('slotMode' in updates) ||
+          ('slotEnabled' in updates) ||
+          ('layers' in updates);
+
+        if (shouldEnforceSlotPlanes) {
+          const layers = next.layers.map((layer) => ({
+            ...layer,
+            rotation3D: { ...layer.rotation3D },
+          }));
+
+          if (next.slotMode === '2-plane') {
+            if (!tiltAutoManagedRef.current) {
+              tiltLayerSnapshotRef.current = { ...layers[2], rotation3D: { ...layers[2].rotation3D } };
+            }
+            tiltAutoManagedRef.current = true;
+
+            layers[0] = {
+              ...layers[0],
+              enabled: true,
+              rotation3D: { ...layers[0].rotation3D, x: 0 },
+              slotType: 'half-back',
+            };
+            layers[1] = {
+              ...layers[1],
+              enabled: true,
+              rotation3D: { ...layers[1].rotation3D, x: 90 },
+              slotType: 'half-front',
+            };
+            layers[2] = {
+              ...layers[2],
+              enabled: false,
+            };
+
+            next = {
+              ...next,
+              layers,
+              activeLayerIndex: next.activeLayerIndex === 2 ? 1 : Math.min(next.activeLayerIndex, 1),
+            };
+          } else if (next.slotMode === '3-plane') {
+            layers[0] = {
+              ...layers[0],
+              enabled: true,
+              rotation3D: { ...layers[0].rotation3D, x: 0 },
+              slotType: 'third-back',
+            };
+            layers[1] = {
+              ...layers[1],
+              enabled: true,
+              rotation3D: { ...layers[1].rotation3D, x: 120 },
+              slotType: 'third-middle',
+            };
+
+            const restoredTilt = tiltAutoManagedRef.current && tiltLayerSnapshotRef.current
+              ? {
+                  ...layers[2],
+                  ...tiltLayerSnapshotRef.current,
+                  rotation3D: {
+                    ...layers[2].rotation3D,
+                    ...tiltLayerSnapshotRef.current.rotation3D,
+                  },
+                }
+              : layers[2];
+
+            layers[2] = {
+              ...restoredTilt,
+              enabled: true,
+              rotation3D: { ...restoredTilt.rotation3D, x: 240 },
+              slotType: 'third-front',
+            };
+
+            tiltAutoManagedRef.current = false;
+
+            next = {
+              ...next,
+              layers,
+              activeLayerIndex: Math.min(next.activeLayerIndex, 2),
+            };
+          }
+        }
+      }
 
       // IMPORTANT: cancel any queued background 3D updates so an older
       // snapshot cannot overwrite a newer visibility toggle (layer.enabled).
@@ -2522,6 +2605,13 @@ const App: React.FC = () => {
     generationMode: MeshGenerationMode = 'preview'
   ): Promise<THREE_ACTUAL.Group> => {
     const config = overrideConfig || rendered3DConfig;
+    const runSeq = emergencyStopSeqRef.current;
+    const ensureNotStopped = () => {
+      if (runSeq !== emergencyStopSeqRef.current) {
+        throw new DOMException('Generation aborted by emergency stop', 'AbortError');
+      }
+    };
+    ensureNotStopped();
 
     // Full-config cache key — any property change invalidates the cache.
     // Previously used a partial key that missed hub/abstract parameters,
@@ -2530,11 +2620,13 @@ const App: React.FC = () => {
       + '|q:' + (overrideQuality || config.quality)
       + '|algo:' + GEOMETRY_ALGO_VERSION;
 
-    // Check cache first
-    const cached = modelCache3D.get(meshKey);
-    if (cached) {
-      onProgress(1);
-      return cached;
+    // Check cache first unless this is an explicit force-refresh run.
+    if (generationMode !== 'refresh') {
+      const cached = modelCache3D.get(meshKey);
+      if (cached) {
+        onProgress(1);
+        return cached;
+      }
     }
 
     // Clear geometry cache if quality changes (different curve/bevel segments)
@@ -2616,6 +2708,7 @@ const App: React.FC = () => {
     };
 
     for (let lIdx = 0; lIdx < layersToGenerate.length; lIdx++) {
+      ensureNotStopped();
       const layer = layersToGenerate[lIdx];
       const layerGeometries: THREE_ACTUAL.BufferGeometry[] = [];
       const layerShapeInstances: ShapeInstance2D[] = [];
@@ -2630,7 +2723,8 @@ const App: React.FC = () => {
         });
       };
 
-      const processTextGroup = async (textGroup: TextGroupConfig) => {
+        const processTextGroup = async (textGroup: TextGroupConfig) => {
+      ensureNotStopped();
   if (!textGroup.enabled) return;
 
   const fontName = textGroup.fontFamily.replace(/'/g, '').split(',')[0].trim();
@@ -2638,6 +2732,7 @@ const App: React.FC = () => {
 
   try {
     const font = await loadFont(fontName, url);
+    ensureNotStopped();
     if (font) {
       const scale = textGroup.fontSize / font.unitsPerEm;
       const glyphs = font.stringToGlyphs(textGroup.text);
@@ -2652,6 +2747,7 @@ const App: React.FC = () => {
         try {
           console.log(`🎯 Attempting bold font variant for ${fontName}`);
           const boldFont = await loadFont(`${fontName}-Bold`, boldUrl);
+          ensureNotStopped();
           if (boldFont) {
             finalFont = boldFont;
             console.log(`✅ Using bold font variant for ${fontName}`);
@@ -3799,6 +3895,17 @@ const App: React.FC = () => {
                 //     }
                 // }
             // }
+
+            if (identifyBodiesMode && anyFloatingBodies) {
+              const confirmExport = window.confirm(
+                "Warning: Floating bodies detected in the model. Continue with combined export?"
+              );
+              if (!confirmExport) {
+                flatGeoms.forEach((g) => g.dispose());
+                setExportLoading(false);
+                return;
+              }
+            }
         }
 
         const exporter = new STLExporter();
@@ -3821,14 +3928,14 @@ const App: React.FC = () => {
         const group = await generateMesh(() => {}, quality, undefined, 'export');
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
         if (mesh) {
-            if (mesh.geometry) {
-                 const isConnected = checkConnectivity(mesh.geometry);
-                 if (!isConnected) {
-                     if (!window.confirm("Warning: This layer has disconnected parts. Export anyway?")) {
-                         setExportLoading(false);
-                         return;
-                     }
-                 }
+          if (mesh.geometry && identifyBodiesMode) {
+             const hasFloating = floatingBodiesByLayer[layer.id] ?? !checkConnectivity(mesh.geometry);
+             if (hasFloating) {
+               if (!window.confirm("Warning: This layer has floating bodies. Export anyway?")) {
+                 setExportLoading(false);
+                 return;
+               }
+             }
             }
             const exporter = new STLExporter();
             const result = exporter.parse(mesh, { binary: true });
@@ -3850,22 +3957,24 @@ const App: React.FC = () => {
           const zip = new JSZip();
           // const exporter = new STLExporter();
 
-          let anyFloating = false;
-          group.children.forEach(child => {
-              if (child instanceof THREE_ACTUAL.Mesh) {
-                  const mesh = child as THREE_ACTUAL.Mesh;
-                  if (mesh.geometry) {
-                       if (!checkConnectivity(mesh.geometry)) anyFloating = true;
-                  }
-              }
-          });
+            if (identifyBodiesMode) {
+              let anyFloating = false;
+              group.children.forEach(child => {
+                if (!(child instanceof THREE_ACTUAL.Mesh)) return;
+                const layerId = String(child.userData.layerId ?? '');
+                const hasFloating = layerId
+                ? (floatingBodiesByLayer[layerId] ?? false)
+                : (child.geometry ? !checkConnectivity(child.geometry) : false);
+                if (hasFloating) anyFloating = true;
+              });
 
-          if (anyFloating) {
-              if (!window.confirm("Warning: One or more layers contain disconnected parts. Continue with ZIP export?")) {
+              if (anyFloating) {
+                if (!window.confirm("Warning: One or more layers contain floating bodies. Continue with ZIP export?")) {
                   setExportLoading(false);
                   return;
+                }
               }
-          }
+            }
 
           const exporter = new STLExporter();
           group.children.forEach(child => {
@@ -4941,6 +5050,7 @@ const App: React.FC = () => {
                             calculatedDiameter={designDiameter} // PASS CALCULATED DIAMETER
                             shortcuts={shortcuts}
                             fontsPreloaded={fontsPreloaded}
+                            identifyBodiesMode={identifyBodiesMode}
                         />
                     </div>
                     <div className={`absolute inset-0 w-full h-full transition-opacity duration-300 ${viewMode === '3d' ? 'opacity-100 z-10' : 'opacity-0 z-0'}`}>
@@ -4955,14 +5065,31 @@ const App: React.FC = () => {
                             initialDiameter={designDiameter} // PASS INITIAL DIAMETER
                             shortcuts={shortcuts}
                             isVisible={viewMode === '3d'}
+                            identifyBodiesMode={identifyBodiesMode}
+                            onFloatingBodiesChange={setFloatingBodiesByLayer}
+                            emergencyStopSeq={emergencyStopSeq}
                         />
                     </div>
 
                     {/* View Toggle + Stop Button */}
                     <div className="absolute top-4 right-4 z-50 flex gap-2 bg-slate-900/80 rounded-lg p-1 border border-white/10 shadow-lg backdrop-blur">
+                        <button
+                            onClick={() => {
+                              setIdentifyBodiesMode((prev) => {
+                                if (prev) setFloatingBodiesByLayer({});
+                                return !prev;
+                              });
+                            }}
+                            className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${identifyBodiesMode
+                              ? (anyFloatingBodies ? 'bg-rose-600 text-white shadow-md animate-pulse' : 'bg-emerald-600 text-white shadow-md')
+                              : 'text-slate-400 hover:text-white'}`}
+                            title={identifyBodiesMode ? 'Disable floating-body identification' : 'Identify floating/disconnected bodies'}
+                        >
+                            {identifyBodiesMode ? (anyFloatingBodies ? 'Bodies: Alert' : 'Bodies: OK') : 'ID Bodies'}
+                        </button>
                         {isComputingSlots && (
                           <button
-                            onClick={() => cancelAllSlotCuts()}
+                            onClick={() => emergencyStopAllProcessing()}
                             className="px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all bg-rose-600 text-white hover:bg-rose-700 shadow-md animate-pulse"
                             title="Stop ongoing slot computation (Esc)"
                           >
