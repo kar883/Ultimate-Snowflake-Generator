@@ -47,7 +47,6 @@ export default defineConfig({
           args: [
             '--enable-webgl',
             '--use-gl=swiftshader',
-            '--disable-web-security',
           ],
         },
       },

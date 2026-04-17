@@ -21,7 +21,7 @@ test.describe('Header', () => {
 
   test('project name can be changed', async ({ page }) => {
     const input = page.getByPlaceholder('PROJECT NAME');
-    await input.triple_click();
+    await input.click({ clickCount: 3 });
     await input.fill('TestProject');
     await input.press('Enter');
     await expect(input).toHaveValue('TestProject');
@@ -51,7 +51,7 @@ test.describe('Header', () => {
   test('Reset button resets the app', async ({ page }) => {
     // Change project name first
     const input = page.getByPlaceholder('PROJECT NAME');
-    await input.triple_click();
+    await input.click({ clickCount: 3 });
     await input.fill('Changed');
     await input.press('Enter');
 

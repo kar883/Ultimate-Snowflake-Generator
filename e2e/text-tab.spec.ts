@@ -31,7 +31,7 @@ test.describe('Text tab', () => {
 
   test('Phrase Content can be updated', async ({ page }) => {
     const phraseInput = page.locator('input[type="text"]').first();
-    await phraseInput.triple_click();
+    await phraseInput.click({ clickCount: 3 });
     await phraseInput.fill('Hello');
     await phraseInput.press('Enter');
     await expect(phraseInput).toHaveValue('Hello');
