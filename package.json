@@ -13,7 +13,11 @@
     "electron:start": "electron .",
     "electron:build": "electron-builder",
     "package": "npm run build && npm run electron:build",
-    "dist": "node build.js"
+    "dist": "node build.js",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:report": "playwright show-report"
   },
   "dependencies": {
     "@electron/osx-sign": "^2.3.0",
@@ -33,6 +37,7 @@
     "three-mesh-bvh": "^0.9.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.52.0",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
     "autoprefixer": "^10.4.24",
