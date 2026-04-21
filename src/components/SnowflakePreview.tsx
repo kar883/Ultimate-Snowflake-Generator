@@ -41,7 +41,6 @@ interface SnowflakePreviewProps {
   calculatedDiameter?: number;
   shortcuts?: ShortcutConfig;
   fontsPreloaded?: boolean;
-  identifyBodiesMode?: boolean;
 }
 
 const seededRandom = (seed: number) => {
@@ -53,7 +52,7 @@ const seededRandom = (seed: number) => {
 };
 
 const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
-  config, globalColor, globalBevel, globalBevelAmount, slotEnabled, slotLength, slotWidth, svgRef, dynamicFonts, undo, redo, canUndo, canRedo, calculatedDiameter, shortcuts, fontsPreloaded, identifyBodiesMode = false
+  config, globalColor, globalBevel, globalBevelAmount, slotEnabled, slotLength, slotWidth, svgRef, dynamicFonts, undo, redo, canUndo, canRedo, calculatedDiameter, shortcuts, fontsPreloaded
 }) => {
   const { t } = useTranslation(config.language || 'en');
   // Use a ref for the font cache so loading a font never triggers an infinite
@@ -89,7 +88,6 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   // const { rotatedPaths, isRotating, rotateSvg } = useSvgRotationWorker();
 
   const modelDiameter = calculatedDiameter || 200;
-  const floatingColor = '#f97316';
 
   const isDragging = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
@@ -318,7 +316,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
       const buildSvgInstances = (
         pathData: string | null,
         fallback = false,
-        glyphPaths?: Array<{ d: string; floating: boolean }>
+        glyphPaths?: Array<{ d: string }>
       ) => {
         const angleStep = 360 / group.arms;
         const instances = [] as React.ReactNode[];
@@ -368,13 +366,12 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
             instances.push(
               <g key={`arm-${i}`} transform={transform}>
                 {glyphPaths.map((glyphPath, gi) => {
-                  const glyphColor = glyphPath.floating ? floatingColor : color;
                   return (
                     <path
                       key={`g-${gi}`}
                       d={glyphPath.d}
-                      fill={glyphColor}
-                      stroke={glyphColor}
+                      fill={color}
+                      stroke={color}
                       strokeWidth={strokeWidth}
                       strokeLinejoin="round"
                       strokeLinecap="round"
@@ -387,13 +384,12 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
               instances.push(
                 <g key={`arm-mirror-${i}`} transform={`rotate(${angle}) translate(${group.textX}, ${-group.mirrorOffset / 2}) scale(1, -1)`}>
                   {glyphPaths.map((glyphPath, gi) => {
-                    const glyphColor = glyphPath.floating ? floatingColor : color;
                     return (
                       <path
                         key={`mg-${gi}`}
                         d={glyphPath.d}
-                        fill={glyphColor}
-                        stroke={glyphColor}
+                        fill={color}
+                        stroke={color}
                         strokeWidth={strokeWidth}
                         strokeLinejoin="round"
                         strokeLinecap="round"
@@ -445,62 +441,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
           currentX += (glyph.advanceWidth * scale) + group.letterSpacing;
         });
 
-        const floatingFlags = new Array(glyphEntries.length).fill(false);
-        if (identifyBodiesMode && glyphEntries.length > 1) {
-          const pad = Math.max(0.6, (config.globalStrokeWeight || 0) + (group.thickness || 0));
-          const adjacency: number[][] = Array.from({ length: glyphEntries.length }, () => []);
-
-          for (let a = 0; a < glyphEntries.length; a++) {
-            for (let b = a + 1; b < glyphEntries.length; b++) {
-              const A = glyphEntries[a];
-              const B = glyphEntries[b];
-              const overlaps = !(
-                A.maxX + pad < B.minX ||
-                B.maxX + pad < A.minX ||
-                A.maxY + pad < B.minY ||
-                B.maxY + pad < A.minY
-              );
-              if (overlaps) {
-                adjacency[a].push(b);
-                adjacency[b].push(a);
-              }
-            }
-          }
-
-          const compId = new Array(glyphEntries.length).fill(-1);
-          const compArea: number[] = [];
-          let compCount = 0;
-          for (let i = 0; i < glyphEntries.length; i++) {
-            if (compId[i] !== -1) continue;
-            const queue = [i];
-            compId[i] = compCount;
-            let q = 0;
-            let area = 0;
-            while (q < queue.length) {
-              const cur = queue[q++];
-              const g = glyphEntries[cur];
-              area += Math.max(0.0001, (g.maxX - g.minX) * (g.maxY - g.minY));
-              for (const nb of adjacency[cur]) {
-                if (compId[nb] === -1) {
-                  compId[nb] = compCount;
-                  queue.push(nb);
-                }
-              }
-            }
-            compArea[compCount] = area;
-            compCount++;
-          }
-
-          let mainComp = 0;
-          for (let c = 1; c < compArea.length; c++) {
-            if ((compArea[c] ?? 0) > (compArea[mainComp] ?? 0)) mainComp = c;
-          }
-          for (let i = 0; i < glyphEntries.length; i++) {
-            floatingFlags[i] = compId[i] !== mainComp;
-          }
-        }
-
-        textPaths = buildSvgInstances(null, false, glyphEntries.map((g, i) => ({ d: g.d, floating: floatingFlags[i] })));
+        textPaths = buildSvgInstances(null, false, glyphEntries.map((g) => ({ d: g.d })));
       } else {
         // Font not loaded yet, use fallback text rendering silently
         textPaths = buildSvgInstances(null, true);
@@ -740,33 +681,64 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
 
   const renderSlotPreview = (layer: LayerConfig, layerIndex: number, enabledLayers: LayerConfig[], slotLength: number, slotWidth: number) => {
     if (!slotEnabled) return null;
-    const rotationOffset = layer.primary.rotationOffset;
+    const rotationOffset = (layer.primary.rotationOffset ?? 0) + (layer.rotation3D?.y ?? 0);
+    const armCount = (layer.primary.enabled && (layer.primary.arms || 0) > 0)
+      ? Math.max(1, layer.primary.arms || 0)
+      : ((layer.secondaryEnabled && layer.secondary.enabled && (layer.secondary.arms || 0) > 0)
+        ? Math.max(1, layer.secondary.arms || 0)
+        : 6);
     const numPlanes = enabledLayers.length;
-    const adjLength = slotLength + (layer.slotLengthAdjustment || 0);
-    const adjWidth = slotWidth + (layer.slotWidthOffset || 0);
+    const lengthAdjustmentPerSide = layer.slotLengthAdjustment ?? 0;
+    const widthAdjustmentPerSide = layer.slotWidthOffset ?? 0;
+    const adjLength = Math.max(2, slotLength + (lengthAdjustmentPerSide * 2));
+    const adjWidth = Math.max(0.1, slotWidth + widthAdjustmentPerSide);
     const visualExtension = (modelDiameter / 2) + 20;
     const drawLength = Math.max(adjLength, visualExtension);
+    const rearReach = (numPlanes === 3 && armCount % 2 !== 0)
+      ? Math.max(0.01, drawLength * Math.cos(Math.PI / armCount))
+      : drawLength;
+    const extensionLength = Math.max(0.01, Math.max(2, adjLength) * 0.6);
+    const rearExtensionReach = Math.min(extensionLength, rearReach);
+
+    const rx = ((layer.rotation3D?.x ?? 0) % 360 + 360) % 360;
+    const nearest = (target: number) => {
+      const delta = Math.abs(((rx - target + 540) % 360) - 180);
+      return delta <= 20;
+    };
+    const inferredType = numPlanes === 2
+      ? (nearest(0) ? 'half-back' : nearest(90) ? 'half-front' : layer.slotType)
+      : (nearest(0) ? 'third-back' : nearest(120) ? 'third-middle' : nearest(240) ? 'third-front' : layer.slotType);
+    const slotType = layer.slotType === 'none' ? inferredType : layer.slotType;
+
     if (numPlanes === 2) {
       const angle = rotationOffset; const angleRad = angle * Math.PI / 180;
-      const x2 = Math.cos(angleRad) * drawLength; const y2 = Math.sin(angleRad) * drawLength;
-      return (<g><line x1={0} y1={0} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="3" opacity="0.8" /><line x1={0} y1={adjWidth/2} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="1" strokeDasharray="2,2" opacity="0.4" transform={`rotate(${angle})`} /><line x1={0} y1={-adjWidth/2} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="1" strokeDasharray="2,2" opacity="0.4" transform={`rotate(${angle})`} /><text x={x2 * 0.6} y={y2 * 0.6 - 15} fill="#ef4444" fontSize="12" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">SLOT</text></g>);
+      const slotDirection = slotType === 'half-front' ? angleRad + Math.PI : angleRad;
+      const x2 = Math.cos(slotDirection) * drawLength; const y2 = Math.sin(slotDirection) * drawLength;
+      return (<g data-slot-preview="true"><line x1={0} y1={0} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="3" opacity="0.8" /><line x1={0} y1={adjWidth/2} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="1" strokeDasharray="2,2" opacity="0.4" transform={`rotate(${angle})`} /><line x1={0} y1={-adjWidth/2} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="1" strokeDasharray="2,2" opacity="0.4" transform={`rotate(${angle})`} /><text x={x2 * 0.6} y={y2 * 0.6 - 15} fill="#ef4444" fontSize="12" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">SLOT</text></g>);
     }
     if (numPlanes === 3) {
       const angle = rotationOffset; const angleRad = angle * Math.PI / 180;
       const crossColor = '#facc15'; // bright amber for strong contrast
       const tiltColor = '#f97316'; // vivid orange for strong contrast
-      if (layerIndex === 0) {
+      if (slotType === 'third-back') {
         const x2 = Math.cos(angleRad) * drawLength; const y2 = Math.sin(angleRad) * drawLength;
-        return (<g><line x1={0} y1={0} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="3" opacity="0.8" /><line x1={0} y1={adjWidth/2} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="1" strokeDasharray="2,2" opacity="0.4" transform={`rotate(${angle})`} /><line x1={0} y1={-adjWidth/2} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="1" strokeDasharray="2,2" opacity="0.4" transform={`rotate(${angle})`} /><text x={x2 * 0.5} y={y2 * 0.5 - 15} fill="#ef4444" fontSize="10" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">BASE SLOT</text></g>);
-      } else if (layerIndex === 1) {
+        return (
+          <g data-slot-preview="true">
+            <line x1={0} y1={0} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="3" opacity="0.8" />
+            <text x={x2 * 0.5} y={y2 * 0.5 - 15} fill="#ef4444" fontSize="10" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">
+              BASE SLOT
+            </text>
+          </g>
+        );
+      } else if (slotType === 'third-middle') {
         const x2Main = Math.cos(angleRad) * drawLength; const y2Main = Math.sin(angleRad) * drawLength;
-        const xStart = Math.cos(angleRad + Math.PI) * (adjLength * 0.75); const yStart = Math.sin(angleRad + Math.PI) * (adjLength * 0.75);
-        const xEnd = Math.cos(angleRad + Math.PI) * drawLength; const yEnd = Math.sin(angleRad + Math.PI) * drawLength;
-        return (<g><line x1={0} y1={0} x2={x2Main} y2={y2Main} stroke={crossColor} strokeWidth="3" opacity="0.92" /><line x1={0} y1={adjWidth/2} x2={x2Main} y2={y2Main} stroke={crossColor} strokeWidth="1" strokeDasharray="2,2" opacity="0.62" transform={`rotate(${angle})`} /><line x1={0} y1={-adjWidth/2} x2={x2Main} y2={y2Main} stroke={crossColor} strokeWidth="1" strokeDasharray="2,2" opacity="0.62" transform={`rotate(${angle})`} /><line x1={xStart} y1={yStart} x2={xEnd} y2={yEnd} stroke={crossColor} strokeWidth="3" opacity="0.92" strokeDasharray="5,3" /><text x={x2Main * 0.5} y={y2Main * 0.5 - 15} fill={crossColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">CROSS MAIN</text><text x={xStart + (xEnd - xStart) * 0.5} y={yStart + (yEnd - yStart) * 0.5 - 15} fill={crossColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">TIP-IN</text></g>);
-      } else if (layerIndex === 2) {
+        const xStart = Math.cos(angleRad + Math.PI) * extensionLength; const yStart = Math.sin(angleRad + Math.PI) * extensionLength;
+        const xEnd = Math.cos(angleRad + Math.PI) * rearReach; const yEnd = Math.sin(angleRad + Math.PI) * rearReach;
+        return (<g data-slot-preview="true"><line x1={0} y1={0} x2={x2Main} y2={y2Main} stroke={crossColor} strokeWidth="3" opacity="0.92" /><line x1={0} y1={adjWidth/2} x2={x2Main} y2={y2Main} stroke={crossColor} strokeWidth="1" strokeDasharray="2,2" opacity="0.62" transform={`rotate(${angle})`} /><line x1={0} y1={-adjWidth/2} x2={x2Main} y2={y2Main} stroke={crossColor} strokeWidth="1" strokeDasharray="2,2" opacity="0.62" transform={`rotate(${angle})`} /><line x1={xStart} y1={yStart} x2={xEnd} y2={yEnd} stroke={crossColor} strokeWidth="3" opacity="0.92" strokeDasharray="5,3" /><text x={x2Main * 0.5} y={y2Main * 0.5 - 15} fill={crossColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">CROSS MAIN</text><text x={xStart + (xEnd - xStart) * 0.5} y={yStart + (yEnd - yStart) * 0.5 - 15} fill={crossColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">TIP-IN</text></g>);
+      } else if (slotType === 'third-front') {
         const x2 = Math.cos(angleRad) * drawLength; const y2 = Math.sin(angleRad) * drawLength;
-        const x1 = Math.cos(angleRad + Math.PI) * (adjLength * 0.75); const y1 = Math.sin(angleRad + Math.PI) * (adjLength * 0.75);
-        return (<g><line x1={0} y1={0} x2={x2} y2={y2} stroke={tiltColor} strokeWidth="3" opacity="0.92" /><line x1={0} y1={adjWidth/2} x2={x2} y2={y2} stroke={tiltColor} strokeWidth="1" strokeDasharray="2,2" opacity="0.62" transform={`rotate(${angle})`} /><line x1={0} y1={-adjWidth/2} x2={x2} y2={y2} stroke={tiltColor} strokeWidth="1" strokeDasharray="2,2" opacity="0.62" transform={`rotate(${angle})`} /><text x={x2 * 0.5} y={y2 * 0.5 - 15} fill={tiltColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">TILT MAIN</text><line x1={0} y1={0} x2={x1} y2={y1} stroke={tiltColor} strokeWidth="3" opacity="0.92" strokeDasharray="5,2" /><line x1={x1*0.2} y1={y1*0.2 + 2} x2={x1*0.8} y2={y1*0.8 - 2} stroke={tiltColor} strokeWidth="1" opacity="0.68" /><line x1={x1*0.2} y1={y1*0.2 - 2} x2={x1*0.8} y2={y1*0.8 + 2} stroke={tiltColor} strokeWidth="1" opacity="0.68" /><text x1={x1 * 0.5} y1={y1 * 0.5 + 20} fill={tiltColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">EXT CHAMFER</text></g>);
+        const x1 = Math.cos(angleRad + Math.PI) * rearExtensionReach; const y1 = Math.sin(angleRad + Math.PI) * rearExtensionReach;
+        return (<g data-slot-preview="true"><line x1={0} y1={0} x2={x2} y2={y2} stroke={tiltColor} strokeWidth="3" opacity="0.92" /><line x1={0} y1={adjWidth/2} x2={x2} y2={y2} stroke={tiltColor} strokeWidth="1" strokeDasharray="2,2" opacity="0.62" transform={`rotate(${angle})`} /><line x1={0} y1={-adjWidth/2} x2={x2} y2={y2} stroke={tiltColor} strokeWidth="1" strokeDasharray="2,2" opacity="0.62" transform={`rotate(${angle})`} /><text x={x2 * 0.5} y={y2 * 0.5 - 15} fill={tiltColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">TILT MAIN</text><line x1={0} y1={0} x2={x1} y2={y1} stroke={tiltColor} strokeWidth="3" opacity="0.92" strokeDasharray="5,2" /><line x1={x1*0.2} y1={y1*0.2 + 2} x2={x1*0.8} y2={y1*0.8 - 2} stroke={tiltColor} strokeWidth="1" opacity="0.68" /><line x1={x1*0.2} y1={y1*0.2 - 2} x2={x1*0.8} y2={y1*0.8 + 2} stroke={tiltColor} strokeWidth="1" opacity="0.68" /><text x1={x1 * 0.5} y1={y1 * 0.5 + 20} fill={tiltColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">EXT CHAMFER</text></g>);
       }
     }
     return null;
@@ -828,7 +800,9 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
                 >
                   {layer.name}
                 </text>
-                <g transform={`scale(1, -1) rotate(${zRotation})`}>
+                <g
+                  transform={`scale(1, -1) rotate(${zRotation})`}
+                >
                   <circle cx="0" cy="0" r="2" fill="#ef4444" />
                   {renderHubs(layer.hubs, layerColor)}
                   {renderImages(layer.images || [], layerColor)}
