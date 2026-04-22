@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 # Added top-level permissions to ensure the GITHUB_TOKEN has write access
 permissions:
   contents: write
@@ -23,11 +26,15 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        fetch-tags: true
+        ref: ${{ github.ref }}
       
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: '20' # LTS is recommended for stability; use '24' if specifically required
+        node-version: '22'
         cache: 'npm'
         
     - name: Install dependencies
