@@ -13,7 +13,9 @@
  *   - Primary / Secondary group switching
  */
 import { test, expect } from '@playwright/test';
-import { gotoApp, clickTab } from './fixtures';
+import { gotoApp, clickTab, waitForModelReady, commitDeferredTextInput } from './fixtures';
+
+test.describe.configure({ timeout: 120_000 });
 
 test.describe('Text tab', () => {
   test.beforeEach(async ({ page }) => {
@@ -30,10 +32,10 @@ test.describe('Text tab', () => {
   });
 
   test('Phrase Content can be updated', async ({ page }) => {
-    const phraseInput = page.locator('input[type="text"]').first();
-    await phraseInput.click({ clickCount: 3 });
-    await phraseInput.fill('Hello');
-    await phraseInput.press('Enter');
+    const phraseInput = page.locator('input[placeholder*="AI Randomizer"]').first();
+    await commitDeferredTextInput(phraseInput, 'Hello');
+    await page.waitForTimeout(500);
+    await waitForModelReady(page, 10_000);
     await expect(phraseInput).toHaveValue('Hello');
   });
 
@@ -43,26 +45,23 @@ test.describe('Text tab', () => {
   });
 
   test('Clicking Secondary switches the active group', async ({ page }) => {
-    const secondaryBtn = page
-      .locator('button')
-      .filter({ hasText: /secondary/i })
-      .first();
+    const secondaryBtn = page.getByText(/^secondary$/i).first();
+    await expect(secondaryBtn).toBeVisible({ timeout: 10_000 });
     await secondaryBtn.click();
     // After clicking Secondary, the group controls should reflect the secondary group
     await expect(secondaryBtn).toBeVisible();
   });
 
   test('Font Family picker is visible', async ({ page }) => {
-    await expect(page.getByText(/font/i).first()).toBeVisible();
-    // Font list should contain at least one font option
-    await expect(page.getByText(/great vibes/i).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByPlaceholder(/search fonts|font search|search/i).first()).toBeVisible({ timeout: 10_000 });
   });
 
   test('Selecting a different font updates the selection', async ({ page }) => {
-    // Click on "Pacifico" font
-    const pacificoFont = page.getByText(/pacifico/i).first();
-    if (await pacificoFont.isVisible()) {
-      await pacificoFont.click();
+    const search = page.getByPlaceholder(/search fonts/i).first();
+    if (await search.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await search.fill('pac');
+      await expect(page.getByText(/pacifico/i).first()).toBeVisible({ timeout: 10_000 });
+      await page.getByText(/pacifico/i).first().click({ noWaitAfter: true });
     }
   });
 
@@ -99,15 +98,11 @@ test.describe('Text tab', () => {
   });
 
   test('Enabling underline reveals sub-options', async ({ page }) => {
-    // Find the underline toggle (a label wrapping a hidden checkbox)
-    const underlineSection = page.getByText(/^underline$/i).first();
-    await underlineSection.scrollIntoViewIfNeeded();
-    // The toggle is near the "Underline" label; clicking the label activates it
-    const toggleLabel = underlineSection
-      .locator('xpath=ancestor::label[1]')
-      .or(underlineSection.locator('xpath=following-sibling::label[1]'));
-    if ((await toggleLabel.count()) > 0) {
-      await toggleLabel.first().click();
+    const underlineCheckbox = page
+      .locator('label:has-text("Underline") input[type="checkbox"]')
+      .first();
+    if (await underlineCheckbox.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await underlineCheckbox.setChecked(true);
       await expect(page.getByText(/underline thickness/i).first()).toBeVisible({ timeout: 5_000 });
     }
   });

@@ -125,6 +125,13 @@ export function postCSGJob(base: any, slots: any[], rotation: any, signal?: Abor
 }
 
 export function terminateWorker() {
+  if (currentReject) {
+    currentReject(new DOMException('CSG worker terminated', 'AbortError'));
+  }
+  currentResolve = null;
+  currentReject = null;
+  busy = false;
+
   if (worker) {
     worker.terminate();
     worker = null;

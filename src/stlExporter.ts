@@ -157,8 +157,6 @@ export class STLExporter {
    * Write geometry as binary STL
    */
   private writeBinary(geometry: THREE.BufferGeometry): ArrayBuffer {
-    geometry.computeVertexNormals();
-
     const position = geometry.getAttribute('position') as THREE.BufferAttribute;
     const index = geometry.getIndex();
 
@@ -188,34 +186,32 @@ export class STLExporter {
 
     let offset = 0;
 
-    const vx: number[] = [];
-    const vy: number[] = [];
-    const vz: number[] = [];
-
-    if (index) {
-      for (let i = 0; i < index.count; i++) {
-        const vertexIndex = index.getX(i) as number;
-        vx.push(position.getX(vertexIndex) as number);
-        vy.push(position.getY(vertexIndex) as number);
-        vz.push(position.getZ(vertexIndex) as number);
-      }
-    } else {
-      for (let i = 0; i < position.count; i++) {
-        vx.push(position.getX(i) as number);
-        vy.push(position.getY(i) as number);
-        vz.push(position.getZ(i) as number);
-      }
-    }
+    const posArray = position.array as ArrayLike<number>;
+    const idxArray = index ? (index.array as ArrayLike<number>) : null;
 
     for (let i = 0; i < triangles; i++) {
-      const a = i * 3;
-      const b = i * 3 + 1;
-      const c = i * 3 + 2;
+      const ia = idxArray ? Number(idxArray[i * 3]) : i * 3;
+      const ib = idxArray ? Number(idxArray[i * 3 + 1]) : i * 3 + 1;
+      const ic = idxArray ? Number(idxArray[i * 3 + 2]) : i * 3 + 2;
 
-      // Calculate normal
-      const nx = (vy[b] - vy[a]) * (vz[c] - vz[a]) - (vz[b] - vz[a]) * (vy[c] - vy[a]);
-      const ny = (vz[b] - vz[a]) * (vx[c] - vx[a]) - (vx[b] - vx[a]) * (vz[c] - vz[a]);
-      const nz = (vx[b] - vx[a]) * (vy[c] - vy[a]) - (vy[b] - vy[a]) * (vx[c] - vx[a]);
+      const a3 = ia * 3;
+      const b3 = ib * 3;
+      const c3 = ic * 3;
+
+      const ax = Number(posArray[a3]);
+      const ay = Number(posArray[a3 + 1]);
+      const az = Number(posArray[a3 + 2]);
+      const bx = Number(posArray[b3]);
+      const by = Number(posArray[b3 + 1]);
+      const bz = Number(posArray[b3 + 2]);
+      const cx = Number(posArray[c3]);
+      const cy = Number(posArray[c3 + 1]);
+      const cz = Number(posArray[c3 + 2]);
+
+      // Calculate face normal directly from triangle vertices.
+      const nx = (by - ay) * (cz - az) - (bz - az) * (cy - ay);
+      const ny = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
+      const nz = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
 
       const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
       const nnx = len > 0 ? nx / len : 0;
@@ -229,25 +225,25 @@ export class STLExporter {
       triangleView.setFloat32(offset, nnz, true);
       offset += 4;
 
-      triangleView.setFloat32(offset, vx[a], true);
+      triangleView.setFloat32(offset, ax, true);
       offset += 4;
-      triangleView.setFloat32(offset, vy[a], true);
+      triangleView.setFloat32(offset, ay, true);
       offset += 4;
-      triangleView.setFloat32(offset, vz[a], true);
-      offset += 4;
-
-      triangleView.setFloat32(offset, vx[b], true);
-      offset += 4;
-      triangleView.setFloat32(offset, vy[b], true);
-      offset += 4;
-      triangleView.setFloat32(offset, vz[b], true);
+      triangleView.setFloat32(offset, az, true);
       offset += 4;
 
-      triangleView.setFloat32(offset, vx[c], true);
+      triangleView.setFloat32(offset, bx, true);
       offset += 4;
-      triangleView.setFloat32(offset, vy[c], true);
+      triangleView.setFloat32(offset, by, true);
       offset += 4;
-      triangleView.setFloat32(offset, vz[c], true);
+      triangleView.setFloat32(offset, bz, true);
+      offset += 4;
+
+      triangleView.setFloat32(offset, cx, true);
+      offset += 4;
+      triangleView.setFloat32(offset, cy, true);
+      offset += 4;
+      triangleView.setFloat32(offset, cz, true);
       offset += 4;
 
       // Attribute byte count

@@ -16,6 +16,8 @@ interface HeaderProps {
   shortcuts?: ShortcutConfig;
   onUpdateShortcuts?: (config: ShortcutConfig) => void;
   onResetShortcuts?: () => void;
+  onSaveAsDefault?: () => void;
+  onRestoreFactoryDefaults?: () => void;
   // Language and tooltips settings
   language?: string;
   onLanguageChange?: (lang: string) => void;
@@ -35,6 +37,8 @@ const Header: React.FC<HeaderProps> = ({
   shortcuts,
   onUpdateShortcuts,
   onResetShortcuts,
+  onSaveAsDefault,
+  onRestoreFactoryDefaults,
   language = 'en',
   onLanguageChange,
   showTooltips,
@@ -85,7 +89,7 @@ const Header: React.FC<HeaderProps> = ({
             </h1>
             <div className="flex items-center space-x-2">
               <span className="text-[9px] font-bold text-slate-400 tracking-widest uppercase">
-                V1.0.4 • Created by: Kyle Russell
+                V1.0.5 • Created by: Kyle Russell
               </span>
             </div>
           </div>
@@ -169,6 +173,8 @@ const Header: React.FC<HeaderProps> = ({
             onLanguageChange={onLanguageChange}
             showTooltips={showTooltips}
             onTooltipsChange={onTooltipsChange}
+            onSaveAsDefault={onSaveAsDefault}
+            onRestoreFactoryDefaults={onRestoreFactoryDefaults}
           />
       )}
       

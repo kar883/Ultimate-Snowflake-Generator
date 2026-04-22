@@ -697,8 +697,13 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
     const rearReach = (numPlanes === 3 && armCount % 2 !== 0)
       ? Math.max(0.01, drawLength * Math.cos(Math.PI / armCount))
       : drawLength;
-    const extensionLength = Math.max(0.01, Math.max(2, adjLength) * 0.6);
-    const rearExtensionReach = Math.min(extensionLength, rearReach);
+    const baseTiltExtensionLength = Math.max(0.01, Math.max(2, adjLength) * 0.6);
+    const tiltExtensionLengthAdjustment = layer.slotTiltExtensionLengthAdjustment ?? 0;
+    const tiltExtensionLength = Math.max(0.01, baseTiltExtensionLength + tiltExtensionLengthAdjustment);
+    const rearExtensionReach = Math.min(tiltExtensionLength, rearReach);
+    const baseCrossTipInLength = Math.max(0.01, rearReach - rearExtensionReach);
+    const crossTipInLengthAdjustment = layer.slotCrossTipInLengthAdjustment ?? 0;
+    const crossTipInLength = Math.max(0.01, Math.min(rearReach, baseCrossTipInLength + crossTipInLengthAdjustment));
 
     const rx = ((layer.rotation3D?.x ?? 0) % 360 + 360) % 360;
     const nearest = (target: number) => {
@@ -714,7 +719,12 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
       const angle = rotationOffset; const angleRad = angle * Math.PI / 180;
       const slotDirection = slotType === 'half-front' ? angleRad + Math.PI : angleRad;
       const x2 = Math.cos(slotDirection) * drawLength; const y2 = Math.sin(slotDirection) * drawLength;
-      return (<g data-slot-preview="true"><line x1={0} y1={0} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="3" opacity="0.8" /><line x1={0} y1={adjWidth/2} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="1" strokeDasharray="2,2" opacity="0.4" transform={`rotate(${angle})`} /><line x1={0} y1={-adjWidth/2} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="1" strokeDasharray="2,2" opacity="0.4" transform={`rotate(${angle})`} /><text x={x2 * 0.6} y={y2 * 0.6 - 15} fill="#ef4444" fontSize="12" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">SLOT</text></g>);
+      return (
+        <g data-slot-preview="true">
+          <line x1={0} y1={0} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="3" opacity="0.8" />
+          <text x={x2 * 0.6} y={y2 * 0.6 - 15} fill="#ef4444" fontSize="12" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">SLOT</text>
+        </g>
+      );
     }
     if (numPlanes === 3) {
       const angle = rotationOffset; const angleRad = angle * Math.PI / 180;
@@ -732,13 +742,29 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
         );
       } else if (slotType === 'third-middle') {
         const x2Main = Math.cos(angleRad) * drawLength; const y2Main = Math.sin(angleRad) * drawLength;
-        const xStart = Math.cos(angleRad + Math.PI) * extensionLength; const yStart = Math.sin(angleRad + Math.PI) * extensionLength;
-        const xEnd = Math.cos(angleRad + Math.PI) * rearReach; const yEnd = Math.sin(angleRad + Math.PI) * rearReach;
-        return (<g data-slot-preview="true"><line x1={0} y1={0} x2={x2Main} y2={y2Main} stroke={crossColor} strokeWidth="3" opacity="0.92" /><line x1={0} y1={adjWidth/2} x2={x2Main} y2={y2Main} stroke={crossColor} strokeWidth="1" strokeDasharray="2,2" opacity="0.62" transform={`rotate(${angle})`} /><line x1={0} y1={-adjWidth/2} x2={x2Main} y2={y2Main} stroke={crossColor} strokeWidth="1" strokeDasharray="2,2" opacity="0.62" transform={`rotate(${angle})`} /><line x1={xStart} y1={yStart} x2={xEnd} y2={yEnd} stroke={crossColor} strokeWidth="3" opacity="0.92" strokeDasharray="5,3" /><text x={x2Main * 0.5} y={y2Main * 0.5 - 15} fill={crossColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">CROSS MAIN</text><text x={xStart + (xEnd - xStart) * 0.5} y={yStart + (yEnd - yStart) * 0.5 - 15} fill={crossColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">TIP-IN</text></g>);
+        const xStart = Math.cos(angleRad + Math.PI) * rearReach; const yStart = Math.sin(angleRad + Math.PI) * rearReach;
+        const xEnd = Math.cos(angleRad + Math.PI) * Math.max(0.01, rearReach - crossTipInLength); const yEnd = Math.sin(angleRad + Math.PI) * Math.max(0.01, rearReach - crossTipInLength);
+        return (
+          <g data-slot-preview="true">
+            <line x1={0} y1={0} x2={x2Main} y2={y2Main} stroke={crossColor} strokeWidth="3" opacity="0.92" />
+            <line x1={xStart} y1={yStart} x2={xEnd} y2={yEnd} stroke={crossColor} strokeWidth="3" opacity="0.92" strokeDasharray="5,3" />
+            <text x={x2Main * 0.5} y={y2Main * 0.5 - 15} fill={crossColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">CROSS MAIN</text>
+            <text x={xStart + (xEnd - xStart) * 0.5} y={yStart + (yEnd - yStart) * 0.5 - 15} fill={crossColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">TIP-IN</text>
+          </g>
+        );
       } else if (slotType === 'third-front') {
         const x2 = Math.cos(angleRad) * drawLength; const y2 = Math.sin(angleRad) * drawLength;
         const x1 = Math.cos(angleRad + Math.PI) * rearExtensionReach; const y1 = Math.sin(angleRad + Math.PI) * rearExtensionReach;
-        return (<g data-slot-preview="true"><line x1={0} y1={0} x2={x2} y2={y2} stroke={tiltColor} strokeWidth="3" opacity="0.92" /><line x1={0} y1={adjWidth/2} x2={x2} y2={y2} stroke={tiltColor} strokeWidth="1" strokeDasharray="2,2" opacity="0.62" transform={`rotate(${angle})`} /><line x1={0} y1={-adjWidth/2} x2={x2} y2={y2} stroke={tiltColor} strokeWidth="1" strokeDasharray="2,2" opacity="0.62" transform={`rotate(${angle})`} /><text x={x2 * 0.5} y={y2 * 0.5 - 15} fill={tiltColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">TILT MAIN</text><line x1={0} y1={0} x2={x1} y2={y1} stroke={tiltColor} strokeWidth="3" opacity="0.92" strokeDasharray="5,2" /><line x1={x1*0.2} y1={y1*0.2 + 2} x2={x1*0.8} y2={y1*0.8 - 2} stroke={tiltColor} strokeWidth="1" opacity="0.68" /><line x1={x1*0.2} y1={y1*0.2 - 2} x2={x1*0.8} y2={y1*0.8 + 2} stroke={tiltColor} strokeWidth="1" opacity="0.68" /><text x1={x1 * 0.5} y1={y1 * 0.5 + 20} fill={tiltColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">EXT CHAMFER</text></g>);
+        return (
+          <g data-slot-preview="true">
+            <line x1={0} y1={0} x2={x2} y2={y2} stroke={tiltColor} strokeWidth="3" opacity="0.92" />
+            <text x={x2 * 0.5} y={y2 * 0.5 - 15} fill={tiltColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">TILT MAIN</text>
+            <line x1={0} y1={0} x2={x1} y2={y1} stroke={tiltColor} strokeWidth="3" opacity="0.92" strokeDasharray="5,2" />
+            <line x1={x1*0.2} y1={y1*0.2 + 2} x2={x1*0.8} y2={y1*0.8 - 2} stroke={tiltColor} strokeWidth="1" opacity="0.68" />
+            <line x1={x1*0.2} y1={y1*0.2 - 2} x2={x1*0.8} y2={y1*0.8 + 2} stroke={tiltColor} strokeWidth="1" opacity="0.68" />
+            <text x1={x1 * 0.5} y1={y1 * 0.5 + 20} fill={tiltColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">EXT CHAMFER</text>
+          </g>
+        );
       }
     }
     return null;

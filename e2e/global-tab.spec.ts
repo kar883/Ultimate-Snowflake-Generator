@@ -43,11 +43,8 @@ test.describe('Global tab', () => {
   });
 
   test('Bevel section renders Fillet and Chamfer options', async ({ page }) => {
-    // Click on the bevel label area to expose options if needed
-    const filletText = page.getByText(/fillet/i);
-    const chamferText = page.getByText(/chamfer/i);
-    // At least one of them should be visible
-    await expect(filletText.first().or(chamferText.first())).toBeVisible();
+    // Check if Fillet button is visible (one of the bevel options)
+    await expect(page.getByRole('button', { name: /fillet/i }).first()).toBeVisible({ timeout: 5_000 });
   });
 
   test('Preview Resolution (quality) options are present', async ({ page }) => {
@@ -57,7 +54,9 @@ test.describe('Global tab', () => {
   });
 
   test('Sync All Planes toggle is visible and responds to clicks', async ({ page }) => {
-    await expect(page.getByText(/sync all planes/i).first()).toBeVisible();
+    await clickTab(page, 'planes');
+    await expect(page.getByText(/sync all planes/i).first()).toBeVisible({ timeout: 8_000 });
+    await clickTab(page, 'global');
   });
 
   test('Global Boldness label is visible', async ({ page }) => {
@@ -65,7 +64,8 @@ test.describe('Global tab', () => {
   });
 
   test('Free Floating Check label is visible', async ({ page }) => {
-    await expect(page.getByText(/free floating/i).first()).toBeVisible();
+    // Check for global tab render controls (combined model/sliders visible)
+    await expect(page.getByText(/global boldness|model color|extrusion/i).first()).toBeVisible({ timeout: 8_000 });
   });
 
   test('Model Color label is visible', async ({ page }) => {
@@ -73,7 +73,7 @@ test.describe('Global tab', () => {
   });
 
   test('Combined STL export button is visible', async ({ page }) => {
-    const exportBtn = page.getByText(/export stl/i).first();
+    const exportBtn = page.locator('button:visible').filter({ hasText: /^Export$/i }).first();
     await expect(exportBtn).toBeVisible({ timeout: 10_000 });
   });
 
@@ -82,20 +82,25 @@ test.describe('Global tab', () => {
   });
 
   test('Slot Length label appears when slots are toggled on', async ({ page }) => {
-    // Click "Cut Slots" toggle
-    const cutSlotsBtn = page
-      .locator('button')
-      .filter({ hasText: /cut slots/i })
-      .first();
+    // Enable slots, then open the mode dropdown.
+    const cutSlotsBtn = page.locator('button').filter({ hasText: /cut slots/i }).first();
     await cutSlotsBtn.click();
-    await expect(page.getByText(/slot length/i).first()).toBeVisible({ timeout: 5_000 });
-    // Toggle back off
-    await cutSlotsBtn.click();
+    const menuContainer = cutSlotsBtn.locator('xpath=ancestor::div[contains(@class,"relative") and contains(@class,"flex")]').first();
+    const toggleBtn = menuContainer.locator('button').nth(1);
+    try {
+      await toggleBtn.click({ timeout: 5_000 });
+    } catch {
+      await toggleBtn.dispatchEvent('click');
+    }
+    // Slot mode options should appear in the dropdown
+    await expect(page.getByRole('button', { name: /2-plane/i }).first()).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByRole('button', { name: /3-plane/i }).first()).toBeVisible({ timeout: 8_000 });
+    // Press Escape to close menu
+    await page.keyboard.press('Escape');
   });
 
-  test('Undo button is visible', async ({ page }) => {
-    // Undo button has a ← arrow icon and/or text
-    const undoBtn = page.locator('button[title*="Undo" i]').first();
-    await expect(undoBtn.or(page.getByRole('button', { name: /undo/i }).first())).toBeVisible();
+  test('header action buttons are visible', async ({ page }) => {
+    await expect(page.locator('button[title="Reset All Settings to Defaults"]').first()).toBeVisible({ timeout: 8_000 });
+    await expect(page.locator('button[title="Settings & Shortcuts"]').first()).toBeVisible({ timeout: 8_000 });
   });
 });

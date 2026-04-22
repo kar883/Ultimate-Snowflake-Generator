@@ -285,7 +285,9 @@ interface ShortcutsModalProps {
   onLanguageChange?: (lang: string) => void;
   showTooltips?: boolean;
   onTooltipsChange?: (show: boolean) => void;
-  activeTab?: 'shortcuts' | 'apikey' | 'aiscope';
+  onSaveAsDefault?: () => void;
+  onRestoreFactoryDefaults?: () => void;
+  activeTab?: 'shortcuts' | 'apikey' | 'aiscope' | 'settings';
   message?: string | null;
 }
 
@@ -321,11 +323,12 @@ const translateShortcutAction = (action: keyof ShortcutConfig, t: (key: string) 
 const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
   isOpen, onClose, config, onSave, onReset,
   language = 'en', onLanguageChange, showTooltips, onTooltipsChange,
+  onSaveAsDefault, onRestoreFactoryDefaults,
   activeTab: initialTab = 'shortcuts', message
 }) => {
   const { t } = useTranslation(language);
 
-  type TabId = 'shortcuts' | 'apikey' | 'aiscope';
+  type TabId = 'shortcuts' | 'apikey' | 'aiscope' | 'settings';
   const [activeTab, setActiveTab] = useState<TabId>(initialTab);
 
   // ── Shortcuts state ──────────────────────────────────────────────────────
@@ -563,9 +566,10 @@ const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
 
         {/* ── Tab bar ──────────────────────────────────────────────────── */}
         <div className="flex gap-1 px-5 pt-3 pb-0 shrink-0">
-          {tabBtn('shortcuts', '⌨', 'Shortcuts')}
-          {tabBtn('apikey',    '🔑', 'API Key')}
-          {tabBtn('aiscope',   '🎲', 'AI Controls')}
+          {tabBtn('shortcuts', '⌨', t('Shortcuts'))}
+          {tabBtn('apikey',    '🔑', t('API Key'))}
+          {tabBtn('aiscope',   '🎲', t('AI Controls'))}
+          {tabBtn('settings',  '⚙', t('settings'))}
         </div>
 
         {/* ── Scrollable content ───────────────────────────────────────── */}
@@ -977,6 +981,37 @@ const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
                   })}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ════════════════════════════════ SETTINGS TAB */}
+          {activeTab === 'settings' && (
+            <div className="space-y-4">
+              <div className="p-3 bg-slate-800/30 rounded-xl border border-white/5 space-y-3">
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">{t('Defaults')}</div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  {t('startupDefaultsHelp')}
+                </p>
+                <button
+                  onClick={() => onSaveAsDefault?.()}
+                  className="w-full h-9 rounded-lg bg-emerald-600/20 text-emerald-300 border border-emerald-500/30 text-xs font-black uppercase tracking-wider hover:bg-emerald-500 hover:text-white transition-all"
+                >
+                  {t('saveStartupDefaults')}
+                </button>
+              </div>
+
+              <div className="p-3 bg-rose-900/20 rounded-xl border border-rose-500/20 space-y-3">
+                <div className="text-[10px] font-black uppercase tracking-wider text-rose-300">{t('Factory Reset')}</div>
+                <p className="text-[11px] text-rose-200/80 leading-relaxed">
+                  {t('factoryResetHelp')}
+                </p>
+                <button
+                  onClick={() => onRestoreFactoryDefaults?.()}
+                  className="w-full h-9 rounded-lg bg-rose-600/20 text-rose-200 border border-rose-500/40 text-xs font-black uppercase tracking-wider hover:bg-rose-500 hover:text-white transition-all"
+                >
+                  {t('restoreFactoryDefaults')}
+                </button>
+              </div>
             </div>
           )}
 

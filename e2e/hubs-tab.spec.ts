@@ -24,23 +24,18 @@ test.describe('Hubs tab', () => {
   });
 
   test('"Add Hub" button is visible', async ({ page }) => {
-    const addBtn = page.getByRole('button', { name: /add hub/i });
+    const addBtn = page.getByRole('button', { name: /(\+\s*hub|add\s*hub)/i }).first();
     await expect(addBtn).toBeVisible();
   });
 
   test('Adding a hub renders hub controls', async ({ page }) => {
     await addHub(page);
-    // After adding a hub, hub-related controls should appear
-    await expect(page.getByText(/hub radius/i).first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole('button', { name: /hub\s*1/i }).first()).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText(/hub radius|rotation|hollow/i).first()).toBeVisible({ timeout: 8_000 });
   });
 
   test('Hub shape options circle / polygon / star are present', async ({ page }) => {
     await addHub(page);
-    // Enable the hub so all controls appear
-    const visibleToggle = page.getByText(/visible/i).first();
-    if (await visibleToggle.isVisible()) {
-      await visibleToggle.click();
-    }
     await expect(page.getByText(/circle/i).first()).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(/polygon/i).first()).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(/star/i).first()).toBeVisible({ timeout: 5_000 });
@@ -48,18 +43,18 @@ test.describe('Hubs tab', () => {
 
   test('Selecting polygon shape shows Hub Sides slider', async ({ page }) => {
     await addHub(page);
-    const polygonBtn = page.getByRole('button', { name: /polygon/i });
-    if (await polygonBtn.isVisible()) {
-      await polygonBtn.click();
+    const polygonBtn = page.getByRole('button', { name: /polygon/i }).first();
+    if (await polygonBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await polygonBtn.click({ noWaitAfter: true });
       await expect(page.getByText(/hub sides/i).first()).toBeVisible({ timeout: 5_000 });
     }
   });
 
   test('Selecting star shape shows Star Ratio slider', async ({ page }) => {
     await addHub(page);
-    const starBtn = page.getByRole('button', { name: /^star$/i });
-    if (await starBtn.isVisible()) {
-      await starBtn.click();
+    const starBtn = page.getByRole('button', { name: /^star$/i }).first();
+    if (await starBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await starBtn.click({ noWaitAfter: true });
       await expect(page.getByText(/star ratio/i).first()).toBeVisible({ timeout: 5_000 });
     }
   });
@@ -75,7 +70,7 @@ test.describe('Hubs tab', () => {
     const hollowLabel = page.getByText(/^hollow$/i).first();
     if (await hollowLabel.isVisible()) {
       await hollowLabel.click();
-      await expect(page.getByText(/wall thickness/i).first()).toBeVisible({ timeout: 5_000 });
+      await expect(page.getByText(/boldness|wall thickness/i).first()).toBeVisible({ timeout: 5_000 });
     }
   });
 
@@ -94,9 +89,8 @@ test.describe('Hubs tab', () => {
   test('Adding two hubs shows both in the selector', async ({ page }) => {
     await addHub(page);
     await addHub(page);
-    // There should now be two hub selectors or two "Hub #" labels
-    const hubLabels = page.getByText(/hub\s*#?[12]/i);
-    await expect(hubLabels.first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole('button', { name: /hub\s*1/i }).first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole('button', { name: /hub\s*2/i }).first()).toBeVisible({ timeout: 5_000 });
   });
 
   test('Rotation slider is present', async ({ page }) => {

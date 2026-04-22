@@ -3,7 +3,25 @@ import ReactDOM from 'react-dom/client';
 import './src/index.css';
 import App from './src/App.tsx';
 
-console.log('Ultimate Snowflake Generator v1.0.4 - Restored');
+console.log('Ultimate Snowflake Generator v1.0.5 - Restored');
+
+// Prevent stale app code from lingering via old service workers/caches.
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then((registrations) => {
+    registrations.forEach((registration) => {
+      registration.unregister().catch(() => undefined);
+    });
+  }).catch(() => undefined);
+}
+if (typeof window !== 'undefined' && 'caches' in window) {
+  caches.keys().then((keys) => {
+    keys
+      .filter((k) => k.startsWith('snowflake-'))
+      .forEach((k) => {
+        caches.delete(k).catch(() => undefined);
+      });
+  }).catch(() => undefined);
+}
 
 try {
   console.log('✅ App.tsx imported successfully');

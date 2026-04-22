@@ -26,6 +26,7 @@ import {
 import { getTopologyReport } from './surgicalSlotRepair';
 import { fillSlotHoles } from './slotHoleFiller';
 import { postCSGJob, terminateWorker } from './csgWorkerManager';
+import { useTranslation } from './translations';
 // @ts-ignore
 // import { fillHolesManifold } from './holeFillingRepair'; // Temporarily commented
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, /*makeSlotKey,*/ getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, /*slotCutCache,*/ makeUnderlineKey } from './geometryCache';
@@ -780,6 +781,31 @@ const getSlotPlanePreset = (
   return null;
 };
 
+const getSlotArmCount = (layer: LayerConfig): number => {
+  // Slot axis is driven by primary rotation controls; use primary arm count
+  // first so odd-arm mate logic remains predictable.
+  if (layer.primary.enabled && (layer.primary.arms || 0) > 0) {
+    return Math.max(1, layer.primary.arms || 0);
+  }
+  if (layer.secondaryEnabled && layer.secondary.enabled && (layer.secondary.arms || 0) > 0) {
+    return Math.max(1, layer.secondary.arms || 0);
+  }
+  return 6;
+};
+
+const getRearMateReach = (
+  fullRearReach: number,
+  armCount: number,
+  slotMode: SnowflakeConfig['slotMode']
+): number => {
+  if (slotMode !== '3-plane' || armCount % 2 === 0) {
+    return fullRearReach;
+  }
+
+  const halfGapRad = Math.PI / armCount;
+  return Math.max(0.01, fullRearReach * Math.cos(halfGapRad));
+};
+
 const createSlotProfilesForLayer = (
   layer: LayerConfig,
   layerIndex: number,
@@ -793,25 +819,35 @@ const createSlotProfilesForLayer = (
 
   const slots: SlotProfile2D[] = [];
   const modelDiameter = 190;
-  const drawLength = Math.max(config.slotLength + (layer.slotLengthAdjustment ?? 0), (modelDiameter / 2) + 20);
-  const slotLength = Math.max(2, config.slotLength + (layer.slotLengthAdjustment ?? 0));
-  const tipInStart = Math.max(0, slotLength * 0.75);
-  const tipInLength = Math.max(0.01, drawLength * 0.22);
-  const extensionLength = Math.max(0.01, slotLength * 0.6);
-  const widthAdjustment = layer.slotWidthOffset ?? 0;
+  const lengthAdjustmentPerSide = layer.slotLengthAdjustment ?? 0;
+  const widthAdjustmentPerSide = layer.slotWidthOffset ?? 0;
+  const effectiveSlotLength = config.slotLength + (lengthAdjustmentPerSide * 2);
+  const drawLength = Math.max(effectiveSlotLength, (modelDiameter / 2) + 20);
+  const slotLength = Math.max(2, effectiveSlotLength);
+  const baseTiltExtensionLength = Math.max(0.01, slotLength * 0.6);
+  const tiltExtensionLengthAdjustment = layer.slotTiltExtensionLengthAdjustment ?? 0;
+  const tiltExtensionLength = Math.max(0.01, baseTiltExtensionLength + tiltExtensionLengthAdjustment);
   const enabledTextThicknesses = [
     layer.primary.enabled ? (layer.primary.thickness || 0) : 0,
     (layer.secondaryEnabled && layer.secondary.enabled) ? (layer.secondary.thickness || 0) : 0,
   ];
-  const maxLayerTextThickness = Math.max(...enabledTextThicknesses);
-  // Keep default look unchanged while scaling clearance as users add boldness.
-  // Default text thickness is 1.0, so only thickness above that baseline adds slot width.
-  const textThicknessOverBaseline = Math.max(0, maxLayerTextThickness - 1.0);
-  const effectiveBoldnessForSlot = Math.max(0, (config.globalStrokeWeight || 0) + textThicknessOverBaseline);
-  const slotThickness = Math.max(0.1, materialThickness + effectiveBoldnessForSlot + config.slotWidth + widthAdjustment);
+  const maxLayerTextThickness = Math.max(0, ...enabledTextThicknesses);
+  // Match the pre-regression blade thickness model: active text thickness is
+  // measured relative to the 1.0 baseline body, not added in full on top.
+  const effectiveBoldnessForSlot = Math.max(0, (config.globalStrokeWeight || 0) + (maxLayerTextThickness - 1.0));
+  const slotThickness = Math.max(
+    0.1,
+    materialThickness + effectiveBoldnessForSlot + config.slotWidth + widthAdjustmentPerSide
+  );
   const bridge = Math.min(0.4, Math.max(0.15, slotThickness * 0.08));
   const halfChannel = Math.max(0.12, (slotThickness - bridge) / 2);
   const armAngle = layer.primary.rotationOffset ?? 0;
+  const armCount = getSlotArmCount(layer);
+  const rearMateReach = getRearMateReach(drawLength, armCount, config.slotMode);
+  const rearExtensionReach = Math.min(tiltExtensionLength, rearMateReach);
+  const baseCrossTipInLength = Math.max(0.01, rearMateReach - rearExtensionReach);
+  const crossTipInLengthAdjustment = layer.slotCrossTipInLengthAdjustment ?? 0;
+  const crossTipInLength = Math.max(0.01, Math.min(rearMateReach, baseCrossTipInLength + crossTipInLengthAdjustment));
 
   if (config.slotMode === '2-plane') {
     if (layerIndex === 0) {
@@ -843,9 +879,9 @@ const createSlotProfilesForLayer = (
     });
     // Tip-in: outer arm tip inward, stopping where tilt extension begins.
     slots.push({
-      length: Math.max(0.01, drawLength - extensionLength),
+      length: crossTipInLength,
       width: slotThickness,
-      xOffset: -drawLength,
+      xOffset: -rearMateReach,
       yOffset: 0,
       rotationDeg: -armAngle,
     });
@@ -862,15 +898,15 @@ const createSlotProfilesForLayer = (
     // Opposite-arm extension: start at the origin and cut outward on the
     // negative-X arm for 75% of slotLength.
     slots.push({
-      length: extensionLength,
+      length: rearExtensionReach,
       width: slotThickness,
-      xOffset: -extensionLength,
+      xOffset: -rearExtensionReach,
       yOffset: -((bridge / 2) + (halfChannel / 2)),
       rotationDeg: -armAngle,
     });
     // Cross-Tilt direct mate: complementary short channel in the opposite half.
     slots.push({
-      length: extensionLength,
+      length: tiltExtensionLength,
       width: slotThickness,
       yOffset: (bridge / 2) + (halfChannel / 2),
       rotationDeg: -armAngle,
@@ -895,23 +931,33 @@ const createAngledSlotCuttersForLayer = (
   if (config.slotMode === '3-plane' && enabledLayers.length < 3) return [];
 
   const modelDiameter = 190;
-  const adjLength = Math.max(2, config.slotLength + (layer.slotLengthAdjustment ?? 0));
+  const lengthAdjustmentPerSide = layer.slotLengthAdjustment ?? 0;
+  const widthAdjustmentPerSide = layer.slotWidthOffset ?? 0;
+  const adjLength = Math.max(2, config.slotLength + (lengthAdjustmentPerSide * 2));
   const drawLength = Math.max(adjLength, (modelDiameter / 2) + 20);
-  const tipInStart = Math.max(0, adjLength * 0.75);
-  const tipInLength = Math.max(0.01, drawLength * 0.22);
-  const extensionLength = Math.max(0.01, adjLength * 0.6);
+  const baseTiltExtensionLength = Math.max(0.01, adjLength * 0.6);
+  const tiltExtensionLengthAdjustment = layer.slotTiltExtensionLengthAdjustment ?? 0;
+  const tiltExtensionLength = Math.max(0.01, baseTiltExtensionLength + tiltExtensionLengthAdjustment);
   const armAngle = layer.primary.rotationOffset ?? 0;
+  const armCount = getSlotArmCount(layer);
   const enabledTextThicknesses = [
     layer.primary.enabled ? (layer.primary.thickness || 0) : 0,
     (layer.secondaryEnabled && layer.secondary.enabled) ? (layer.secondary.thickness || 0) : 0,
   ];
-  const maxLayerTextThickness = Math.max(...enabledTextThicknesses);
-  const textThicknessOverBaseline = Math.max(0, maxLayerTextThickness - 1.0);
-  const effectiveBoldnessForSlot = Math.max(0, (config.globalStrokeWeight || 0) + textThicknessOverBaseline);
-  const slotThickness = Math.max(0.1, materialThickness + effectiveBoldnessForSlot + config.slotWidth + (layer.slotWidthOffset ?? 0));
+  const maxLayerTextThickness = Math.max(0, ...enabledTextThicknesses);
+  const effectiveBoldnessForSlot = Math.max(0, (config.globalStrokeWeight || 0) + (maxLayerTextThickness - 1.0));
+  const slotThickness = Math.max(
+    0.1,
+    materialThickness + effectiveBoldnessForSlot + config.slotWidth + widthAdjustmentPerSide
+  );
   const bridge = Math.min(0.4, Math.max(0.15, slotThickness * 0.08));
   const halfChannel = Math.max(0.12, (slotThickness - bridge) / 2);
   const fullPunch = Math.max(500, drawLength * 4);
+  const rearMateReach = getRearMateReach(drawLength, armCount, config.slotMode);
+  const rearExtensionReach = Math.min(tiltExtensionLength, rearMateReach);
+  const baseCrossTipInLength = Math.max(0.01, rearMateReach - rearExtensionReach);
+  const crossTipInLengthAdjustment = layer.slotCrossTipInLengthAdjustment ?? 0;
+  const crossTipInLength = Math.max(0.01, Math.min(rearMateReach, baseCrossTipInLength + crossTipInLengthAdjustment));
 
   const cutters: THREE_ACTUAL.BufferGeometry[] = [];
 
@@ -948,6 +994,11 @@ const createAngledSlotCuttersForLayer = (
   if (layerIndex === 0) {
     // Base slot angle tuned to match Tilt insertion direction.
     addCutter(-drawLength, drawLength, slotThickness, 240, -armAngle, 0);
+    if (config.slotMode === '3-plane' && armCount % 2 !== 0) {
+      // Odd arm counts have no true opposite arm. Add a complementary X-mate
+      // blade on the same rear reach so Cross/Tilt can still seat cleanly.
+      addCutter(-rearMateReach, rearMateReach, slotThickness, 120, -armAngle, 0);
+    }
     return cutters;
   }
 
@@ -955,9 +1006,8 @@ const createAngledSlotCuttersForLayer = (
     addCutter(0, drawLength, slotThickness, 240, -armAngle, 0);
     // Tip-in X-blade: from outer tip inward, stopping where tilt extension begins.
     // Use paired 240°/120° blades so the entry cut aligns with the crossing mate.
-    const tipInCutLength = Math.max(0.01, drawLength - extensionLength);
-    addCutter(-drawLength, tipInCutLength, slotThickness, 240, -armAngle, 0);
-    addCutter(-drawLength, tipInCutLength, slotThickness, 120, -armAngle, 0);
+    addCutter(-rearMateReach, crossTipInLength, slotThickness, 240, -armAngle, 0);
+    addCutter(-rearMateReach, crossTipInLength, slotThickness, 120, -armAngle, 0);
     return cutters;
   }
 
@@ -966,8 +1016,8 @@ const createAngledSlotCuttersForLayer = (
     addCutter(0, drawLength, slotThickness, 120, -armAngle, 0);
     // Opposite-arm extension from origin outward for 75% of slotLength.
     addCutter(
-      -extensionLength,
-      extensionLength,
+      -rearExtensionReach,
+      rearExtensionReach,
       slotThickness,
       240,
       -armAngle,
@@ -976,7 +1026,7 @@ const createAngledSlotCuttersForLayer = (
     // Cross-Tilt direct mate on Tilt plane.
     addCutter(
       0,
-      extensionLength,
+      tiltExtensionLength,
       slotThickness,
       240,
       -armAngle,
@@ -1043,38 +1093,71 @@ const applyWatertightSlotCuts = async (
 
   const runWorkerCut = async (): Promise<THREE_ACTUAL.BufferGeometry> => {
     const workerStart = performance.now();
+    const previewQuality = config.quality;
+    const previewWeldTolerance = previewQuality === 'high'
+      ? 0.00024
+      : previewQuality === 'med'
+        ? 0.0003
+        : 0.00036;
+    const weldTolerance = options?.preferWorker ? previewWeldTolerance : 0.0002;
 
-    const baseData = {
-      positions: Array.from(layerForCut.attributes.position.array as Float32Array),
-      indices: layerForCut.index
-        ? Array.from(layerForCut.index.array as Uint32Array)
-        : null,
+    const runSingleWorkerSubtract = async (
+      source: THREE_ACTUAL.BufferGeometry,
+      activeCutters: THREE_ACTUAL.BufferGeometry[]
+    ): Promise<THREE_ACTUAL.BufferGeometry> => {
+      const baseData = {
+        positions: Array.from(source.attributes.position.array as Float32Array),
+        indices: source.index
+          ? Array.from(source.index.array as Uint32Array)
+          : null,
+      };
+
+      const slotsData = activeCutters.map((g) => ({
+        positions: Array.from(g.attributes.position.array as Float32Array),
+        indices: g.index
+          ? Array.from(g.index.array as Uint32Array)
+          : null,
+        rotation: { x: 0, y: 0, z: 0 },
+      }));
+
+      const workerResult = await postCSGJob(baseData, slotsData, { x: 0, y: 0, z: 0 }, signal);
+      if (!workerResult?.success || !workerResult?.geometry?.positions?.length) {
+        throw new Error(workerResult?.error || 'Worker CSG returned empty geometry');
+      }
+
+      const out = new THREE_ACTUAL.BufferGeometry();
+      out.setAttribute(
+        'position',
+        new THREE_ACTUAL.BufferAttribute(new Float32Array(workerResult.geometry.positions), 3)
+      );
+      if (workerResult.geometry.indices?.length) {
+        out.setIndex(new THREE_ACTUAL.BufferAttribute(new Uint32Array(workerResult.geometry.indices), 1));
+      }
+      out.computeVertexNormals();
+      out.computeBoundingBox();
+      return out;
     };
 
-    const slotsData = cutters.map((g) => ({
-      positions: Array.from(g.attributes.position.array as Float32Array),
-      indices: g.index
-        ? Array.from(g.index.array as Uint32Array)
-        : null,
-      rotation: { x: 0, y: 0, z: 0 },
-    }));
+    let out: THREE_ACTUAL.BufferGeometry;
+    if (cutters.length <= 1) {
+      out = await runSingleWorkerSubtract(layerForCut, cutters);
+    } else {
+      let current = layerForCut.clone();
+      for (const cutter of cutters) {
+        const subtracted = await runSingleWorkerSubtract(current, [cutter]);
+        current.dispose();
 
-    const workerResult = await postCSGJob(baseData, slotsData, { x: 0, y: 0, z: 0 }, signal);
-    
-    if (!workerResult?.success || !workerResult?.geometry?.positions?.length) {
-      throw new Error(workerResult?.error || 'Worker CSG returned empty geometry');
-    }
+        const filledStep = fillSlotHoles(subtracted, [cutter]);
+        if (filledStep !== subtracted) subtracted.dispose();
 
-    const out = new THREE_ACTUAL.BufferGeometry();
-    out.setAttribute(
-      'position',
-      new THREE_ACTUAL.BufferAttribute(new Float32Array(workerResult.geometry.positions), 3)
-    );
-    if (workerResult.geometry.indices?.length) {
-      out.setIndex(new THREE_ACTUAL.BufferAttribute(new Uint32Array(workerResult.geometry.indices), 1));
+        const weldedStep = BufferGeometryUtils.mergeVertices(filledStep, weldTolerance) as THREE_ACTUAL.BufferGeometry;
+        if (weldedStep !== filledStep) filledStep.dispose();
+        weldedStep.computeVertexNormals();
+        weldedStep.computeBoundingBox();
+        current = weldedStep;
+      }
+      out = current;
     }
-    out.computeVertexNormals();
-    out.computeBoundingBox();
 
     const workerMs = performance.now() - workerStart;
     if (workerMs > 120) {
@@ -1083,14 +1166,18 @@ const applyWatertightSlotCuts = async (
 
     // Use original fillSlotHoles (time-tested, correct) rather than worker version.
     // The worker does fast BSP subtraction; the original hole-filler is already fast enough.
-    const filled = fillSlotHoles(out, cutters);
-    if (filled !== out) out.dispose();
+    if (cutters.length <= 1) {
+      const filled = fillSlotHoles(out, cutters);
+      if (filled !== out) out.dispose();
 
-    const welded = BufferGeometryUtils.mergeVertices(filled, 0.0001) as THREE_ACTUAL.BufferGeometry;
-    if (welded !== filled) filled.dispose();
-    welded.computeVertexNormals();
-    welded.computeBoundingBox();
-    return welded;
+      const welded = BufferGeometryUtils.mergeVertices(filled, weldTolerance) as THREE_ACTUAL.BufferGeometry;
+      if (welded !== filled) filled.dispose();
+      welded.computeVertexNormals();
+      welded.computeBoundingBox();
+      return welded;
+    }
+
+    return out;
   };
 
   if (options?.preferWorker) {
@@ -1737,11 +1824,52 @@ const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isEnabled 
   slotType: 'none',
   slotLengthAdjustment: 0,
   slotWidthOffset: 0,
+  slotCrossTipInLengthAdjustment: 0,
+  slotTiltExtensionLengthAdjustment: 0,
   images: [],
 });
 
+const USER_DEFAULTS_STORAGE_KEY = 'snowflake-user-defaults-v1';
+
+const createFactoryInitialState = (): SnowflakeConfig => ({
+  projectName: 'MySnowflake',
+  layers: [
+    createDefaultLayer('layer-1', 'Base Plane', 0, 0, true),
+    createDefaultLayer('layer-2', 'Cross Plane', 120, 0, false),
+    createDefaultLayer('layer-4', 'Tilt Plane', 240, 0, false),
+  ],
+  activeLayerIndex: 0,
+  color: '#38bdf8',
+  extrusionDepth: 3.0,
+  bevelEnabled: true,
+  bevelType: 'fillet',
+  bevelAmount: 0.4,
+  bevelSegments: 5,
+  slotEnabled: false,
+  slotLength: 95,
+  slotWidth: 0.2,
+  slotMode: '3-plane',
+  quality: 'low',
+  syncAllLayers: true,
+  globalStrokeWeight: 0,
+  freeFloatingCheck: true,
+});
+
+const loadStartupState = (): SnowflakeConfig => {
+  const factory = createFactoryInitialState();
+  try {
+    const raw = window.localStorage.getItem(USER_DEFAULTS_STORAGE_KEY);
+    if (!raw) return factory;
+    const parsed = JSON.parse(raw) as SnowflakeConfig;
+    if (!parsed || !Array.isArray(parsed.layers) || parsed.layers.length === 0) return factory;
+    if (typeof parsed.projectName !== 'string') return factory;
+    return parsed;
+  } catch {
+    return factory;
+  }
+};
+
 const App: React.FC = () => {
-  const defaultDepth = 3.0;
   const MAX_SLOT_CUT_CACHE_ENTRIES = 36;
 
   // Debug: Track app initialization only once
@@ -1861,33 +1989,11 @@ const App: React.FC = () => {
   const lastConfigHash = useRef<string>('');
   const lastQuality = useRef<string>('');
 
-  const initialState: SnowflakeConfig = {
-    projectName: "MySnowflake",
-    layers: [
-      createDefaultLayer('layer-1', 'Base Plane', 0, 0, true),
-      createDefaultLayer('layer-2', 'Cross Plane', 120, 0, true),
-      createDefaultLayer('layer-4', 'Tilt Plane', 240, 0, true),
-    ],
-    activeLayerIndex: 0,
-    color: "#38bdf8",
-    extrusionDepth: defaultDepth,
-    bevelEnabled: true, // Default ON
-    bevelType: 'fillet',
-    bevelAmount: 0.4,
-    bevelSegments: 5,
-    slotEnabled: false,
-    slotLength: 95,
-    slotWidth: 0.2,
-    slotMode: '3-plane',
-    quality: 'low',
-    syncAllLayers: true, // Default ON
-    globalStrokeWeight: 0,
-    freeFloatingCheck: true
-  };
+  const initialState = useMemo(() => loadStartupState(), []);
 
-  const [config, setConfig] = useState<SnowflakeConfig>(initialState);
-  const [config3D, setConfig3D] = useState<SnowflakeConfig>(initialState);
-  const [rendered3DConfig, setRendered3DConfig] = useState<SnowflakeConfig>(initialState);
+  const [config, setConfig] = useState<SnowflakeConfig>(() => initialState);
+  const [config3D, setConfig3D] = useState<SnowflakeConfig>(() => initialState);
+  const [rendered3DConfig, setRendered3DConfig] = useState<SnowflakeConfig>(() => initialState);
   // Guarded setter based on full serialized config so 3D never misses updates.
   const lastRendered3DSerialized = useRef<string>(JSON.stringify(initialState));
   const emergencyStopSeqRef = useRef(0);
@@ -1902,9 +2008,10 @@ const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'global' | 'text' | 'Letter Ctrl' | 'hubs' | 'abstract' | 'planes' | 'images'>('text');
   const [shortcuts, setShortcuts] = useState<ShortcutConfig>(DEFAULT_SHORTCUTS);
   const [language, setLanguage] = useState<string>('en');
+  const { t } = useTranslation(language);
   const [showTooltips, setShowTooltips] = useState<boolean>(true);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
-  const [shortcutsModalTab, setShortcutsModalTab] = useState<'shortcuts' | 'apikey' | 'aiscope'>('shortcuts');
+  const [shortcutsModalTab, setShortcutsModalTab] = useState<'shortcuts' | 'apikey' | 'aiscope' | 'settings'>('shortcuts');
   const [shortcutsModalMessage, setShortcutsModalMessage] = useState<string | null>(null);
 
   const [history, setHistory] = useState<SnowflakeConfig[]>([initialState]);
@@ -1913,11 +2020,14 @@ const App: React.FC = () => {
   const canRedo = historyIndex < history.length - 1;
 
   const [exportLoading, setExportLoading] = useState(false);
+  const [exportLoadingKey, setExportLoadingKey] = useState<string | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiProgress, setAiProgress] = useState(0);
   const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d');
+  const [autoRegenerate3D, setAutoRegenerate3D] = useState(true);
   const [identifyBodiesMode, setIdentifyBodiesMode] = useState(false);
   const [floatingBodiesByLayer, setFloatingBodiesByLayer] = useState<Record<string, boolean>>({});
+  const [isProcessing3D, setIsProcessing3D] = useState(false);
   const anyFloatingBodies = useMemo(
     () => Object.values(floatingBodiesByLayer).some(Boolean),
     [floatingBodiesByLayer]
@@ -2042,20 +2152,21 @@ const App: React.FC = () => {
   const emergencyStopAllProcessing = useCallback(() => {
     emergencyStopSeqRef.current += 1;
     setEmergencyStopSeq((s) => s + 1);
+    setIsProcessing3D(false);
     cancelAllSlotCuts({ includePreview: true, terminateCSGWorker: true });
   }, [cancelAllSlotCuts]);
 
   // Escape key handler to stop ongoing computation — placed after cancelAllSlotCuts is declared
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isComputingSlots) {
+      if (e.key === 'Escape' && (isComputingSlots || isProcessing3D)) {
         e.preventDefault();
         emergencyStopAllProcessing();
       }
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [isComputingSlots, emergencyStopAllProcessing]);
+  }, [isComputingSlots, isProcessing3D, emergencyStopAllProcessing]);
 
   const debouncedUpdate3D = useCallback((next: SnowflakeConfig) => {
     if (debounce150Timer.current) clearTimeout(debounce150Timer.current);
@@ -2066,6 +2177,11 @@ const App: React.FC = () => {
     if (debounce500Timer.current) clearTimeout(debounce500Timer.current);
     debounce500Timer.current = setTimeout(() => setRendered3DIfChanged(next), 500);
   }, [setRendered3DIfChanged]);
+
+  useEffect(() => {
+    if (!autoRegenerate3D) return;
+    setRendered3DIfChanged(config);
+  }, [autoRegenerate3D, config, setRendered3DIfChanged]);
 
   // Memoized enabled layers with caching
   const getEnabledLayers = useCallback((config: SnowflakeConfig): LayerConfig[] => {
@@ -2143,6 +2259,8 @@ const App: React.FC = () => {
       rotY: l.rotation3D.y,
       slotLengthAdjustment: l.slotLengthAdjustment ?? 0,
       slotWidthOffset: l.slotWidthOffset ?? 0,
+      slotCrossTipInLengthAdjustment: l.slotCrossTipInLengthAdjustment ?? 0,
+      slotTiltExtensionLengthAdjustment: l.slotTiltExtensionLengthAdjustment ?? 0,
       primaryEnabled: l.primary.enabled,
       primaryThickness: l.primary.thickness ?? 0,
       primaryRotationOffset: l.primary.rotationOffset ?? 0,
@@ -2157,6 +2275,8 @@ const App: React.FC = () => {
       rotY: layer.rotation3D.y,
       slotLengthAdjustment: layer.slotLengthAdjustment ?? 0,
       slotWidthOffset: layer.slotWidthOffset ?? 0,
+      slotCrossTipInLengthAdjustment: layer.slotCrossTipInLengthAdjustment ?? 0,
+      slotTiltExtensionLengthAdjustment: layer.slotTiltExtensionLengthAdjustment ?? 0,
       primaryEnabled: layer.primary.enabled,
       primaryThickness: layer.primary.thickness ?? 0,
       primaryRotationOffset: layer.primary.rotationOffset ?? 0,
@@ -2488,21 +2608,27 @@ const App: React.FC = () => {
         setHistoryIndex(i => Math.min(i + 1, MAX_HISTORY - 1));
 
         // Immediate update for 3D view (whether visible or not, it keeps it in sync)
-        setRendered3DIfChanged(next);
+        if (autoRegenerate3D) {
+          setRendered3DIfChanged(next);
+        }
       } else {
         // Debounce update for 3D view
         // If in 3D mode: fast debounce (150ms) for responsiveness
         // If in 2D mode: slower debounce (500ms) to avoid lagging the UI with background generation
-        const delay = viewMode === '3d' ? 150 : 500;
-        if (delay === 150) {
-          debouncedUpdate3D(next);
+        if (autoRegenerate3D) {
+          const delay = viewMode === '3d' ? 150 : 500;
+          if (delay === 150) {
+            debouncedUpdate3D(next);
+          } else {
+            debouncedUpdate3DSlow(next);
+          }
         } else {
-          debouncedUpdate3DSlow(next);
+          setConfig3D(next);
         }
       }
       return next;
     });
-  }, [historyIndex, viewMode]);
+  }, [historyIndex, viewMode, autoRegenerate3D]);
 
   useEffect(() => {
       return () => {
@@ -2602,9 +2728,12 @@ const App: React.FC = () => {
     onProgress: (p: number) => void,
     overrideQuality?: DesignQuality,
     overrideConfig?: SnowflakeConfig,
-    generationMode: MeshGenerationMode = 'preview'
+    generationMode: MeshGenerationMode = 'preview',
+    options?: { targetLayerIds?: string[] }
   ): Promise<THREE_ACTUAL.Group> => {
     const config = overrideConfig || rendered3DConfig;
+    const targetLayerIds = options?.targetLayerIds?.filter(Boolean) ?? [];
+    const targetLayerIdSet = targetLayerIds.length > 0 ? new Set(targetLayerIds) : null;
     const runSeq = emergencyStopSeqRef.current;
     const ensureNotStopped = () => {
       if (runSeq !== emergencyStopSeqRef.current) {
@@ -2618,6 +2747,7 @@ const App: React.FC = () => {
     // causing 3D to show stale mesh when those values changed.
     const meshKey = hashConfig(config)
       + '|q:' + (overrideQuality || config.quality)
+      + '|targets:' + (targetLayerIds.length > 0 ? [...targetLayerIds].sort().join(',') : 'all')
       + '|algo:' + GEOMETRY_ALGO_VERSION;
 
     // Check cache first unless this is an explicit force-refresh run.
@@ -2645,11 +2775,21 @@ const App: React.FC = () => {
     let bevelSegCap = 10;
 
     if (interactiveSlotPreview) {
-      // Interactive preview with slots: balanced setting that avoids manifold OOM
-      // while keeping curved text from visibly notching.
-      qMult = 0.45;
-      curveSeg = 6;
-      bevelSegCap = 4;
+      // Keep interactive slot preview responsive while still honoring quality.
+      // This mapping intentionally stays below export detail to avoid UI stalls.
+      if (qualityToUse === 'low') {
+        qMult = 0.35;
+        curveSeg = 5;
+        bevelSegCap = 3;
+      } else if (qualityToUse === 'med') {
+        qMult = 0.45;
+        curveSeg = 6;
+        bevelSegCap = 4;
+      } else {
+        qMult = 0.6;
+        curveSeg = 8;
+        bevelSegCap = 5;
+      }
     } else if (qualityToUse === 'low') {
         qMult = 0.5;
         curveSeg = 8;
@@ -2694,8 +2834,18 @@ const App: React.FC = () => {
     };
 
     const group = new THREE_ACTUAL.Group();
-    // Only generate enabled layers
-    const layersToGenerate = config.layers.filter(l => l.enabled);
+    // Keep full enabled context for slot mating logic, while optionally exporting
+    // only a subset of planes.
+    const slotContextLayers = config.layers.filter(l => l.enabled);
+    const layersToGenerate = targetLayerIdSet
+      ? slotContextLayers.filter((layer) => targetLayerIdSet.has(layer.id))
+      : slotContextLayers;
+
+    if (layersToGenerate.length === 0) {
+      onProgress(1);
+      modelCache3D.set(meshKey, group);
+      return group;
+    }
 
     let totalOps = layersToGenerate.length;
 
@@ -2707,9 +2857,92 @@ const App: React.FC = () => {
         await new Promise(r => setTimeout(r, 10));
     };
 
+    const buildLayerSyncSignature = (layer: LayerConfig): string => JSON.stringify({
+      primary: layer.primary,
+      secondary: layer.secondary,
+      secondaryEnabled: layer.secondaryEnabled,
+      hubs: layer.hubs,
+      abstracts: layer.abstracts,
+      images: layer.images,
+      slotLengthAdjustment: layer.slotLengthAdjustment,
+      slotWidthOffset: layer.slotWidthOffset,
+      slotCrossTipInLengthAdjustment: layer.slotCrossTipInLengthAdjustment,
+      slotTiltExtensionLengthAdjustment: layer.slotTiltExtensionLengthAdjustment,
+    });
+
+    const canReuseSyncedPlanes = config.syncAllLayers && !config.slotEnabled && layersToGenerate.length > 1;
+    const layerSyncSignatures = canReuseSyncedPlanes
+      ? layersToGenerate.map((layer) => buildLayerSyncSignature(layer))
+      : [];
+    const baseLayerSyncSignature = canReuseSyncedPlanes ? layerSyncSignatures[0] : '';
+    let syncedTemplateGeo: THREE_ACTUAL.BufferGeometry | null = null;
+
+    const applyLayerDisplayTransform = (
+      sourceGeo: THREE_ACTUAL.BufferGeometry,
+      rotationXDeg: number,
+      rotationYDeg: number
+    ): THREE_ACTUAL.BufferGeometry => {
+      let finalGeo = sourceGeo.clone();
+      finalGeo.rotateX((rotationXDeg * Math.PI) / 180);
+      finalGeo.rotateY((rotationYDeg * Math.PI) / 180);
+
+      // Display-only cleanup: lightly weld seam vertices and rebuild normals
+      // so flat/beveled surfaces render without superficial diagonal shading.
+      const displayWelded = BufferGeometryUtils.mergeVertices(finalGeo, 0.00005) as THREE_ACTUAL.BufferGeometry;
+      if (displayWelded !== finalGeo) {
+        finalGeo.dispose();
+        finalGeo = displayWelded;
+      }
+
+      if (typeof BufferGeometryUtils.toCreasedNormals === 'function') {
+        const creased = BufferGeometryUtils.toCreasedNormals(finalGeo, Math.PI / 3) as THREE_ACTUAL.BufferGeometry;
+        if (creased !== finalGeo) {
+          finalGeo.dispose();
+          finalGeo = creased;
+        }
+      } else {
+        finalGeo.deleteAttribute('normal');
+        finalGeo.computeVertexNormals();
+      }
+      finalGeo.computeBoundingBox();
+      return finalGeo;
+    };
+
     for (let lIdx = 0; lIdx < layersToGenerate.length; lIdx++) {
       ensureNotStopped();
       const layer = layersToGenerate[lIdx];
+      const slotContextIndex = slotContextLayers.findIndex((ctxLayer) => ctxLayer.id === layer.id);
+      if (slotContextIndex < 0) {
+        await updateProgress();
+        continue;
+      }
+
+      const canCloneFromSyncedTemplate = canReuseSyncedPlanes
+        && lIdx > 0
+        && syncedTemplateGeo !== null
+        && layerSyncSignatures[lIdx] === baseLayerSyncSignature;
+
+      if (canCloneFromSyncedTemplate && syncedTemplateGeo) {
+        const layerPreset = getSlotPlanePreset(slotContextLayers, slotContextIndex, config.slotMode);
+        const effectiveRotationX = config.slotEnabled && layerPreset
+          ? layerPreset.rotationX
+          : layer.rotation3D.x;
+        const effectiveRotationY = layer.rotation3D.y;
+
+        const finalGeo = applyLayerDisplayTransform(syncedTemplateGeo, effectiveRotationX, effectiveRotationY);
+        if (finalGeo.attributes.position?.count > 0) {
+          const mesh = new THREE_ACTUAL.Mesh(finalGeo);
+          mesh.userData.layerId = layer.id;
+          mesh.name = layer.name;
+          group.add(mesh);
+        } else {
+          finalGeo.dispose();
+        }
+
+        await updateProgress();
+        continue;
+      }
+
       const layerGeometries: THREE_ACTUAL.BufferGeometry[] = [];
       const layerShapeInstances: ShapeInstance2D[] = [];
       const addShapeInstances = (
@@ -3563,7 +3796,7 @@ const App: React.FC = () => {
       await updateProgress();
 
       if (layerGeometries.length > 0) {
-        const layerPreset = getSlotPlanePreset(layersToGenerate, lIdx, config.slotMode);
+        const layerPreset = getSlotPlanePreset(slotContextLayers, slotContextIndex, config.slotMode);
         const effectiveRotationX = config.slotEnabled && layerPreset
           ? layerPreset.rotationX
           : layer.rotation3D.x;
@@ -3586,8 +3819,8 @@ const App: React.FC = () => {
             const slotCutKey = makeSlotCutCacheKey(
               sourceGeo,
               layer,
-              lIdx,
-              layersToGenerate,
+              slotContextIndex,
+              slotContextLayers,
               config,
               bevelPerSide,
               opts
@@ -3597,8 +3830,8 @@ const App: React.FC = () => {
               const cut = await applyWatertightSlotCuts(
                 sourceGeo,
                 layer,
-                lIdx,
-                layersToGenerate,
+                slotContextIndex,
+                slotContextLayers,
                 config,
                 bevelPerSide,
                 opts,
@@ -3616,14 +3849,51 @@ const App: React.FC = () => {
               if (g !== mergedLayerGeo) g.dispose();
             });
 
+            let previewSourceGeo = mergedLayerGeo;
+            const previewPreWeldThreshold = qualityToUse === 'high'
+              ? 280000
+              : qualityToUse === 'med'
+                ? 200000
+                : 140000;
+            const previewPreWeldTolerance = qualityToUse === 'high'
+              ? 0.00012
+              : qualityToUse === 'med'
+                ? 0.00015
+                : 0.00018;
+            const minReductionRatio = qualityToUse === 'high'
+              ? 0.992
+              : qualityToUse === 'med'
+                ? 0.995
+                : 0.997;
+
+            if (mergedLayerGeo.attributes.position.count > previewPreWeldThreshold) {
+              const preWeld = BufferGeometryUtils.mergeVertices(mergedLayerGeo, previewPreWeldTolerance) as THREE_ACTUAL.BufferGeometry;
+              if (preWeld !== mergedLayerGeo) {
+                const before = mergedLayerGeo.attributes.position.count;
+                const after = preWeld.attributes.position.count;
+                if (after <= Math.floor(before * minReductionRatio)) {
+                  preWeld.computeVertexNormals();
+                  preWeld.computeBoundingBox();
+                  previewSourceGeo = preWeld;
+                  console.debug(`[slot-csg] ${layer.name} preview source pre-weld: ${before} -> ${after} verts`);
+                } else {
+                  preWeld.dispose();
+                }
+              }
+            }
+
             try {
-              cutSourceGeo = await cutWithSlotCache(mergedLayerGeo, true, {
+              cutSourceGeo = await cutWithSlotCache(previewSourceGeo, true, {
                 baseIsManifold: false,
                 preferWorker: true,
               });
             } catch (previewCutErr) {
               console.warn(`Interactive slot preview cut failed for ${layer.name}; keeping uncut geometry`, previewCutErr);
               cutSourceGeo = mergedLayerGeo;
+            } finally {
+              if (previewSourceGeo !== mergedLayerGeo) {
+                previewSourceGeo.dispose();
+              }
             }
           } else {
           let unioned2DLayerGeo: THREE_ACTUAL.BufferGeometry | null = null;
@@ -3634,7 +3904,7 @@ const App: React.FC = () => {
           try {
             if (canUseFlat2DPreUnion && layerShapeInstances.length > 0) {
               const slotUnionCurveSegments = interactiveSlotPreview
-                ? Math.max(4, Math.min(8, curveSeg))
+                ? 4
                 : qualityToUse === 'low'
                   ? 14
                   : qualityToUse === 'med'
@@ -3645,13 +3915,15 @@ const App: React.FC = () => {
                 effectiveDepth,
                 slotUnionCurveSegments,
                 {
-                  // Slot-cut bases must stay as plain manifold extrusions.
-                  // Applying edge profiling before subtraction reintroduces
-                  // non-manifold topology on dense text meshes.
-                  bevelEnabled: false,
-                  bevelSize: 0,
-                  bevelThickness: 0,
-                  bevelSegments: 1,
+                  // Preserve bevel appearance in 3D while keeping preview stable.
+                  bevelEnabled: config.bevelEnabled,
+                  bevelSize: config.bevelEnabled ? bevelPerSide : 0,
+                  bevelThickness: config.bevelEnabled ? bevelPerSide : 0,
+                  bevelSegments: config.bevelEnabled
+                    ? (interactiveSlotPreview
+                        ? 1
+                        : Math.max(1, config.bevelSegments))
+                    : 1,
                 }
               );
             }
@@ -3727,9 +3999,11 @@ const App: React.FC = () => {
           });
         }
 
-        const finalGeo = cutSourceGeo.clone();
-        finalGeo.rotateX((effectiveRotationX * Math.PI) / 180);
-        finalGeo.rotateY((effectiveRotationY * Math.PI) / 180);
+        if (canReuseSyncedPlanes && lIdx === 0 && !syncedTemplateGeo) {
+          syncedTemplateGeo = cutSourceGeo.clone();
+        }
+
+        let finalGeo = applyLayerDisplayTransform(cutSourceGeo, effectiveRotationX, effectiveRotationY);
 
         cutSourceGeo.dispose();
 
@@ -3797,6 +4071,12 @@ const App: React.FC = () => {
           //           // ── END SLOT CUTTER VISUALIZER ───────────────────────────────────
       }
       }
+
+    if (syncedTemplateGeo) {
+      syncedTemplateGeo.dispose();
+      syncedTemplateGeo = null;
+    }
+
     onProgress(1);
 
     // Cache the result before returning
@@ -3846,68 +4126,31 @@ const App: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
+  const yieldToMainThread = () =>
+    new Promise<void>((resolve) => {
+      if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(() => resolve());
+      } else {
+        setTimeout(() => resolve(), 0);
+      }
+    });
+
   const handleExportSTL = async (quality?: DesignQuality) => {
     setExportLoading(true);
+    setExportLoadingKey('combined-stl');
     try {
+        await yieldToMainThread();
         const group = await generateMesh(() => {}, quality, undefined, 'export');
-        const flatGeoms: THREE_ACTUAL.BufferGeometry[] = [];
-        group.traverse((child) => {
-            if (child instanceof THREE_ACTUAL.Mesh && child.geometry) {
-                const g = child.geometry.clone();
-                g.applyMatrix4(child.matrixWorld);
-                flatGeoms.push(g);
-            }
-        });
-
-        if (flatGeoms.length > 0) {
-            // const combinedForCheck = BufferGeometryUtils.mergeGeometries(flatGeoms);
-            // if (combinedForCheck) {
-                // Final topology verification before export
-                // const report = getTopologyReport(combinedForCheck);
-                // console.log(`📊 Final Export Topology Report:`, report);
-
-                // if (!report.isManifold) {
-                //     console.warn(`⚠️ Export has ${report.nonManifoldEdges} non-manifold edges`);
-                //
-                //     // Skip aggressive repair to prevent freezing during export
-                //     if (report.nonManifoldEdges > 100) {
-                //         console.log('🔨 Skipping aggressive repair for export to prevent freezing');
-                //         console.log(`📝 Geometry has ${report.nonManifoldEdges} non-manifold edges but is still exportable`);
-                //         // const repaired = surgicalSlotRepair(combinedForCheck); // Disabled to prevent freeze
-                //         // Update the merged geometry with repaired version
-                //         // for (let i = 0; i < flatGeoms.length; i++) {
-                //         //     flatGeoms[i] = repaired;
-                //         // }
-                //     }
-                // }
-
-                // const isConnected = checkConnectivity(combinedForCheck);
-                // if (!isConnected) {
-                //     const confirmExport = window.confirm(
-                //         "⚠️ CRITICAL WARNING: Floating Bodies Detected\n\n" +
-                //         "The generated mesh contains disconnected parts (floating bodies).\n" +
-                //         "This usually happens when letters or rings don't overlap properly.\n\n" +
-                //         "This print may fail. Do you still want to export?"
-                //     );
-                //     if (!confirmExport) {
-                //         setExportLoading(false);
-                //         return;
-                //     }
-                // }
-            // }
-
-            if (identifyBodiesMode && anyFloatingBodies) {
-              const confirmExport = window.confirm(
-                "Warning: Floating bodies detected in the model. Continue with combined export?"
-              );
-              if (!confirmExport) {
-                flatGeoms.forEach((g) => g.dispose());
-                setExportLoading(false);
-                return;
-              }
-            }
+        if (identifyBodiesMode && anyFloatingBodies) {
+          const confirmExport = window.confirm(
+            "Warning: Floating bodies detected in the model. Continue with combined export?"
+          );
+          if (!confirmExport) {
+            return;
+          }
         }
 
+        await yieldToMainThread();
         const exporter = new STLExporter();
         const result = exporter.parse(group, { binary: true });
         const blob = new Blob([result], { type: 'application/octet-stream' });
@@ -3916,27 +4159,29 @@ const App: React.FC = () => {
     } catch (e) {
       console.error("Export Failed", e);
       handleError(e, 'STL Export');
+    } finally {
+      setExportLoading(false);
+      setExportLoadingKey(null);
     }
-    setExportLoading(false);
   };
 
   const handleExportLayerSTL = async (layerIndex: number, quality?: DesignQuality) => {
     const layer = config.layers[layerIndex];
     if (!layer) return;
     setExportLoading(true);
+    setExportLoadingKey(`layer-${layerIndex}`);
     try {
-        const group = await generateMesh(() => {}, quality, undefined, 'export');
+        await yieldToMainThread();
+        const group = await generateMesh(() => {}, quality, undefined, 'export', { targetLayerIds: [layer.id] });
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
         if (mesh) {
           if (mesh.geometry && identifyBodiesMode) {
              const hasFloating = floatingBodiesByLayer[layer.id] ?? !checkConnectivity(mesh.geometry);
              if (hasFloating) {
-               if (!window.confirm("Warning: This layer has floating bodies. Export anyway?")) {
-                 setExportLoading(false);
-                 return;
-               }
+               if (!window.confirm("Warning: This layer has floating bodies. Export anyway?")) return;
              }
             }
+            await yieldToMainThread();
             const exporter = new STLExporter();
             const result = exporter.parse(mesh, { binary: true });
             const blob = new Blob([result], { type: 'application/octet-stream' });
@@ -3946,16 +4191,19 @@ const App: React.FC = () => {
     } catch(e) {
       console.error(e);
       handleError(e, 'Layer STL Export');
+    } finally {
+      setExportLoading(false);
+      setExportLoadingKey(null);
     }
-    setExportLoading(false);
   };
 
   const handleExportAllLayersZip = async (quality?: DesignQuality) => {
       setExportLoading(true);
+      setExportLoadingKey('all-zip');
       try {
+          await yieldToMainThread();
           const group = await generateMesh(() => {}, quality, undefined, 'export');
           const zip = new JSZip();
-          // const exporter = new STLExporter();
 
             if (identifyBodiesMode) {
               let anyFloating = false;
@@ -3970,37 +4218,45 @@ const App: React.FC = () => {
 
               if (anyFloating) {
                 if (!window.confirm("Warning: One or more layers contain floating bodies. Continue with ZIP export?")) {
-                  setExportLoading(false);
                   return;
                 }
               }
             }
 
           const exporter = new STLExporter();
-          group.children.forEach(child => {
-              if (child instanceof THREE_ACTUAL.Mesh) {
-                  const result = exporter.parse(child, { binary: true });
-                  const data = result as ArrayBuffer;
-                  const qLabel = quality ? `_${quality}` : '';
-                  zip.file(`${config.projectName}_${child.name.replace(/\s+/g, '_')}${qLabel}.stl`, data);
+          const meshChildren = group.children.filter((child): child is THREE_ACTUAL.Mesh => child instanceof THREE_ACTUAL.Mesh);
+          for (let i = 0; i < meshChildren.length; i++) {
+              const child = meshChildren[i];
+              if (i > 0) {
+                // Yield between per-layer serialization steps so the UI stays responsive.
+                await yieldToMainThread();
               }
-          });
+              const result = exporter.parse(child, { binary: true });
+              const data = result as ArrayBuffer;
+              const qLabel = quality ? `_${quality}` : '';
+              zip.file(`${config.projectName}_${child.name.replace(/\s+/g, '_')}${qLabel}.stl`, data);
+          }
 
-          const content = await zip.generateAsync({ type: 'blob' });
+          const content = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
           const qLabel = quality ? `_${quality}` : '';
           downloadBlob(content, `${config.projectName}_All_Planes${qLabel}.zip`);
       } catch(e) {
         console.error(e);
         handleError(e, 'ZIP Export');
+      } finally {
+        setExportLoading(false);
+        setExportLoadingKey(null);
       }
-      setExportLoading(false);
   };
 
   const handleExport2D = async (layerIndex: number, format: 'svg' | 'dxf') => {
     setExportLoading(true);
+    setExportLoadingKey(`layer-${layerIndex}`);
     try {
       const layer = config.layers[layerIndex];
-      if (!layer) return;
+      if (!layer) {
+        return;
+      }
 
       const fonts: Record<string, opentype.Font> = {};
       const loadFont = async (family: string) => {
@@ -4139,8 +4395,10 @@ const App: React.FC = () => {
     } catch (e) {
       console.error(e);
       handleError(e, '2D Export');
+    } finally {
+      setExportLoading(false);
+      setExportLoadingKey(null);
     }
-    setExportLoading(false);
   };
 
   const handleSaveProject = () => {
@@ -4158,16 +4416,56 @@ const App: React.FC = () => {
     fileInputRef.current?.click();
   };
 
+  const saveCurrentAsDefaults = useCallback(() => {
+    try {
+      window.localStorage.setItem(USER_DEFAULTS_STORAGE_KEY, JSON.stringify(config));
+      showNotification(t('savedStartupDefaultsNotice'), 'success');
+    } catch (error) {
+      handleError(error, 'Save Defaults');
+    }
+  }, [config, handleError, showNotification, t]);
+
+  const restoreFactoryDefaults = useCallback(() => {
+    if (!window.confirm(t('restoreFactoryDefaultsConfirm'))) {
+      return;
+    }
+
+    const currentShortcuts = shortcuts;
+    const currentLanguage = language;
+    const currentShowTooltips = showTooltips;
+    const factoryConfig = createFactoryInitialState();
+
+    try {
+      window.localStorage.removeItem(USER_DEFAULTS_STORAGE_KEY);
+    } catch {
+      // Ignore storage errors; session reset still proceeds.
+    }
+
+    setConfig(factoryConfig);
+    setConfig3D(factoryConfig);
+    setRendered3DConfig(factoryConfig);
+    setHistory([factoryConfig]);
+    setHistoryIndex(0);
+    setActiveTab('text');
+    setDesignDiameter(0);
+    clearGeometryCache();
+    clearSlotCutResultCache();
+    setShortcuts(currentShortcuts);
+    setLanguage(currentLanguage);
+    setShowTooltips(currentShowTooltips);
+    showNotification(t('factoryDefaultsRestoredNotice'), 'success');
+  }, [shortcuts, language, showTooltips, clearSlotCutResultCache, showNotification, t]);
+
   const handleResetApp = () => {
     // Show confirmation dialog
-    if (window.confirm('Are you sure you want to reset all settings to defaults?\n\nThis will restore all variables, tabs, and configurations to their initial state.\n\nYour shortcut preferences will be preserved.')) {
+    if (window.confirm(t('resetAllSettingsConfirm'))) {
       // Store current shortcuts to preserve them
       const currentShortcuts = shortcuts;
       const currentLanguage = language;
       const currentShowTooltips = showTooltips;
       
       // Reset all configs to initial state
-      const freshConfig = { ...initialState };
+      const freshConfig = loadStartupState();
       setConfig(freshConfig);
       setConfig3D(freshConfig);
       setRendered3DConfig(freshConfig);
@@ -4927,7 +5225,7 @@ const App: React.FC = () => {
       const newMode = viewMode === '2d' ? '3d' : '2d';
       setViewMode(newMode);
       // When switching to 3D view, immediately sync the current config to ensure changes are visible
-      if (newMode === '3d') {
+      if (newMode === '3d' && autoRegenerate3D) {
         // Clear any pending debounced updates to avoid conflicts
         if (debounceTimer.current) {
           clearTimeout(debounceTimer.current);
@@ -4984,6 +5282,8 @@ const App: React.FC = () => {
                             onLanguageChange={(lang) => setLanguage(lang)}
                             showTooltips={showTooltips}
                             onTooltipsChange={(show) => setShowTooltips(show)}
+                            onSaveAsDefault={saveCurrentAsDefaults}
+                            onRestoreFactoryDefaults={restoreFactoryDefaults}
                         />
                     </div>
                 </div>
@@ -5008,6 +5308,7 @@ const App: React.FC = () => {
                         onExportAllLayersZip={handleExportAllLayersZip}
                         onExport2D={handleExport2D}
                         exportLoading={exportLoading}
+                        exportLoadingKey={exportLoadingKey}
                         onFetchFont={handleFetchFont}
                         onFontUpload={handleFontUpload}
                         dynamicFonts={dynamicFonts}
@@ -5024,6 +5325,8 @@ const App: React.FC = () => {
                             if (message) setShortcutsModalMessage(message);
                             setShowShortcutsModal(true);
                         }}
+                        onSaveAsDefault={saveCurrentAsDefaults}
+                        onRestoreFactoryDefaults={restoreFactoryDefaults}
                         activeTab={activeTab}
                         onTabChange={setActiveTab}
                     />
@@ -5050,7 +5353,6 @@ const App: React.FC = () => {
                             calculatedDiameter={designDiameter} // PASS CALCULATED DIAMETER
                             shortcuts={shortcuts}
                             fontsPreloaded={fontsPreloaded}
-                            identifyBodiesMode={identifyBodiesMode}
                         />
                     </div>
                     <div className={`absolute inset-0 w-full h-full transition-opacity duration-300 ${viewMode === '3d' ? 'opacity-100 z-10' : 'opacity-0 z-0'}`}>
@@ -5067,31 +5369,36 @@ const App: React.FC = () => {
                             isVisible={viewMode === '3d'}
                             identifyBodiesMode={identifyBodiesMode}
                             onFloatingBodiesChange={setFloatingBodiesByLayer}
+                            onProcessingChange={setIsProcessing3D}
                             emergencyStopSeq={emergencyStopSeq}
                         />
                     </div>
 
                     {/* View Toggle + Stop Button */}
                     <div className="absolute top-4 right-4 z-50 flex gap-2 bg-slate-900/80 rounded-lg p-1 border border-white/10 shadow-lg backdrop-blur">
-                        <button
-                            onClick={() => {
-                              setIdentifyBodiesMode((prev) => {
-                                if (prev) setFloatingBodiesByLayer({});
-                                return !prev;
-                              });
-                            }}
-                            className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${identifyBodiesMode
-                              ? (anyFloatingBodies ? 'bg-rose-600 text-white shadow-md animate-pulse' : 'bg-emerald-600 text-white shadow-md')
-                              : 'text-slate-400 hover:text-white'}`}
-                            title={identifyBodiesMode ? 'Disable floating-body identification' : 'Identify floating/disconnected bodies'}
-                        >
-                            {identifyBodiesMode ? (anyFloatingBodies ? 'Bodies: Alert' : 'Bodies: OK') : 'ID Bodies'}
-                        </button>
-                        {isComputingSlots && (
+                        {viewMode === '3d' && (
+                          <button
+                              onClick={() => {
+                                setIdentifyBodiesMode((prev) => {
+                                  if (prev) {
+                                    setFloatingBodiesByLayer({});
+                                  }
+                                  return !prev;
+                                });
+                              }}
+                              className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${identifyBodiesMode
+                                ? (anyFloatingBodies ? 'bg-rose-600 text-white shadow-md animate-pulse' : 'bg-emerald-600 text-white shadow-md')
+                                : 'text-slate-400 hover:text-white'}`}
+                              title={identifyBodiesMode ? 'Disable floating-body identification' : 'Identify floating/disconnected bodies'}
+                          >
+                              {identifyBodiesMode ? (anyFloatingBodies ? 'Bodies: Alert' : 'Bodies: OK') : 'ID Bodies'}
+                          </button>
+                        )}
+                        {(isComputingSlots || isProcessing3D) && (
                           <button
                             onClick={() => emergencyStopAllProcessing()}
                             className="px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all bg-rose-600 text-white hover:bg-rose-700 shadow-md animate-pulse"
-                            title="Stop ongoing slot computation (Esc)"
+                            title="Stop ongoing processing (Esc)"
                           >
                             ⏹ Stop
                           </button>
@@ -5104,12 +5411,24 @@ const App: React.FC = () => {
                         </button>
                         <button
                             onClick={() => {
-                              setRendered3DIfChanged(config);
+                              if (autoRegenerate3D) {
+                                setRendered3DIfChanged(config);
+                              }
                               setViewMode('3d');
                             }}
                             className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${viewMode === '3d' ? 'bg-sky-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
                         >
                             3D
+                        </button>
+                    </div>
+                    <div className="absolute top-[3.9rem] right-4 z-50 bg-slate-900/80 rounded-lg p-1.5 border border-white/10 shadow-lg backdrop-blur flex items-center gap-2">
+                        <span className="text-[10px] font-bold uppercase text-slate-300">{t('autoRegenerate')}</span>
+                        <button
+                          onClick={() => setAutoRegenerate3D((prev) => !prev)}
+                          className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase transition-all ${autoRegenerate3D ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300 hover:text-white'}`}
+                          title={autoRegenerate3D ? t('autoRegenerateOn') : t('autoRegenerateOff')}
+                        >
+                          {autoRegenerate3D ? t('ON') : t('OFF')}
                         </button>
                     </div>
                 </div>
@@ -5133,6 +5452,8 @@ const App: React.FC = () => {
                 onReset={() => setShortcuts(DEFAULT_SHORTCUTS)}
                 activeTab={shortcutsModalTab}
                 message={shortcutsModalMessage}
+                onSaveAsDefault={saveCurrentAsDefaults}
+                onRestoreFactoryDefaults={restoreFactoryDefaults}
             />
 
             {/* Notifications */}
@@ -5145,7 +5466,7 @@ const App: React.FC = () => {
             </div>
 
             {/* Update Notification */}
-            <UpdateNotification currentVersion="1.0.4" />
+            <UpdateNotification currentVersion="1.0.5" />
         </div>
     );
   };

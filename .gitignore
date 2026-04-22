@@ -25,3 +25,24 @@ Reference Only
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright artifacts
+playwright-report/
+test-results/
+e2e/**/*.spec.ts-snapshots/
+
+# Local test run outputs
+e2e-*.json
+final_results.json
+full_results.json
+kb_results.*
+last_run*.json
+planes*_results.json
+results*.json
+results*.log
+results*.txt
+subset*.json
+subset*.log
+targeted*.json
+test_output.log
+old_code.txt

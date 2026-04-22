@@ -147,6 +147,8 @@ export interface LayerConfig {
   slotType: 'none' | 'half-back' | 'half-front' | 'third-back' | 'third-middle' | 'third-front' | 'custom';
   slotLengthAdjustment?: number;
   slotWidthOffset?: number;
+  slotCrossTipInLengthAdjustment?: number;
+  slotTiltExtensionLengthAdjustment?: number;
   images: ImageConfig[];
 }
 

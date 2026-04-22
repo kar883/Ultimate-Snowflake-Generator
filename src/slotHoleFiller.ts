@@ -5,7 +5,7 @@
  *
  * Core insight: slot cutters are boxes. The holes they leave in the mesh
  * have boundary edges that lie on the flat faces of the box. Font counter
- * loops are curved — their vertices do NOT lie on a flat plane.
+ * loops are curved - their vertices do NOT lie on a flat plane.
  *
  * Filter: a boundary loop qualifies as a slot hole if ALL of its vertices
  * lie within PLANE_TOL of any face-plane of any cutter box. This is a
@@ -21,16 +21,18 @@
 
 import * as THREE from 'three';
 
-// ─── tunables ────────────────────────────────────────────────────────────────
+// tunables
 
 /**
  * A loop vertex is considered "on" a cutter face plane if its signed distance
  * to that plane is within this tolerance. Increase if holes are missed;
  * decrease if font loops are accidentally filled.
  */
-const PLANE_TOL = 0.15; // world units
+const PLANE_TOL = 0.18; // world units
+const MICRO_LOOP_MAX_VERTS = 20;
+const MICRO_LOOP_MAX_PERIMETER = 4.0;
 
-// ─── public API ──────────────────────────────────────────────────────────────
+// public API
 
 /**
  * Fill slot-cut holes in `geometry`.
@@ -46,12 +48,19 @@ export function fillSlotHoles(
 
   if (!cutters.length) return geometry;
 
-  // Extract the 6 face-planes from each cutter box
-  const cutterPlanes = cutters.flatMap(c => extractBoxPlanes(c));
+  const cutterInfos = cutters.map((cutter) => {
+    const box = new THREE.Box3().setFromBufferAttribute(cutter.attributes.position as THREE.BufferAttribute);
+    return {
+      box,
+      expandedBox: box.clone().expandByScalar(PLANE_TOL * 2.5),
+      planes: extractBoxPlanes(cutter),
+    };
+  });
+  const cutterPlanes = cutterInfos.flatMap((info) => info.planes);
 
-  console.log(`🕳️  SlotHoleFiller: ${cutterPlanes.length} cutter planes from ${cutters.length} cutter(s)`);
+  console.log(`SlotHoleFiller: ${cutterPlanes.length} cutter planes from ${cutters.length} cutter(s)`);
 
-  // ── 1. Find boundary edges ─────────────────────────────────────────────────
+  // 1. Find boundary edges
 
   const posAttr = geometry.attributes.position as THREE.BufferAttribute;
   const geo = ensureIndexed(geometry);
@@ -59,8 +68,8 @@ export function fillSlotHoles(
 
   const edgeValence = new Map<string, { v0: number; v1: number; count: number }>();
   for (let i = 0; i < idxAttr.count; i += 3) {
-    const a = idxAttr.getX(i), b = idxAttr.getX(i+1), c = idxAttr.getX(i+2);
-    for (const [v0, v1] of [[a,b],[b,c],[c,a]] as [number,number][]) {
+    const a = idxAttr.getX(i), b = idxAttr.getX(i + 1), c = idxAttr.getX(i + 2);
+    for (const [v0, v1] of [[a, b], [b, c], [c, a]] as [number, number][]) {
       const key = v0 < v1 ? `${v0}_${v1}` : `${v1}_${v0}`;
       const e = edgeValence.get(key);
       if (e) e.count++; else edgeValence.set(key, { v0, v1, count: 1 });
@@ -82,7 +91,7 @@ export function fillSlotHoles(
   console.log(`  ${totalBoundary} boundary edges found`);
   if (!totalBoundary) return geometry;
 
-  // ── 2. Walk into loops ─────────────────────────────────────────────────────
+  // 2. Walk into loops
 
   const visited = new Set<number>();
   const allLoops: number[][] = [];
@@ -102,7 +111,8 @@ export function fillSlotHoles(
       if (next === -1) break;
       visited.add(next);
       loop.push(next);
-      prev = cur; cur = next;
+      prev = cur;
+      cur = next;
     }
 
     if (loop.length >= 3) allLoops.push(loop);
@@ -110,25 +120,68 @@ export function fillSlotHoles(
 
   console.log(`  ${allLoops.length} boundary loop(s) detected`);
 
-  // ── 3. Filter: keep only loops that lie on a cutter face plane ────────────
+  // 3. Filter: keep only loops that lie on a cutter face plane
 
-  const slotLoops: number[][] = [];
+  const slotLoops: Array<{ loop: number[]; plane: THREE.Plane }> = [];
 
   for (const loop of allLoops) {
+    if (isMicroLoop(loop, posAttr)) continue;
+
     const pts = loop.map(vi => new THREE.Vector3(
       posAttr.getX(vi), posAttr.getY(vi), posAttr.getZ(vi)
     ));
+    const centroid = new THREE.Vector3();
+    pts.forEach((p) => centroid.add(p));
+    centroid.divideScalar(pts.length);
 
-    // Find a cutter plane where ALL loop vertices are within PLANE_TOL
-    const onPlane = cutterPlanes.some(plane =>
-      pts.every(p => Math.abs(plane.distanceToPoint(p)) < PLANE_TOL)
-    );
+    const strictMatch = cutterInfos.find((info) => {
+      if (!info.expandedBox.containsPoint(centroid)) return false;
+      const insideRatio = pts.filter((p) => info.expandedBox.containsPoint(p)).length / pts.length;
+      if (insideRatio < 0.8) return false;
+      return info.planes.some((plane) =>
+        pts.every((p) => Math.abs(plane.distanceToPoint(p)) < PLANE_TOL)
+      );
+    });
 
-    if (onPlane) {
-      slotLoops.push(loop);
-      console.log(`  ✅ Loop (${loop.length} verts) lies on cutter plane → SLOT HOLE`);
+    if (strictMatch) {
+      const plane = strictMatch.planes.find((candidate) =>
+        pts.every((p) => Math.abs(candidate.distanceToPoint(p)) < PLANE_TOL)
+      ) ?? strictMatch.planes[0];
+      slotLoops.push({ loop, plane });
+      console.log(`  Loop (${loop.length} verts) lies on cutter plane -> SLOT HOLE`);
+      continue;
     }
-    // Font counters and curved text surfaces fail this test silently
+
+    // Controlled recovery: only within a cutter footprint, allow a small amount
+    // of plane noise to catch real slot-path holes left by worker subtraction.
+    let recoveredPlane: THREE.Plane | null = null;
+    for (const info of cutterInfos) {
+      if (!info.expandedBox.containsPoint(centroid)) continue;
+      const insideRatio = pts.filter((p) => info.expandedBox.containsPoint(p)).length / pts.length;
+      if (insideRatio < 0.75) continue;
+
+      for (const plane of info.planes) {
+        let within = 0;
+        let maxAbs = 0;
+        for (const p of pts) {
+          const distance = Math.abs(plane.distanceToPoint(p));
+          if (distance <= (PLANE_TOL * 1.35)) within++;
+          if (distance > maxAbs) maxAbs = distance;
+        }
+        const ratio = within / pts.length;
+        if (ratio >= 0.85 && maxAbs <= (PLANE_TOL * 3.0)) {
+          recoveredPlane = plane;
+          break;
+        }
+      }
+
+      if (recoveredPlane) break;
+    }
+
+    if (recoveredPlane) {
+      slotLoops.push({ loop, plane: recoveredPlane });
+      console.log(`  Loop (${loop.length} verts) recovered inside cutter footprint -> SLOT HOLE`);
+    }
   }
 
   console.log(`  Filling ${slotLoops.length} slot loop(s), skipping ${allLoops.length - slotLoops.length} other loop(s)`);
@@ -138,14 +191,12 @@ export function fillSlotHoles(
     return geometry;
   }
 
-  // ── 4. Fan-triangulate each planar slot loop from its centroid ────────────
-  //
-  // Because the loop lies on a flat plane, fan triangulation from the centroid
-  // always produces valid non-overlapping triangles. No ear-clipping needed.
+  // 4. Fan-triangulate each planar slot loop from its centroid
 
   const fillIndices: number[] = [];
 
-  for (const loop of slotLoops) {
+  for (const entry of slotLoops) {
+    const { loop, plane } = entry;
     const pts = loop.map(vi => new THREE.Vector3(
       posAttr.getX(vi), posAttr.getY(vi), posAttr.getZ(vi)
     ));
@@ -155,44 +206,25 @@ export function fillSlotHoles(
     pts.forEach(p => centroid.add(p));
     centroid.divideScalar(pts.length);
 
-    // Determine correct winding: the fan normal should point away from mesh interior.
-    // Use the first triangle of the fan to check, then decide winding for all.
-    // We pick winding so the normal points in the same direction as the plane normal.
+    // Determine correct winding based on matched cutter plane normal
     const p0 = pts[0], p1 = pts[1];
     const fanNormal = new THREE.Vector3()
       .crossVectors(p0.clone().sub(centroid), p1.clone().sub(centroid))
       .normalize();
 
-    // Find which cutter plane this loop belongs to and use its normal as reference
-    const matchingPlane = cutterPlanes.find(plane =>
-      pts.every(p => Math.abs(plane.distanceToPoint(p)) < PLANE_TOL)
-    )!;
-    const planeNormal = matchingPlane.normal.clone();
-
-    // If fan normal opposes plane normal, reverse loop winding
+    const planeNormal = plane.normal.clone();
     const needsFlip = fanNormal.dot(planeNormal) < 0;
 
     for (let i = 0; i < loop.length; i++) {
       const ia = loop[i];
       const ib = loop[(i + 1) % loop.length];
-
-      // We need the centroid as a new vertex
-      // Add it to the fill as a new position (appended after original verts)
-      // We'll use a shared centroid index per loop
-      const centroidIdx = posAttr.count + (fillIndices.length > 0
-        ? Math.floor(fillIndices.length / 3)  // approximate — fixed below
-        : 0);
-
-      // Instead: push centroid + two loop verts as a fan triangle
-      // We'll accumulate centroid positions separately
       if (needsFlip) {
-        fillIndices.push(-1, ib, ia); // -1 = centroid placeholder
+        fillIndices.push(-1, ib, ia);
       } else {
-        fillIndices.push(-1, ia, ib); // -1 = centroid placeholder
+        fillIndices.push(-1, ia, ib);
       }
     }
 
-    // Store centroid for this loop (we'll resolve placeholder indices after)
     (fillIndices as any).__centroids = (fillIndices as any).__centroids ?? [];
     (fillIndices as any).__centroids.push({
       centroid,
@@ -201,7 +233,7 @@ export function fillSlotHoles(
     });
   }
 
-  // ── 5. Resolve centroid placeholders and build final buffers ─────────────
+  // 5. Resolve centroid placeholders and build final buffers
 
   const centroids: { centroid: THREE.Vector3; startTri: number; count: number }[] =
     (fillIndices as any).__centroids ?? [];
@@ -209,24 +241,22 @@ export function fillSlotHoles(
   const origPos = (geo.attributes.position as THREE.BufferAttribute).array as Float32Array;
   const origIdx = geo.index!.array as Uint32Array;
 
-  // Build new position array: original + one new vertex per loop (centroids)
   const newPosArr: number[] = Array.from(origPos);
   const centroidBaseIdx = origPos.length / 3;
 
-  centroids.forEach(({ centroid }, ci) => {
+  centroids.forEach(({ centroid }) => {
     newPosArr.push(centroid.x, centroid.y, centroid.z);
   });
 
-  // Resolve -1 placeholders to actual centroid indices
   const resolvedIndices: number[] = [];
   for (let ti = 0; ti < fillIndices.length / 3; ti++) {
     const ci = centroids.findIndex(c => ti >= c.startTri && ti < c.startTri + c.count);
     const centroidIdx = centroidBaseIdx + ci;
     const base = ti * 3;
     resolvedIndices.push(
-      fillIndices[base]   === -1 ? centroidIdx : fillIndices[base],
-      fillIndices[base+1] === -1 ? centroidIdx : fillIndices[base+1],
-      fillIndices[base+2] === -1 ? centroidIdx : fillIndices[base+2],
+      fillIndices[base] === -1 ? centroidIdx : fillIndices[base],
+      fillIndices[base + 1] === -1 ? centroidIdx : fillIndices[base + 1],
+      fillIndices[base + 2] === -1 ? centroidIdx : fillIndices[base + 2],
     );
   }
 
@@ -240,7 +270,7 @@ export function fillSlotHoles(
   result.computeVertexNormals();
   result.computeBoundingBox();
 
-  console.log(`✅ SlotHoleFiller: ${resolvedIndices.length / 3} fill triangles across ${slotLoops.length} slot hole(s)`);
+  console.log(`SlotHoleFiller: ${resolvedIndices.length / 3} fill triangles across ${slotLoops.length} slot hole(s)`);
   return result;
 }
 
@@ -312,3 +342,21 @@ function ensureIndexed(geo: THREE.BufferGeometry): THREE.BufferGeometry {
   out.setIndex(new THREE.BufferAttribute(idx, 1));
   return out;
 }
+
+function isMicroLoop(loop: number[], posAttr: THREE.BufferAttribute): boolean {
+  if (loop.length > MICRO_LOOP_MAX_VERTS) return false;
+
+  let perimeter = 0;
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  for (let i = 0; i < loop.length; i++) {
+    const ia = loop[i];
+    const ib = loop[(i + 1) % loop.length];
+    a.set(posAttr.getX(ia), posAttr.getY(ia), posAttr.getZ(ia));
+    b.set(posAttr.getX(ib), posAttr.getY(ib), posAttr.getZ(ib));
+    perimeter += a.distanceTo(b);
+  }
+
+  return perimeter <= MICRO_LOOP_MAX_PERIMETER;
+}
+

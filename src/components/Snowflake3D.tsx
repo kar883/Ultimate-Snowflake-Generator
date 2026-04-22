@@ -863,6 +863,7 @@ interface Snowflake3DProps {
   isVisible: boolean;
   identifyBodiesMode?: boolean;
   onFloatingBodiesChange?: (floatingByLayer: Record<string, boolean>) => void;
+  onProcessingChange?: (isProcessing: boolean) => void;
   emergencyStopSeq?: number;
 }
 
@@ -1095,6 +1096,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   initialDiameter, isVisible,
   identifyBodiesMode = false,
   onFloatingBodiesChange,
+  onProcessingChange,
   emergencyStopSeq = 0,
 }) => {
   const generateMeshRef = useRef(generateMesh);
@@ -1598,7 +1600,9 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
       });
       applyAppearanceRef.current();
     }
-    if (notify) onFloatingBodiesChange?.({});
+    if (notify) {
+      onFloatingBodiesChange?.({});
+    }
   }, [onFloatingBodiesChange]);
 
   const runBodiesAnalysis = useCallback(() => {
@@ -1703,6 +1707,16 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   useEffect(() => {
     runBodiesAnalysisRef.current = runBodiesAnalysis;
   }, [runBodiesAnalysis]);
+
+  useEffect(() => {
+    onProcessingChange?.(loading || isAnalyzingBodies);
+  }, [loading, isAnalyzingBodies, onProcessingChange]);
+
+  useEffect(() => {
+    return () => {
+      onProcessingChange?.(false);
+    };
+  }, [onProcessingChange]);
 
   useEffect(() => {
     if (identifyBodiesMode) {

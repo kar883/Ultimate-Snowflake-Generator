@@ -77,6 +77,8 @@ export const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isE
   slotType: 'none',
   slotLengthAdjustment: 0,
   slotWidthOffset: 0,
+  slotCrossTipInLengthAdjustment: 0,
+  slotTiltExtensionLengthAdjustment: 0,
   images: []
 });
 
@@ -103,8 +105,8 @@ export const createDefaultConfig = (): SnowflakeConfig => ({
   projectName: "MySnowflake",
   layers: [
     createDefaultLayer('layer-1', 'Base Plane', 0, 0, true),
-    createDefaultLayer('layer-2', 'Cross Plane', 120, 0, true),
-    createDefaultLayer('layer-4', 'Tilt Plane', 240, 0, true),
+    createDefaultLayer('layer-2', 'Cross Plane', 120, 0, false),
+    createDefaultLayer('layer-4', 'Tilt Plane', 240, 0, false),
   ],
   activeLayerIndex: 0,
   ...createDefaultGlobalConfig()
@@ -134,6 +136,8 @@ export const resetSettingsToDefaults = (currentConfig: SnowflakeConfig): Snowfla
       slotType: layer.slotType,
       slotLengthAdjustment: layer.slotLengthAdjustment,
       slotWidthOffset: layer.slotWidthOffset,
+      slotCrossTipInLengthAdjustment: layer.slotCrossTipInLengthAdjustment,
+      slotTiltExtensionLengthAdjustment: layer.slotTiltExtensionLengthAdjustment,
       images: layer.images, // Preserve images as they're user-added content
       
       // Reset all settings to defaults

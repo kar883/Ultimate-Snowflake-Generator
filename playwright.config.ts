@@ -16,6 +16,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   /* Run tests in files in parallel */
   fullyParallel: false,
+  workers: 1,
   /* Reporter */
   reporter: [
     ['html', { open: 'never' }],
@@ -34,7 +35,7 @@ export default defineConfig({
     /* Ignore HTTPS errors (the dev server uses plain HTTP) */
     ignoreHTTPSErrors: true,
     /* Slow down actions slightly so animations finish */
-    actionTimeout: 15_000,
+    actionTimeout: 20_000,
   },
 
   projects: [

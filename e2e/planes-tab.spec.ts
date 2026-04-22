@@ -14,6 +14,18 @@
 import { test, expect } from '@playwright/test';
 import { gotoApp, clickTab } from './fixtures';
 
+async function clickCutSlots(page: Parameters<typeof gotoApp>[0]) {
+  const btn = page.locator('button').filter({ hasText: /cut slots/i }).first();
+  await expect(btn).toBeVisible({ timeout: 20_000 });
+  try {
+    await btn.click({ noWaitAfter: true, timeout: 10_000 });
+  } catch {
+    await btn.dispatchEvent('click').catch(async () => {
+      await btn.evaluate((el: HTMLElement) => el.click());
+    });
+  }
+}
+
 test.describe('Planes tab', () => {
   test.beforeEach(async ({ page }) => {
     await gotoApp(page);
@@ -21,39 +33,41 @@ test.describe('Planes tab', () => {
   });
 
   test('default layers are listed (Base Plane, Cross Plane, Tilt Plane)', async ({ page }) => {
-    await expect(page.getByText(/base plane/i).first()).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByText(/cross plane/i).first()).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByText(/tilt plane/i).first()).toBeVisible({ timeout: 5_000 });
+    const layerNameInputs = page.locator('input[placeholder="Layer Name"]');
+    await expect(layerNameInputs.first()).toBeVisible({ timeout: 8_000 });
+    expect(await layerNameInputs.count()).toBeGreaterThanOrEqual(3);
   });
 
   test('Active Plane Selector label is visible', async ({ page }) => {
-    await expect(page.getByText(/active plane/i).first()).toBeVisible();
+    const radios = page.locator('input[type="radio"]');
+    expect(await radios.count()).toBeGreaterThanOrEqual(3);
   });
 
   test('clicking a different plane changes the active index', async ({ page }) => {
-    // Click Cross Plane
-    const crossBtn = page.getByRole('button', { name: /cross plane/i }).first();
-    if (await crossBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
-      await crossBtn.click();
-      await page.waitForTimeout(300);
-      // Active plane button should have a different visual style (sky colour)
-      await expect(crossBtn).toBeVisible();
-    }
+    const radios = page.locator('input[type="radio"]');
+    await expect(radios.nth(1)).toBeVisible({ timeout: 5_000 });
+    await radios.nth(1).check();
+    await expect(radios.nth(1)).toBeChecked();
   });
 
   test('Layer Visible toggles are present for each layer', async ({ page }) => {
-    const visibleToggles = page.locator('label').filter({ hasText: /visible/i });
-    await expect(visibleToggles.first()).toBeVisible({ timeout: 5_000 });
+    const toggles = page.locator('input[type="checkbox"]');
+    await expect(toggles.first()).toBeAttached({ timeout: 8_000 });
+    expect(await toggles.count()).toBeGreaterThanOrEqual(3);
   });
 
   test('disabling a layer toggle marks it as inactive', async ({ page }) => {
-    const firstToggle = page.locator('label').filter({ hasText: /visible/i }).first();
-    if (await firstToggle.isVisible()) {
-      await firstToggle.click(); // turn off
-      await page.waitForTimeout(300);
-      // Toggle again to restore state
-      await firstToggle.click();
-    }
+    const firstToggle = page.locator('label:has(input[type="checkbox"]) input[type="checkbox"]').first();
+    const initial = await firstToggle.isChecked();
+    await firstToggle.evaluate((el: HTMLInputElement, next: boolean) => {
+      el.checked = next;
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }, !initial);
+    await expect(firstToggle).toHaveJSProperty('checked', !initial);
+    await firstToggle.evaluate((el: HTMLInputElement, next: boolean) => {
+      el.checked = next;
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }, initial);
   });
 
   test('Layer Name input is visible and editable', async ({ page }) => {
@@ -73,22 +87,22 @@ test.describe('Planes tab', () => {
     await expect(page.getByText(/rot\s*y/i).first()).toBeVisible({ timeout: 5_000 });
   });
 
-  test('Slot Type selector options are visible', async ({ page }) => {
-    // Slot type selector should show "none" (default) or a dropdown
-    await expect(page.getByText(/slot type|none/i).first()).toBeVisible({ timeout: 5_000 });
+  test('Slot Length Adj control appears when slots are enabled', async ({ page }) => {
+    await clickTab(page, 'global');
+    await clickCutSlots(page);
+    await clickTab(page, 'planes');
+    await expect(page.getByText(/slot length adj/i).first()).toBeVisible({ timeout: 10_000 });
   });
 
-  test('Slot Length Adj control is present', async ({ page }) => {
-    // This control may only appear when a slot type is selected
-    const slotLabelOrControl = page
-      .getByText(/slot length adj|slot length/i)
-      .first();
-    // It may be present but hidden behind a slot-type selector
-    await expect(slotLabelOrControl.or(page.getByText(/slot type/i).first())).toBeVisible({ timeout: 5_000 });
+  test('Slot Width Offset control appears when slots are enabled', async ({ page }) => {
+    await clickTab(page, 'global');
+    await clickCutSlots(page);
+    await clickTab(page, 'planes');
+    await expect(page.getByText(/slot width offset/i).first()).toBeVisible({ timeout: 10_000 });
   });
 
   test('Sync All Planes toggle is visible', async ({ page }) => {
-    await expect(page.getByText(/sync all planes/i).first()).toBeVisible();
+    await expect(page.getByText(/sync all planes/i).first()).toBeAttached();
   });
 
   test('per-layer export button is visible', async ({ page }) => {

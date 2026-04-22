@@ -54,7 +54,7 @@ export async function gotoApp(page: Page): Promise<void> {
     window.sessionStorage.clear();
   });
   let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 4; attempt++) {
     try {
       await page.goto('/', { waitUntil: 'commit', timeout: 60_000 });
       await page.waitForLoadState('domcontentloaded', { timeout: 30_000 });
@@ -63,7 +63,7 @@ export async function gotoApp(page: Page): Promise<void> {
       return;
     } catch (error) {
       lastError = error;
-      if (attempt === 2 || page.isClosed()) {
+      if (attempt === 3 || page.isClosed()) {
         throw error;
       }
       try {
@@ -71,7 +71,7 @@ export async function gotoApp(page: Page): Promise<void> {
       } catch {
         // Best-effort cleanup before retry.
       }
-      await page.waitForTimeout(750);
+      await page.waitForTimeout(500);
     }
   }
   throw lastError;
@@ -93,27 +93,34 @@ export async function clickTab(page: Page, label: string): Promise<void> {
   };
   const keys = aliases[label.toLowerCase()] || [label];
 
-  let tab: Locator | null = null;
-  for (const key of keys) {
-    const candidate = page.getByRole('button', { name: new RegExp(`^${key}$`, 'i') }).first();
-    if (await candidate.isVisible({ timeout: 1500 }).catch(() => false)) {
-      tab = candidate;
-      break;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let tab: Locator | null = null;
+    for (const key of keys) {
+      const candidate = page.getByRole('button', { name: new RegExp(`^${key}$`, 'i') }).first();
+      if (await candidate.isVisible({ timeout: 2000 }).catch(() => false)) {
+        tab = candidate;
+        break;
+      }
+    }
+
+    if (!tab) {
+      tab = page.locator('button').filter({ hasText: new RegExp(label, 'i') }).first();
+    }
+
+    try {
+      await expect(tab).toBeVisible({ timeout: 20_000 });
+      await safeClick(tab, 7_500);
+      await page.waitForTimeout(350);
+      return;
+    } catch (error) {
+      lastError = error;
+      await page.keyboard.press('Escape').catch(() => {});
+      await page.waitForTimeout(350);
     }
   }
 
-  if (!tab) {
-    tab = page.locator('button').filter({ hasText: new RegExp(label, 'i') }).first();
-  }
-
-  await expect(tab).toBeVisible({ timeout: 20_000 });
-  try {
-    await safeClick(tab, 5_000);
-  } catch {
-    throw new Error(`Unable to click tab: ${label}`);
-  }
-  // Small pause for tab content to mount
-  await page.waitForTimeout(300);
+  throw new Error(`Unable to click tab: ${label}${lastError ? ` (${String(lastError)})` : ''}`);
 }
 
 // ─── Control-panel section helpers ───────────────────────────────────────────
@@ -186,8 +193,9 @@ export async function addFractal(page: Page): Promise<void> {
 }
 
 export async function commitDeferredTextInput(input: Locator, value: string): Promise<void> {
-  await expect(input).toBeVisible({ timeout: 15_000 });
-  await input.fill(value, { timeout: 15_000 });
+  await expect(input).toBeVisible({ timeout: 30_000 });
+  await input.scrollIntoViewIfNeeded().catch(() => {});
+  await input.fill(value, { timeout: 30_000 });
   try {
     await input.press('Tab', { timeout: 3_000 });
   } catch {

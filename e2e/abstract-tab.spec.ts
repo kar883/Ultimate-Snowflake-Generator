@@ -24,16 +24,17 @@ test.describe('Abstract tab', () => {
   });
 
   test('"Add Shape" button is visible', async ({ page }) => {
-    await expect(page.getByRole('button', { name: /add shape/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /(\+\s*shape|add\s*shape)/i }).first()).toBeVisible();
   });
 
   test('"Add Fractal" button is visible', async ({ page }) => {
-    await expect(page.getByRole('button', { name: /add fractal/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /(\+\s*fractal|add\s*fractal)/i }).first()).toBeVisible();
   });
 
   test('adding a shape shows shape controls', async ({ page }) => {
     await addAbstractShape(page);
-    await expect(page.getByText(/shape type|type/i).first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole('button', { name: /shape\s*1/i }).first()).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText(/shape settings|shape arms|outer radius/i).first()).toBeVisible({ timeout: 8_000 });
   });
 
   test('shape type buttons line / sine / zigzag are present', async ({ page }) => {
@@ -115,11 +116,8 @@ test.describe('Abstract tab', () => {
   test('adding two shapes shows a shape selector', async ({ page }) => {
     await addAbstractShape(page);
     await addAbstractShape(page);
-    // There should now be two abstract entries in the selector
-    const shapeLabels = page.getByText(/#[12]/i);
-    if (await shapeLabels.count() > 0) {
-      await expect(shapeLabels.first()).toBeVisible({ timeout: 5_000 });
-    }
+    await expect(page.getByRole('button', { name: /shape\s*1/i }).first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole('button', { name: /shape\s*2/i }).first()).toBeVisible({ timeout: 5_000 });
   });
 
   test('Delete button is present for an abstract shape', async ({ page }) => {

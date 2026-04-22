@@ -239,9 +239,27 @@ export interface Translations {
   cancel: string;
   save: string;
   settings: string;
+  'Shortcuts': string;
+  'API Key': string;
+  'AI Controls': string;
+  'Defaults': string;
+  'Factory Reset': string;
+  'Exporting': string;
   'Keyboard Shortcuts': string;
   'Reset Defaults': string;
   'Save Changes': string;
+  saveDefault: string;
+  saveStartupDefaults: string;
+  restoreFactoryDefaults: string;
+  startupDefaultsHelp: string;
+  factoryResetHelp: string;
+  autoRegenerate: string;
+  autoRegenerateOn: string;
+  autoRegenerateOff: string;
+  savedStartupDefaultsNotice: string;
+  factoryDefaultsRestoredNotice: string;
+  restoreFactoryDefaultsConfirm: string;
+  resetAllSettingsConfirm: string;
   'ON': string;
   'OFF': string;
 
@@ -519,9 +537,27 @@ export const translations: Record<string, Translations> = {
     cancel: 'Cancel',
     save: 'Save',
     settings: 'Settings',
+    'Shortcuts': 'Shortcuts',
+    'API Key': 'API Key',
+    'AI Controls': 'AI Controls',
+    'Defaults': 'Defaults',
+    'Factory Reset': 'Factory Reset',
+    'Exporting': 'Exporting...',
     'Keyboard Shortcuts': 'Keyboard Shortcuts',
     'Reset Defaults': 'Reset Defaults',
     'Save Changes': 'Save Changes',
+    saveDefault: 'Save Default',
+    saveStartupDefaults: 'Save Current As Startup Default',
+    restoreFactoryDefaults: 'Restore Factory Defaults',
+    startupDefaultsHelp: 'Use the disk icon beside controls to save your current values as startup defaults.',
+    factoryResetHelp: 'Restores original factory defaults and removes saved startup defaults.',
+    autoRegenerate: 'Auto Regen',
+    autoRegenerateOn: 'Automatic 3D regeneration is ON',
+    autoRegenerateOff: 'Automatic 3D regeneration is OFF',
+    savedStartupDefaultsNotice: 'Saved current configuration as startup defaults.',
+    factoryDefaultsRestoredNotice: 'Factory defaults restored.',
+    restoreFactoryDefaultsConfirm: 'Restore factory defaults?\n\nThis will remove your saved startup defaults and reset the current session.',
+    resetAllSettingsConfirm: 'Are you sure you want to reset all settings to defaults?\n\nThis will restore all variables, tabs, and configurations to their initial state.\n\nYour shortcut preferences will be preserved.',
     'ON': 'ON',
     'OFF': 'OFF',
 
@@ -798,9 +834,27 @@ export const translations: Record<string, Translations> = {
     cancel: 'Cancelar',
     save: 'Guardar',
     settings: 'Configuración',
+    'Shortcuts': 'Atajos',
+    'API Key': 'Clave API',
+    'AI Controls': 'Controles IA',
+    'Defaults': 'Predeterminados',
+    'Factory Reset': 'Restablecimiento de Fábrica',
+    'Exporting': 'Exportando...',
     'Keyboard Shortcuts': 'Atajos de Teclado',
     'Reset Defaults': 'Restablecer Predeterminados',
     'Save Changes': 'Guardar Cambios',
+    saveDefault: 'Guardar Predeterminado',
+    saveStartupDefaults: 'Guardar Actual Como Predeterminado de Inicio',
+    restoreFactoryDefaults: 'Restaurar Predeterminados de Fábrica',
+    startupDefaultsHelp: 'Usa el icono de disco junto a los controles para guardar tus valores actuales como predeterminados de inicio.',
+    factoryResetHelp: 'Restaura los valores de fábrica originales y elimina los predeterminados de inicio guardados.',
+    autoRegenerate: 'Auto Regenerar',
+    autoRegenerateOn: 'La regeneración automática 3D está ACTIVADA',
+    autoRegenerateOff: 'La regeneración automática 3D está DESACTIVADA',
+    savedStartupDefaultsNotice: 'La configuración actual se guardó como predeterminada de inicio.',
+    factoryDefaultsRestoredNotice: 'Se restauraron los predeterminados de fábrica.',
+    restoreFactoryDefaultsConfirm: '¿Restaurar predeterminados de fábrica?\n\nEsto eliminará tus predeterminados de inicio guardados y reiniciará la sesión actual.',
+    resetAllSettingsConfirm: '¿Seguro que quieres restablecer todas las configuraciones a sus valores predeterminados?\n\nEsto restaurará todas las variables, pestañas y configuraciones a su estado inicial.\n\nTus preferencias de atajos se conservarán.',
     'ON': 'ENCENDIDO',
     'OFF': 'APAGADO',
 
@@ -1077,9 +1131,27 @@ export const translations: Record<string, Translations> = {
     cancel: 'Annuler',
     save: 'Sauvegarder',
     settings: 'Paramètres',
+    'Shortcuts': 'Raccourcis',
+    'API Key': 'Clé API',
+    'AI Controls': 'Contrôles IA',
+    'Defaults': 'Valeurs par Défaut',
+    'Factory Reset': 'Réinitialisation Usine',
+    'Exporting': 'Exportation...',
     'Keyboard Shortcuts': 'Raccourcis Clavier',
     'Reset Defaults': 'Réinitialiser Défauts',
     'Save Changes': 'Sauvegarder les Changements',
+    saveDefault: 'Enregistrer par Défaut',
+    saveStartupDefaults: 'Enregistrer l\'Actuel comme Défaut de Démarrage',
+    restoreFactoryDefaults: 'Restaurer les Valeurs d\'Usine',
+    startupDefaultsHelp: 'Utilisez l\'icône disque à côté des contrôles pour enregistrer vos valeurs actuelles comme valeurs de démarrage.',
+    factoryResetHelp: 'Restaure les valeurs d\'usine d\'origine et supprime les valeurs de démarrage enregistrées.',
+    autoRegenerate: 'Auto Régénération',
+    autoRegenerateOn: 'La régénération 3D automatique est ACTIVÉE',
+    autoRegenerateOff: 'La régénération 3D automatique est DÉSACTIVÉE',
+    savedStartupDefaultsNotice: 'Configuration actuelle enregistrée comme valeurs de démarrage.',
+    factoryDefaultsRestoredNotice: 'Valeurs d\'usine restaurées.',
+    restoreFactoryDefaultsConfirm: 'Restaurer les valeurs d\'usine ?\n\nCela supprimera vos valeurs de démarrage enregistrées et réinitialisera la session actuelle.',
+    resetAllSettingsConfirm: 'Êtes-vous sûr de vouloir réinitialiser tous les paramètres à leurs valeurs par défaut ?\n\nCela restaurera toutes les variables, tous les onglets et toutes les configurations à leur état initial.\n\nVos préférences de raccourcis seront conservées.',
     'ON': 'MARCHE',
     'OFF': 'ARRÊT',
 
@@ -1356,9 +1428,27 @@ export const translations: Record<string, Translations> = {
     cancel: 'Abbrechen',
     save: 'Speichern',
     settings: 'Einstellungen',
+    'Shortcuts': 'Kurzbefehle',
+    'API Key': 'API-Schlüssel',
+    'AI Controls': 'KI-Steuerung',
+    'Defaults': 'Standards',
+    'Factory Reset': 'Werksreset',
+    'Exporting': 'Exportiere...',
     'Keyboard Shortcuts': 'Tastaturkürzel',
     'Reset Defaults': 'Standard zurücksetzen',
     'Save Changes': 'Änderungen speichern',
+    saveDefault: 'Standard Speichern',
+    saveStartupDefaults: 'Aktuelle Werte als Startstandard Speichern',
+    restoreFactoryDefaults: 'Werkseinstellungen Wiederherstellen',
+    startupDefaultsHelp: 'Verwende das Diskettensymbol neben den Steuerelementen, um aktuelle Werte als Startstandard zu speichern.',
+    factoryResetHelp: 'Stellt die ursprünglichen Werkseinstellungen wieder her und entfernt gespeicherte Startstandards.',
+    autoRegenerate: 'Auto Regenerieren',
+    autoRegenerateOn: 'Automatische 3D-Regeneration ist EIN',
+    autoRegenerateOff: 'Automatische 3D-Regeneration ist AUS',
+    savedStartupDefaultsNotice: 'Aktuelle Konfiguration als Startstandard gespeichert.',
+    factoryDefaultsRestoredNotice: 'Werkseinstellungen wiederhergestellt.',
+    restoreFactoryDefaultsConfirm: 'Werkseinstellungen wiederherstellen?\n\nDadurch werden gespeicherte Startstandards entfernt und die aktuelle Sitzung zurückgesetzt.',
+    resetAllSettingsConfirm: 'Möchtest du wirklich alle Einstellungen auf Standard zurücksetzen?\n\nDadurch werden alle Variablen, Tabs und Konfigurationen auf den Ausgangszustand zurückgesetzt.\n\nDeine Shortcut-Einstellungen bleiben erhalten.',
     'ON': 'EIN',
     'OFF': 'AUS',
 
@@ -1635,9 +1725,27 @@ export const translations: Record<string, Translations> = {
     cancel: '取消',
     save: '保存',
     settings: '设置',
+    'Shortcuts': '快捷方式',
+    'API Key': 'API 密钥',
+    'AI Controls': 'AI 控制',
+    'Defaults': '默认值',
+    'Factory Reset': '恢复出厂',
+    'Exporting': '导出中...',
     'Keyboard Shortcuts': '键盘快捷键',
     'Reset Defaults': '重置默认值',
     'Save Changes': '保存更改',
+    saveDefault: '保存默认值',
+    saveStartupDefaults: '保存当前为启动默认值',
+    restoreFactoryDefaults: '恢复出厂默认值',
+    startupDefaultsHelp: '使用控件旁的磁盘图标将当前值保存为启动默认值。',
+    factoryResetHelp: '恢复原始出厂默认值并移除已保存的启动默认值。',
+    autoRegenerate: '自动重生成',
+    autoRegenerateOn: '自动 3D 重生成已开启',
+    autoRegenerateOff: '自动 3D 重生成已关闭',
+    savedStartupDefaultsNotice: '已将当前配置保存为启动默认值。',
+    factoryDefaultsRestoredNotice: '已恢复出厂默认值。',
+    restoreFactoryDefaultsConfirm: '恢复出厂默认值？\n\n这将删除你保存的启动默认值，并重置当前会话。',
+    resetAllSettingsConfirm: '确定要将所有设置重置为默认值吗？\n\n这将把所有变量、选项卡和配置恢复到初始状态。\n\n你的快捷键偏好将被保留。',
     'ON': '开',
     'OFF': '关',
 
@@ -1914,9 +2022,27 @@ export const translations: Record<string, Translations> = {
     cancel: 'キャンセル',
     save: '保存',
     settings: '設定',
+    'Shortcuts': 'ショートカット',
+    'API Key': 'APIキー',
+    'AI Controls': 'AIコントロール',
+    'Defaults': 'デフォルト',
+    'Factory Reset': '工場出荷時リセット',
+    'Exporting': 'エクスポート中...',
     'Keyboard Shortcuts': 'キーボードショートカット',
     'Reset Defaults': 'デフォルトにリセット',
     'Save Changes': '変更を保存',
+    saveDefault: 'デフォルト保存',
+    saveStartupDefaults: '現在の設定を起動時デフォルトとして保存',
+    restoreFactoryDefaults: '工場出荷時デフォルトを復元',
+    startupDefaultsHelp: 'コントロール横のディスクアイコンで現在の値を起動時デフォルトとして保存します。',
+    factoryResetHelp: '元の工場出荷時デフォルトを復元し、保存済みの起動時デフォルトを削除します。',
+    autoRegenerate: '自動再生成',
+    autoRegenerateOn: '自動3D再生成はオンです',
+    autoRegenerateOff: '自動3D再生成はオフです',
+    savedStartupDefaultsNotice: '現在の設定を起動時デフォルトとして保存しました。',
+    factoryDefaultsRestoredNotice: '工場出荷時デフォルトを復元しました。',
+    restoreFactoryDefaultsConfirm: '工場出荷時デフォルトを復元しますか？\n\n保存済みの起動時デフォルトを削除し、現在のセッションをリセットします。',
+    resetAllSettingsConfirm: 'すべての設定をデフォルトにリセットしてもよろしいですか？\n\nすべての変数、タブ、設定が初期状態に戻ります。\n\nショートカット設定は保持されます。',
     'ON': 'オン',
     'OFF': 'オフ',
 

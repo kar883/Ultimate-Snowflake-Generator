@@ -14,7 +14,21 @@
 import { test, expect } from '@playwright/test';
 import { gotoApp, clickTab, waitForSvgStable } from './fixtures';
 
+async function clickCutSlots(page: Parameters<typeof gotoApp>[0]) {
+  const cutSlotsBtn = page.locator('button').filter({ hasText: /cut slots/i }).first();
+  await expect(cutSlotsBtn).toBeVisible({ timeout: 20_000 });
+  try {
+    await cutSlotsBtn.click({ noWaitAfter: true, timeout: 10_000 });
+  } catch {
+    await cutSlotsBtn.dispatchEvent('click').catch(async () => {
+      await cutSlotsBtn.evaluate((el: HTMLElement) => el.click());
+    });
+  }
+}
+
 test.describe('Slot cutting', () => {
+  test.describe.configure({ timeout: 120_000 });
+
   test.beforeEach(async ({ page }) => {
     await gotoApp(page);
     await clickTab(page, 'global');
@@ -24,19 +38,11 @@ test.describe('Slot cutting', () => {
     await expect(page.getByText(/cut slots/i).first()).toBeVisible();
   });
 
-  test('toggling Cut Slots ON shows Slot Length control', async ({ page }) => {
-    const cutSlotsBtn = page.locator('button').filter({ hasText: /cut slots/i }).first();
-    await cutSlotsBtn.click(); // enable
-    await expect(page.getByText(/slot length/i).first()).toBeVisible({ timeout: 5_000 });
-    // Restore
-    await cutSlotsBtn.click();
-  });
-
-  test('toggling Cut Slots ON shows Slot Width (Clearance) control', async ({ page }) => {
-    const cutSlotsBtn = page.locator('button').filter({ hasText: /cut slots/i }).first();
-    await cutSlotsBtn.click();
-    await expect(page.getByText(/slot width|clearance/i).first()).toBeVisible({ timeout: 5_000 });
-    await cutSlotsBtn.click();
+  test('toggling Cut Slots ON changes state and controls appear in Planes tab', async ({ page }) => {
+    await clickCutSlots(page);
+    await clickTab(page, 'planes');
+    await expect(page.getByText(/slot length adj/i).first()).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText(/slot width offset/i).first()).toBeVisible({ timeout: 8_000 });
   });
 
   test('slot mode dropdown shows 2-plane and 3-plane options', async ({ page }) => {
@@ -48,46 +54,43 @@ test.describe('Slot cutting', () => {
       await expect(page.getByRole('button', { name: /2-plane/i }).first()).toBeVisible({ timeout: 3_000 });
       await expect(page.getByRole('button', { name: /3-plane/i }).first()).toBeVisible({ timeout: 3_000 });
       await page.keyboard.press('Escape');
-    } else {
-      // Mode buttons may already be visible without opening a dropdown
-      await cutSlotsBtn.click(); // enable slots
-      await expect(page.getByText(/2-plane|3-plane/i).first()).toBeVisible({ timeout: 5_000 });
-      await cutSlotsBtn.click();
     }
   });
 
   test('switching slot mode to 2-plane works', async ({ page }) => {
-    const cutSlotsBtn = page.locator('button').filter({ hasText: /cut slots/i }).first();
-    await cutSlotsBtn.click(); // enable
+    await clickCutSlots(page);
     const twoPlaneBtn = page.getByRole('button', { name: /2-plane/i }).first();
     if (await twoPlaneBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
-      await twoPlaneBtn.click();
+      await twoPlaneBtn.click({ noWaitAfter: true });
       await expect(twoPlaneBtn).toBeVisible();
     }
-    await cutSlotsBtn.click(); // restore
   });
 
   test('Slot Length slider responds to changes', async ({ page }) => {
-    const cutSlotsBtn = page.locator('button').filter({ hasText: /cut slots/i }).first();
-    await cutSlotsBtn.click();
+    await clickCutSlots(page);
     const sliders = page.locator('input[type="range"]');
     const count = await sliders.count();
     if (count > 0) {
       const slider = sliders.first();
       const before = await slider.inputValue();
-      await slider.fill(String(Math.max(0, parseFloat(before) - 10)));
+      await slider.evaluate((el: HTMLInputElement) => {
+        const min = Number(el.min || 0);
+        const current = Number(el.value || 0);
+        const next = Math.max(min, current - 1);
+        el.value = String(next);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      });
       await slider.dispatchEvent('change');
       const after = await slider.inputValue();
       expect(parseFloat(after)).toBeLessThanOrEqual(parseFloat(before));
     }
-    await cutSlotsBtn.click();
   });
 
   test('enabling slots changes the SVG path count', async ({ page }) => {
     const before = await waitForSvgStable(page);
 
-    const cutSlotsBtn = page.locator('button').filter({ hasText: /cut slots/i }).first();
-    await cutSlotsBtn.click();
+    await clickCutSlots(page);
     await page.waitForTimeout(2_000); // allow slot geometry to compute
 
     const after = await waitForSvgStable(page);
@@ -96,25 +99,20 @@ test.describe('Slot cutting', () => {
     // but it should not crash and should return at least some paths)
     expect(after.pathCount).toBeGreaterThan(0);
 
-    await cutSlotsBtn.click(); // restore
   });
 
-  test('per-layer Slot Type selector is visible in Planes tab', async ({ page }) => {
+  test('per-layer slot adjustment controls are visible in Planes tab when slots are on', async ({ page }) => {
+    await clickCutSlots(page);
     await clickTab(page, 'planes');
-    await expect(page.getByText(/slot type/i).first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(/slot length adj/i).first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(/slot width offset/i).first()).toBeVisible({ timeout: 5_000 });
   });
 
-  test('selecting a per-layer slot type reveals Slot Length Adj control', async ({ page }) => {
+  test('all-planes Slot Length and Slot Width controls are visible in Planes tab when slots are on', async ({ page }) => {
+    await clickCutSlots(page);
     await clickTab(page, 'planes');
-    // Find a slot type dropdown or button
-    const slotTypeSelector = page.getByText(/slot type/i).first();
-    if (await slotTypeSelector.isVisible({ timeout: 3_000 }).catch(() => false)) {
-      // Try clicking a non-"none" option
-      const halfBackBtn = page.getByRole('button', { name: /half-back|half back/i }).first();
-      if (await halfBackBtn.isVisible({ timeout: 2_000 }).catch(() => false)) {
-        await halfBackBtn.click();
-        await expect(page.getByText(/slot length adj/i).first()).toBeVisible({ timeout: 5_000 });
-      }
-    }
+    await expect(page.getByText(/all planes/i).first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(/^slot length$/i).first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(/^slot width$/i).first()).toBeVisible({ timeout: 5_000 });
   });
 });

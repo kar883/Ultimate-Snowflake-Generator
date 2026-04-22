@@ -151,6 +151,8 @@ const DESCRIPTIONS: Record<string, string> = {
   "Cap Length": "Length of the connecting cap shape.",
   "Slot Length Adj": "Fine-tune the slot cut length for this specific plane.",
   "Slot Width Offset": "Fine-tune the slot cut width (clearance) for this specific plane.",
+  "Cross Tip-In Adj": "Adjust the Cross plane tip-in slot segment length independently from the main slot length.",
+  "Tilt Extension Adj": "Adjust the Tilt plane extension slot segment length independently from the main slot length.",
   "Trunk Length": "Distance before the first branching occurs.",
   "Branches Per Node": "Number of new branches spawned at each split point.",
   "Recursion Depth": "Number of branching generations.",
@@ -309,7 +311,7 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
           className={mainButtonClass}
         >
           {isLoading ? (
-            <><div className="w-3 h-3 border-2 border-white/60 border-t-white rounded-full animate-spin" /><span>Exporting…</span></>
+            <><div className="w-3 h-3 border-2 border-white/60 border-t-white rounded-full animate-spin" /><span>{t('Exporting')}</span></>
           ) : (
             <><svg className={`${compact ? 'w-3 h-3' : 'w-3.5 h-3.5'} shrink-0`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
             <span className="truncate">{label}</span></>
@@ -893,9 +895,10 @@ interface DeferredTextInputProps {
   defaultValue?: string;
   label?: string;
   t?: (key: string) => string; // Add translation function
+  onSaveDefault?: () => void;
 }
 
-const DeferredTextInput: React.FC<DeferredTextInputProps> = ({ value, onChange, placeholder, className, defaultValue, label, t }) => {
+const DeferredTextInput: React.FC<DeferredTextInputProps> = ({ value, onChange, placeholder, className, defaultValue, label, t, onSaveDefault }) => {
   const [localValue, setLocalValue] = useState(value);
   const isDirty = useRef(false);
   useEffect(() => { setLocalValue(value); }, [value]);
@@ -939,6 +942,32 @@ const DeferredTextInput: React.FC<DeferredTextInputProps> = ({ value, onChange, 
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: '12px', height: '12px' }}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
                </button>
             )}
+            {onSaveDefault && (
+              <button
+                onClick={onSaveDefault}
+                className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center ml-1"
+                title={t ? t('saveDefault') : 'Save as Default'}
+                style={{
+                  width: '16px',
+                  height: '16px',
+                  borderRadius: '4px',
+                  backgroundColor: 'transparent',
+                  color: '#64748b',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginLeft: '4px',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+              >
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: '12px', height: '12px' }}>
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" />
+                </svg>
+              </button>
+            )}
          </div>
       )}
       <input
@@ -968,7 +997,7 @@ const DeferredTextInput: React.FC<DeferredTextInputProps> = ({ value, onChange, 
   );
 };
 
-const ControlRow: React.FC<{ label: string; children: React.ReactNode; onReset?: () => void; isModified?: boolean; t?: (key: string) => string }> = ({ label, children, onReset, isModified, t }) => (
+const ControlRow: React.FC<{ label: string; children: React.ReactNode; onReset?: () => void; onSaveDefault?: () => void; isModified?: boolean; t?: (key: string) => string }> = ({ label, children, onReset, onSaveDefault, isModified, t }) => (
     <div className="space-y-2" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
         <div className="flex justify-between items-center" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div className="flex items-center" style={{ display: 'flex', alignItems: 'center' }}>
@@ -997,6 +1026,32 @@ const ControlRow: React.FC<{ label: string; children: React.ReactNode; onReset?:
                     </svg>
                   </button>
                 )}
+                {onSaveDefault && (
+                  <button
+                    onClick={onSaveDefault}
+                    className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1"
+                    title={t ? t('saveDefault') : 'Save as Default'}
+                    style={{
+                      width: '16px',
+                      height: '16px',
+                      borderRadius: '4px',
+                      backgroundColor: 'transparent',
+                      color: '#64748b',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginRight: '4px',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: '12px', height: '12px' }}>
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" />
+                    </svg>
+                  </button>
+                )}
             </div>
             <div style={{ display: 'flex', alignItems: 'center' }}>
                 {children}
@@ -1021,6 +1076,7 @@ interface ControlPanelProps {
   onExportAllLayersZip: (quality?: DesignQuality) => void;
   onExport2D?: (layerIndex: number, format: 'svg' | 'dxf') => void;
   exportLoading: boolean;
+  exportLoadingKey?: string | null;
   onFetchFont: (name: string) => Promise<boolean>;
   onFontUpload: (file: File) => void;
   dynamicFonts: Record<string, string>;
@@ -1033,12 +1089,14 @@ interface ControlPanelProps {
   onUpdateShortcuts?: (config: ShortcutConfig) => void;
   onResetShortcuts?: () => void;
   onOpenShortcutsModal?: (tab: 'shortcuts' | 'apikey' | 'aiscope', message?: string) => void;
+  onSaveAsDefault?: () => void;
+  onRestoreFactoryDefaults?: () => void;
   activeTab: 'global' | 'text' | 'Letter Ctrl' | 'hubs' | 'abstract' | 'planes' | 'images';
   onTabChange: (tab: 'global' | 'text' | 'Letter Ctrl' | 'hubs' | 'abstract' | 'planes' | 'images') => void;
 }
 
 const ControlPanel: React.FC<ControlPanelProps> = ({
-  config, onUpdate, updateGroup, updateCharOffset, updateHubs, updateAbstracts, updateImages, onAiPolish, aiLoading, aiProgress, onExportSTL, onExportLayerSTL, onExportAllLayersZip, onExport2D, exportLoading, onFetchFont, onFontUpload, dynamicFonts, /* SLOT-DISABLED: onAutoConfigureSlots, calculateOptimalSlots, */ setViewMode, undo, redo, canUndo, canRedo, shortcuts, onUpdateShortcuts, onResetShortcuts, onOpenShortcutsModal, activeTab, onTabChange
+  config, onUpdate, updateGroup, updateCharOffset, updateHubs, updateAbstracts, updateImages, onAiPolish, aiLoading, aiProgress, onExportSTL, onExportLayerSTL, onExportAllLayersZip, onExport2D, exportLoading, exportLoadingKey, onFetchFont, onFontUpload, dynamicFonts, /* SLOT-DISABLED: onAutoConfigureSlots, calculateOptimalSlots, */ setViewMode, undo, redo, canUndo, canRedo, shortcuts, onUpdateShortcuts, onResetShortcuts, onOpenShortcutsModal, onSaveAsDefault, onRestoreFactoryDefaults, activeTab, onTabChange
 }) => {
   const { t } = useTranslation(config.language || 'en');
   const tabContentRef = useRef<HTMLDivElement>(null);
@@ -1270,6 +1328,26 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
     updateHubs(newHubs, commitTo3D);
   };
 
+  const deleteHubAtIndex = (index: number) => {
+    const newHubs = activeLayer.hubs.filter((_, i) => i !== index);
+    updateHubs(newHubs, true);
+    setSelectedHubIndex(prev => {
+      if (newHubs.length === 0) return 0;
+      if (prev > index) return prev - 1;
+      return Math.min(prev, newHubs.length - 1);
+    });
+  };
+
+  const deleteAbstractAtIndex = (index: number) => {
+    const newAbstracts = activeLayer.abstracts.filter((_, i) => i !== index);
+    updateAbstracts(newAbstracts, true);
+    setSelectedAbstractIndex(prev => {
+      if (newAbstracts.length === 0) return 0;
+      if (prev > index) return prev - 1;
+      return Math.min(prev, newAbstracts.length - 1);
+    });
+  };
+
   const renderSlider = (
     label: string,
     value: number | undefined,
@@ -1280,7 +1358,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
     suffix: string = "",
     disabled = false,
     defaultValue?: number,
-    extraLabel?: React.ReactNode
+    extraLabel?: React.ReactNode,
+    onSaveDefault?: () => void
   ) => {
     const safeValue = typeof value === 'number' && !isNaN(value) ? value : (defaultValue ?? min);
     const showRevert = defaultValue !== undefined && Math.abs(safeValue - defaultValue) > 0.01;
@@ -1319,6 +1398,32 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
               >
                 <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: '12px', height: '12px' }}>
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                </svg>
+              </button>
+            )}
+            {(onSaveDefault || onSaveAsDefault) && (
+              <button
+                onClick={onSaveDefault || onSaveAsDefault}
+                className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center ml-1"
+                title="Save as Default"
+                style={{
+                  width: '16px',
+                  height: '16px',
+                  borderRadius: '4px',
+                  backgroundColor: 'transparent',
+                  color: '#64748b',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginLeft: '4px',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+              >
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: '12px', height: '12px' }}>
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" />
                 </svg>
               </button>
             )}
@@ -1365,7 +1470,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
     'planes': t('planes'),
     'images': 'Images'
   };
-  const TAB_SHORTCUTS: Record<string, keyof ShortcutConfig> = {
+  const TAB_SHORTCUTS: Partial<Record<string, keyof ShortcutConfig>> = {
     'global': 'switchToGlobalTab',
     'text': 'switchToTextTab',
     'Letter Ctrl': 'switchToLetterCtrlTab',
@@ -1389,13 +1494,13 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
       <div className="flex flex-col h-full" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         {/* Tab Headers */}
         <div className="p-2 bg-slate-900/50 border-b border-white/5 shrink-0" style={{ padding: '8px', backgroundColor: 'rgba(15,23,42,0.5)', borderBottom: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 }}>
-           <div className="grid grid-cols-7 gap-1" style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px' }}>
+            <div className="grid grid-cols-7 gap-1" style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px' }}>
               {(['global', 'text', 'Letter Ctrl', 'hubs', 'abstract', 'planes', 'images'] as const).map(tab => {
                  const isActive = activeTab === tab;
                  const btnActive = 'bg-sky-600 text-white border-sky-500';
                  const btnInactive = 'bg-slate-800 text-slate-400 border-white/10 hover:bg-slate-700 hover:text-white';
                  return (
-                 <InfoTooltip key={tab} label={TAB_LABELS[tab]} shortcut={shortcuts?.[TAB_SHORTCUTS[tab]]} placement="bottom" className="h-full">
+                 <InfoTooltip key={tab} label={TAB_LABELS[tab]} shortcut={TAB_SHORTCUTS[tab] ? shortcuts?.[TAB_SHORTCUTS[tab] as keyof ShortcutConfig] : undefined} placement="bottom" className="h-full">
                      <button
                        onClick={() => onTabChange(tab)}
                        className={`${isActive ? btnActive : btnInactive} w-full`}
@@ -1453,6 +1558,15 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: '12px', height: '12px' }}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
                                       </button>
                                   )}
+                                      {onSaveAsDefault && (
+                                        <button
+                                        onClick={onSaveAsDefault}
+                                        className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1"
+                                        title={t('saveDefault') || 'Save as Default'}
+                                        >
+                                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg>
+                                        </button>
+                                      )}
                               </div>
                           </div>
                       </div>
@@ -1475,7 +1589,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
 
                   {renderSlider(t('Extrusion Depth'), config.extrusionDepth, 1, 20, 0.1, (v, c) => onUpdate({ extrusionDepth: v }, c), "mm", false, 3)}
                   {renderSlider(t('Global Boldness'), config.globalStrokeWeight, 0, 10, 0.1, (v, c) => onUpdate({ globalStrokeWeight: v }, c), "mm", false, 0)}
-                  <ControlRow label={t('Preview Resolution')} onReset={() => onUpdate({ quality: 'low' }, true)} isModified={config.quality !== 'low'} t={t}>
+                  <ControlRow label={t('Preview Resolution')} onReset={() => onUpdate({ quality: 'low' }, true)} onSaveDefault={onSaveAsDefault} isModified={config.quality !== 'low'} t={t}>
                      <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-lg" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px', backgroundColor: '#0f172a', padding: '4px', borderRadius: '8px' }}>
                         {(['low', 'med', 'high'] as const).map(q => {
                           const isActive = config.quality === q;
@@ -1508,6 +1622,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                          <div className="flex items-center">
                              <InfoTooltip label={t('Edge Profile')} description={getDescription('Edge Profile', t)} />
                              {!config.bevelEnabled && <button onClick={() => onUpdate({ bevelEnabled: true }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
+                             {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
                          </div>
                          <Toggle label={config.bevelEnabled ? t('ON') : t('OFF')} checked={config.bevelEnabled} onChange={(c) => onUpdate({ bevelEnabled: c }, true)} />
                      </div>
@@ -1570,6 +1685,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                 placeholder={t('Leave blank for AI Randomizer to choose a word')}
                 t={t}
                 defaultValue={activeGroup === 'primary' ? 'Snow' : ''}
+                onSaveDefault={onSaveAsDefault}
               />
 
               <div className="space-y-1">
@@ -1612,6 +1728,11 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
                               </svg>
+                            </button>
+                          )}
+                          {onSaveAsDefault && (
+                            <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}>
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg>
                             </button>
                           )}
                        </div>
@@ -1665,6 +1786,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                     <div className="flex items-center">
                         <InfoTooltip label={t('Mirror Effect')} description={getDescription('Mirror Effect', t)} />
                         {!groupData.mirrorEnabled && <button onClick={() => updateGroup(activeGroup, { mirrorEnabled: true }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
+                        {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
                     </div>
                     <Toggle label={groupData.mirrorEnabled ? t('ON') : t('OFF')} checked={groupData.mirrorEnabled} onChange={(c) => updateGroup(activeGroup, { mirrorEnabled: c }, true)} />
                 </div>
@@ -1676,13 +1798,14 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                       <div className="flex justify-between items-center">
                           <div className="flex items-center">
                               <InfoTooltip label={t('Underline')} description={getDescription('Underline', t)} />
-                              {groupData.underline.enabled && <button onClick={() => updateGroup(activeGroup, { underline: { ...groupData.underline, enabled: false } }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
+                                {groupData.underline.enabled && <button onClick={() => updateGroup(activeGroup, { underline: { ...groupData.underline, enabled: false } }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
+                                {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
                           </div>
                           <Toggle label={groupData.underline.enabled ? t('ON') : t('OFF')} checked={groupData.underline.enabled} onChange={(c) => updateGroup(activeGroup, { underline: { ...groupData.underline, enabled: c } }, true)} />
                       </div>
                       {groupData.underline.enabled && (
                           <div className="space-y-4 animate-in slide-in-from-top-2 duration-200">
-                             <ControlRow label={t('Cap Style')} onReset={() => updateGroup(activeGroup, { underline: { ...groupData.underline, capType: 'none' } }, true)} isModified={groupData.underline.capType !== 'none'} t={t}>
+                             <ControlRow label={t('Cap Style')} onReset={() => updateGroup(activeGroup, { underline: { ...groupData.underline, capType: 'none' } }, true)} onSaveDefault={onSaveAsDefault} isModified={groupData.underline.capType !== 'none'} t={t}>
                                  <div className="grid grid-cols-4 gap-1 bg-slate-900 p-1 rounded-lg">
                                      {(['none', 'square', 'round', 'chevron'] as const).map(cap => (
                                          <button
@@ -1773,28 +1896,62 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
           {activeTab === 'hubs' && (
              <div className="space-y-4 animate-in fade-in duration-200" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <div className="grid grid-cols-4 gap-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
-                   {activeLayer.hubs.map((hub, i) => (
-                     <button
-                       key={hub.id}
-                       onClick={() => setSelectedHubIndex(i)}
-                       className={`h-8 rounded-lg text-xs font-bold uppercase border transition-all ${selectedHubIndex === i ? 'bg-sky-600 border-sky-500 text-white' : 'bg-slate-800 border-white/5 text-slate-400'}`}
-                       style={{
-                         height: '32px',
-                         borderRadius: '8px',
-                         fontSize: '12px',
-                         fontWeight: 'bold',
-                         textTransform: 'uppercase',
-                         border: '1px solid',
-                         transition: 'all 0.2s',
-                         backgroundColor: selectedHubIndex === i ? '#0284c7' : '#1e293b',
-                         borderColor: selectedHubIndex === i ? '#0ea5e9' : 'rgba(255,255,255,0.05)',
-                         color: selectedHubIndex === i ? 'white' : '#94a3b8',
-                         cursor: 'pointer'
-                       }}
-                     >
-                       {t('Hub')} {i + 1}
-                     </button>
-                   ))}
+                   {activeLayer.hubs.map((hub, i) => {
+                     const isSelected = selectedHubIndex === i;
+                     return (
+                       <div key={hub.id} className="relative group">
+                         <button
+                           onClick={() => setSelectedHubIndex(i)}
+                           className={`h-8 w-full rounded-lg text-xs font-bold uppercase border transition-all ${isSelected ? 'bg-sky-600 border-sky-500 text-white' : 'bg-slate-800 border-white/5 text-slate-400'}`}
+                           style={{
+                             height: '32px',
+                             width: '100%',
+                             borderRadius: '8px',
+                             fontSize: '12px',
+                             fontWeight: 'bold',
+                             textTransform: 'uppercase',
+                             border: '1px solid',
+                             transition: 'all 0.2s',
+                             backgroundColor: isSelected ? '#0284c7' : '#1e293b',
+                             borderColor: isSelected ? '#0ea5e9' : 'rgba(255,255,255,0.05)',
+                             color: isSelected ? 'white' : '#94a3b8',
+                             cursor: 'pointer',
+                             paddingRight: '22px'
+                           }}
+                         >
+                           {t('Hub')} {i + 1}
+                         </button>
+                         <div
+                           className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto focus-within:pointer-events-auto transition-opacity"
+                           style={{
+                             position: 'absolute',
+                             right: '0px',
+                             top: '0px',
+                             transform: 'translate(-12%, 12%)'
+                           }}
+                         >
+                           <InfoTooltip label={t('Delete Hub')}>
+                             <button
+                               type="button"
+                               onClick={(e) => {
+                                 e.stopPropagation();
+                                 deleteHubAtIndex(i);
+                               }}
+                               className="h-5 w-5 rounded text-rose-300 hover:text-rose-200 hover:bg-rose-500/20"
+                               style={{
+                                 height: '20px',
+                                 width: '20px',
+                                 borderRadius: '6px'
+                               }}
+                               aria-label={`${t('Delete Hub')} ${i + 1}`}
+                             >
+                               X
+                             </button>
+                           </InfoTooltip>
+                         </div>
+                       </div>
+                     );
+                   })}
                    <InfoTooltip label={t('Add Hub')} description={getDescription('Add Hub', t)}>
                      <button
                        onClick={() => {
@@ -1855,22 +2012,20 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                             {t('Hub Properties')}
                           </span>
                           <div className="flex items-center gap-3" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                               <ControlRow label={t('Visible')} onReset={() => updateHubConfig({ enabled: true }, true)} isModified={!activeLayer.hubs[selectedHubIndex].enabled} t={t}>
+                               <ControlRow label={t('Visible')} onReset={() => updateHubConfig({ enabled: true }, true)} onSaveDefault={onSaveAsDefault} isModified={!activeLayer.hubs[selectedHubIndex].enabled} t={t}>
                                    <div className="flex justify-end">
                                       <Toggle label="" checked={activeLayer.hubs[selectedHubIndex].enabled} onChange={(c) => updateHubConfig({ enabled: c }, true)} />
                                    </div>
                                </ControlRow>
                                <div className="w-px h-4 bg-white/10"></div>
-                               <ControlRow label={t('Hollow')} onReset={() => updateHubConfig({ hollow: true }, true)} isModified={!activeLayer.hubs[selectedHubIndex].hollow} t={t}>
+                               <ControlRow label={t('Hollow')} onReset={() => updateHubConfig({ hollow: true }, true)} onSaveDefault={onSaveAsDefault} isModified={!activeLayer.hubs[selectedHubIndex].hollow} t={t}>
                                    <div className="flex justify-end">
                                       <Toggle label="" checked={activeLayer.hubs[selectedHubIndex].hollow} onChange={(c) => updateHubConfig({ hollow: c }, true)} />
                                    </div>
                                </ControlRow>
-                               <div className="w-px h-4 bg-white/10"></div>
-                               <InfoTooltip label={t('Delete Hub')}><button onClick={() => { const newHubs = [...activeLayer.hubs]; newHubs.splice(selectedHubIndex, 1); updateHubs(newHubs, true); setSelectedHubIndex(prev => Math.max(0, prev - 1)); }} className="text-[9px] font-black uppercase text-rose-400 hover:text-rose-300">{t('Delete')}</button></InfoTooltip>
                           </div>
                      </div>
-                     <ControlRow label={t('Hub Shape')} onReset={() => updateHubConfig({ shape: 'circle' }, true)} isModified={activeLayer.hubs[selectedHubIndex].shape !== 'circle'} t={t}>
+                     <ControlRow label={t('Hub Shape')} onReset={() => updateHubConfig({ shape: 'circle' }, true)} onSaveDefault={onSaveAsDefault} isModified={activeLayer.hubs[selectedHubIndex].shape !== 'circle'} t={t}>
                          <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-lg">{(['circle', 'polygon', 'star'] as const).map(s => (<InfoTooltip key={s} label={t(s)} description={getDescription(s, t)} className="flex-1"><button onClick={() => updateHubConfig({ shape: s }, true)} className={`w-full py-1 text-[9px] font-black uppercase rounded transition-all ${activeLayer.hubs[selectedHubIndex].shape === s ? 'bg-sky-600 text-white' : 'text-slate-500'}`}>{t(s)}</button></InfoTooltip>))}</div>
                      </ControlRow>
                      {renderSlider(
@@ -1896,7 +2051,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                               <div className="flex justify-between items-center">
                                   <div className="flex items-center">
                                       <InfoTooltip label={t('Oscillation Enable')} description={getDescription('Oscillation Enable', t)} />
-                                      {activeLayer.hubs[selectedHubIndex].oscillationEnabled && <button onClick={() => updateHubConfig({ oscillationEnabled: false }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
+                                        {activeLayer.hubs[selectedHubIndex].oscillationEnabled && <button onClick={() => updateHubConfig({ oscillationEnabled: false }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
+                                        {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
                                   </div>
                                   <Toggle label={activeLayer.hubs[selectedHubIndex].oscillationEnabled ? t('ON') : t('OFF')} checked={activeLayer.hubs[selectedHubIndex].oscillationEnabled} onChange={(c) => updateHubConfig({ oscillationEnabled: c }, true)} />
                               </div>
@@ -1941,13 +2097,43 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                         : 'bg-sky-600 border-sky-500 text-white';
 
                     return (
+                        <div key={abs.id} className="relative group">
                         <button
-                            key={abs.id}
-                            onClick={() => setSelectedAbstractIndex(i)}
-                            className={`h-8 rounded-lg text-xs font-bold uppercase border transition-all ${isSelected ? activeClass : 'bg-slate-800 border-white/5 text-slate-400 hover:bg-slate-700'}`}
+                          onClick={() => setSelectedAbstractIndex(i)}
+                          className={`h-8 w-full rounded-lg text-xs font-bold uppercase border transition-all ${isSelected ? activeClass : 'bg-slate-800 border-white/5 text-slate-400 hover:bg-slate-700'}`}
+                          style={{ paddingRight: '22px' }}
                         >
-                            {isFractal ? `${t('Fractal')} ${i + 1}` : `${t('Shape')} ${i + 1}`}
+                          {isFractal ? `${t('Fractal')} ${i + 1}` : `${t('Shape')} ${i + 1}`}
                         </button>
+                            <div
+                              className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto focus-within:pointer-events-auto transition-opacity"
+                              style={{
+                                position: 'absolute',
+                                right: '0px',
+                                top: '0px',
+                                transform: 'translate(-12%, 12%)'
+                              }}
+                            >
+                              <InfoTooltip label={t('Delete Abstract')}>
+                                  <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        deleteAbstractAtIndex(i);
+                                      }}
+                                      className="h-5 w-5 rounded text-rose-300 hover:text-rose-200 hover:bg-rose-500/20"
+                                      style={{
+                                        height: '20px',
+                                        width: '20px',
+                                        borderRadius: '6px'
+                                      }}
+                                      aria-label={`${t('Delete Abstract')} ${i + 1}`}
+                                  >
+                                      X
+                                  </button>
+                              </InfoTooltip>
+                            </div>
+                      </div>
                     );
                  })}
                </div>
@@ -1958,9 +2144,9 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                     <div className="border-b border-white/5 pb-1">
                         <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{activeLayer.abstracts[selectedAbstractIndex].type === 'fractal' ? t('Fractal Settings') : t('Shape Settings')}</span>
                     </div>
-                    {/* Toggles + delete row */}
+                    {/* Toggle row */}
                     <div className="flex items-center gap-2 pb-2">
-                          <ControlRow label={t('Mirror')} onReset={() => updateAbstractConfig({ mirrorEnabled: true }, true)} isModified={!activeLayer.abstracts[selectedAbstractIndex].mirrorEnabled} t={t}>
+                          <ControlRow label={t('Mirror')} onReset={() => updateAbstractConfig({ mirrorEnabled: true }, true)} onSaveDefault={onSaveAsDefault} isModified={!activeLayer.abstracts[selectedAbstractIndex].mirrorEnabled} t={t}>
                               <div className="flex justify-end">
                                   <Toggle label="" checked={activeLayer.abstracts[selectedAbstractIndex].mirrorEnabled} onChange={(c) => updateAbstractConfig({ mirrorEnabled: c }, true)} />
                               </div>
@@ -1969,7 +2155,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                           {activeLayer.abstracts[selectedAbstractIndex].type === 'fractal' && (
                               <>
                                 <div className="w-px h-4 bg-white/10 mx-1"></div>
-                                <ControlRow label={t('Round Tips')} onReset={() => updateAbstractConfig({ roundedTips: false }, true)} isModified={activeLayer.abstracts[selectedAbstractIndex].roundedTips} t={t}>
+                                <ControlRow label={t('Round Tips')} onReset={() => updateAbstractConfig({ roundedTips: false }, true)} onSaveDefault={onSaveAsDefault} isModified={activeLayer.abstracts[selectedAbstractIndex].roundedTips} t={t}>
                                     <div className="flex justify-end">
                                         <Toggle label="" checked={activeLayer.abstracts[selectedAbstractIndex].roundedTips || false} onChange={(c) => updateAbstractConfig({ roundedTips: c }, true)} />
                                     </div>
@@ -1978,14 +2164,11 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                           )}
 
                           <div className="w-px h-4 bg-white/10 mx-1"></div>
-                          <ControlRow label={t('Visible')} onReset={() => updateAbstractConfig({ enabled: true }, true)} isModified={!activeLayer.abstracts[selectedAbstractIndex].enabled} t={t}>
+                          <ControlRow label={t('Visible')} onReset={() => updateAbstractConfig({ enabled: true }, true)} onSaveDefault={onSaveAsDefault} isModified={!activeLayer.abstracts[selectedAbstractIndex].enabled} t={t}>
                               <div className="flex justify-end">
                                   <Toggle label="" checked={activeLayer.abstracts[selectedAbstractIndex].enabled} onChange={(c) => updateAbstractConfig({ enabled: c }, true)} />
                               </div>
                           </ControlRow>
-                          <div className="ml-auto">
-                            <InfoTooltip label={t('Delete')}><button onClick={() => { const newAbs = [...activeLayer.abstracts]; newAbs.splice(selectedAbstractIndex, 1); updateAbstracts(newAbs, true); setSelectedAbstractIndex(prev => Math.max(0, prev - 1)); }} className="text-[9px] font-black uppercase text-rose-400 hover:text-rose-300">{t('Delete')}</button></InfoTooltip>
-                          </div>
                     </div>
 
                     {activeLayer.abstracts[selectedAbstractIndex].enabled && (
@@ -2026,7 +2209,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                     {renderSlider(t('Recursion Depth'), activeLayer.abstracts[selectedAbstractIndex].recursionDepth ?? 4, 1, 6, 1, (v, c) => updateAbstractConfig({ recursionDepth: v }, c), "", false, 4)}
                                     {renderSlider(t('Min Branch Length'), activeLayer.abstracts[selectedAbstractIndex].minBranchLength ?? 5, 1, 50, 1, (v, c) => updateAbstractConfig({ minBranchLength: v }, c), "mm", false, 5)}
 
-                                    <ControlRow label={t('Branch Pattern')} onReset={() => updateAbstractConfig({ branchPattern: 'symmetric' }, true)} isModified={activeLayer.abstracts[selectedAbstractIndex].branchPattern !== 'symmetric'} t={t}>
+                                    <ControlRow label={t('Branch Pattern')} onReset={() => updateAbstractConfig({ branchPattern: 'symmetric' }, true)} onSaveDefault={onSaveAsDefault} isModified={activeLayer.abstracts[selectedAbstractIndex].branchPattern !== 'symmetric'} t={t}>
                                         <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-lg">
                                             {(['symmetric', 'alternating', 'random'] as const).map(p => (
                                                 <InfoTooltip key={p} label={p} description={getDescription(p, t)} className="flex-1"><button onClick={() => updateAbstractConfig({ branchPattern: p }, true)} className={`w-full py-1 text-[9px] font-black uppercase rounded transition-all ${activeLayer.abstracts[selectedAbstractIndex].branchPattern === p ? 'bg-sky-600 text-white' : 'text-slate-500'}`}>{p}</button></InfoTooltip>
@@ -2274,6 +2457,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                         <div className="flex items-center">
                             <InfoTooltip label={t('Sync All Planes')} description={getDescription('Sync All Planes', t)} />
                             {!config.syncAllLayers && <button onClick={() => onUpdate({ syncAllLayers: true })} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
+                            {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
                         </div>
                         <Toggle label={config.syncAllLayers ? t('ON') : t('OFF')} checked={config.syncAllLayers} onChange={(c) => onUpdate({ syncAllLayers: c })} />
                     </div>
@@ -2297,6 +2481,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                               className="w-28 h-7 text-[10px]"
                               placeholder={t('Layer Name')}
                               t={t}
+                              onSaveDefault={onSaveAsDefault}
                             />
                             <div className="flex items-center gap-2 ml-auto">
                                 <span className={`text-[9px] font-black uppercase tracking-wide ${layer.enabled ? 'text-emerald-400' : 'text-slate-500'}`}>
@@ -2321,7 +2506,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                   label={t('Export')}
                                   onExportSTL={(q) => onExportLayerSTL(idx, q)}
                                   onExport2D={(format) => onExport2D?.(idx, format)}
-                                  isLoading={exportLoading}
+                                  isLoading={Boolean(exportLoading && exportLoadingKey === `layer-${idx}`)}
                                   t={t}
                                   disabled={!layer.enabled}
                                   className="w-[5.5rem] h-7 shrink-0"
@@ -2340,24 +2525,32 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                {config.slotEnabled && (
                                    <>
                                        <div className="w-full h-px bg-white/5 my-1"></div>
-                                       {renderSlider(t('Slot Length Adj'), layer.slotLengthAdjustment || 0, -50, 50, 0.5, (v, c) => handleLayerUpdate(idx, { slotLengthAdjustment: v }, c), "mm", false, 0)}
+                                      {renderSlider(t('Slot Length Adj'), layer.slotLengthAdjustment || 0, -50, 50, 0.05, (v, c) => handleLayerUpdate(idx, { slotLengthAdjustment: v }, c), "mm", false, 0)}
                                        {renderSlider(t('Slot Width Offset'), layer.slotWidthOffset || 0, -2, 2, 0.05, (v, c) => handleLayerUpdate(idx, { slotWidthOffset: v }, c), "mm", false, 0)}
+                                      {config.slotMode === '3-plane' && idx === 1 &&
+                                        renderSlider(t('Cross Tip-In Adj'), layer.slotCrossTipInLengthAdjustment || 0, -50, 50, 0.05, (v, c) => handleLayerUpdate(idx, { slotCrossTipInLengthAdjustment: v }, c), "mm", false, 0)
+                                      }
+                                      {config.slotMode === '3-plane' && idx === 2 &&
+                                        renderSlider(t('Tilt Extension Adj'), layer.slotTiltExtensionLengthAdjustment || 0, -50, 50, 0.05, (v, c) => handleLayerUpdate(idx, { slotTiltExtensionLengthAdjustment: v }, c), "mm", false, 0)
+                                      }
                                    </>
                                )}
                             </div>
                          )}
+
                       </div>
                    ))}
                 </div>
                 {config.slotEnabled && (
                     <div className="p-3 bg-slate-800/30 rounded-xl border border-white/5 space-y-4 mt-4">
                         <div className="text-[10px] font-black uppercase text-slate-500 border-b border-white/5 pb-2 mb-2">{t('All Planes')}</div>
-                        {renderSlider(t('Slot Length'), config.slotLength, 10, 200, 1, (v, c) => onUpdate({ slotLength: v }, c), "mm", false, 95)}
+                        {renderSlider(t('Slot Length'), config.slotLength, 10, 200, 0.05, (v, c) => onUpdate({ slotLength: v }, c), "mm", false, 95)}
                         {renderSlider(t('Slot Width'), config.slotWidth, 0, 3, 0.05, (v, c) => onUpdate({ slotWidth: v }, c), "mm", false, 0.2)}
                     </div>
                 )}
              </div>
           )}
+
         </div>
 
         {/* Footer actions */}
@@ -2369,7 +2562,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                 label="Export"
                 onExportSTL={onExportSTL}
                 onExport2D={(fmt) => onExport2D?.(config.activeLayerIndex, fmt)}
-                isLoading={exportLoading}
+                isLoading={Boolean(exportLoading && exportLoadingKey === 'combined-stl')}
                 t={t}
                 className="w-full h-8"
                 baseColor="bg-sky-600"

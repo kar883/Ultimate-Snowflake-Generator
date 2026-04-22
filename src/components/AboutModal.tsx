@@ -30,7 +30,7 @@ const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
           <div className="p-4 bg-slate-800/40 rounded-xl border border-white/5">
             <h3 className="text-sm font-black text-white mb-3">Ultimate Snowflake Generator</h3>
             <p className="text-[11px] text-slate-300 mb-4 leading-relaxed">
-              Version 1.0.4 • Created by Kyle Russell
+              Version 1.0.5 • Created by Kyle Russell
             </p>
             <p className="text-[11px] text-slate-400 mb-4 leading-relaxed">
               A beautiful 3D snowflake design generator for art and 3D printing. 
