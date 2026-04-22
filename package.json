@@ -94,6 +94,9 @@
     }
   },
   "description": "A beautiful 3D snowflake design generator for art and 3D printing",
-  "author": "Snowflake Generator Contributors",
+  "author": {
+    "name": "Snowflake Generator Contributors",
+    "email": "44126918+kar883@users.noreply.github.com"
+  },
   "license": "CC-BY-NC-4.0"
 }
