@@ -77,7 +77,7 @@ See PACKAGING.md for detailed instructions.
 - ✅ STL export for 3D printing
 - ✅ Electron app framework (Windows & macOS)
 - ✅ Installers + Portable executables
-- ✅ MIT License
+- ✅ CC BY-NC 4.0 License
 - ✅ Complete documentation
 - ✅ Build automation scripts
 
@@ -121,7 +121,7 @@ See PACKAGING.md for detailed instructions.
 │   └── ...
 ├── dist/                      <- Built frontend (created on build)
 ├── dist-electron/             <- Installers (created on build)
-└── LICENSE                    <- MIT License
+└── LICENSE                    <- CC BY-NC 4.0 License
 ```
 
 ---
@@ -160,7 +160,7 @@ See [README.md](README.md)
 
 - **Product**: Snowflake Generator
 - **Version**: 1.0.0
-- **License**: MIT
+- **License**: CC BY-NC 4.0
 - **Platforms**: Windows 7+, macOS 10.13+
 
 ---

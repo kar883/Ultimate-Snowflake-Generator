@@ -70,7 +70,7 @@ Upload `dist-electron/` files to your website downloads folder.
 - **PACKAGING.md** - Complete packaging and distribution guide
 - **DISTRIBUTION.md** - Build instructions and troubleshooting
 - **README-DISTRIBUTION.md** - End-user guide and features
-- **LICENSE** - MIT license for your app
+- **LICENSE** - CC BY-NC 4.0 license (attribution, non-commercial)
 - **build-package.bat** - Windows build script
 - **build-package.sh** - macOS/Linux build script
 - **build.js** - Programmatic build helper
@@ -98,7 +98,7 @@ snowflake-generator/
 ├── PACKAGING.md           # Distribution guide
 ├── DISTRIBUTION.md        # Build instructions
 ├── README.md              # Original project README
-└── LICENSE                # MIT License
+└── LICENSE                # CC BY-NC 4.0 License
 ```
 
 ---

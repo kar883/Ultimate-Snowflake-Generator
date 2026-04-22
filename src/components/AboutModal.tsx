@@ -85,7 +85,7 @@ const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose, version }) => 
             {/* GitHub Link */}
             <div className="flex items-center gap-3 p-3 bg-slate-900/50 rounded-lg border border-white/10">
               <svg className="w-5 h-5 text-slate-400" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 4.142 9.5 9.5 3.5 0 1.993 2.143 4 4.5 4-5.299 0-3.965-1.826-7.5-1.826-3.535 0-5.299 1.826-7.5 1.826zm5.5 0c-1.993 0-3.5 1.826-3.5 4s1.507 4 3.5 4 1.993 0 3.5-1.826 3.5-4z"/>
+                <path d="M12 .5C5.649.5.5 5.649.5 12c0 5.084 3.292 9.399 7.865 10.922.575.104.785-.25.785-.554 0-.273-.01-.997-.015-1.957-3.2.695-3.877-1.542-3.877-1.542-.523-1.327-1.278-1.68-1.278-1.68-1.045-.714.079-.699.079-.699 1.156.081 1.764 1.188 1.764 1.188 1.027 1.759 2.695 1.251 3.352.956.104-.744.402-1.251.731-1.539-2.555-.291-5.242-1.277-5.242-5.684 0-1.256.45-2.283 1.188-3.087-.119-.291-.515-1.463.112-3.05 0 0 .969-.31 3.175 1.179A11.06 11.06 0 0 1 12 6.095c.977.004 1.962.132 2.882.388 2.205-1.489 3.173-1.179 3.173-1.179.628 1.587.233 2.759.114 3.05.739.804 1.186 1.831 1.186 3.087 0 4.418-2.691 5.389-5.254 5.675.413.355.781 1.059.781 2.135 0 1.541-.014 2.784-.014 3.164 0 .307.208.664.79.553C20.211 21.396 23.5 17.082 23.5 12 23.5 5.649 18.351.5 12 .5Z"/>
               </svg>
               <div>
                 <button
@@ -144,7 +144,7 @@ const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose, version }) => 
           <div className="p-4 bg-slate-800/40 rounded-xl border border-white/5">
             <h4 className="text-xs font-black text-white mb-3">License</h4>
             <p className="text-[11px] text-slate-300">
-              MIT License • Free to use, modify, and distribute
+              CC BY-NC 4.0 • Attribution required. Non-commercial use only.
             </p>
           </div>
         </div>
