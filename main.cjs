@@ -265,30 +265,7 @@ const template = [
       }
     ]
   },
-  {
-    label: 'Export',
-    submenu: [
-      {
-        label: 'Export Combined STL',
-        accelerator: 'CmdOrCtrl+E',
-        click: () => {
-          mainWindow.webContents.send('menu-export-stl');
-        }
-      },
-      {
-        label: 'Export SVG',
-        click: () => {
-          mainWindow.webContents.send('menu-export-svg');
-        }
-      },
-      {
-        label: 'Export DXF',
-        click: () => {
-          mainWindow.webContents.send('menu-export-dxf');
-        }
-      }
-    ]
-  },
+
   {
     label: 'Help',
     submenu: [

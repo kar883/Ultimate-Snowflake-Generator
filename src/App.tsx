@@ -2107,6 +2107,37 @@ const App: React.FC = () => {
   // Font preloader hook
   const { preloadAllFonts, getFont, isFontLoaded } = useFontPreloader();
 
+  // Electron menu integration: listen for menu-shortcuts event
+  // Electron menu integration: listen for all relevant menu events
+  useEffect(() => {
+    if (!window.electronAPI) return;
+
+    // File
+    window.electronAPI.onSaveProject?.(() => handleSaveProject());
+    window.electronAPI.onLoadProject?.(() => handleLoadProject());
+
+    // Edit
+    window.electronAPI.onUndo?.(() => handleUndo());
+    window.electronAPI.onRedo?.(() => handleRedo());
+    window.electronAPI.onResetApp?.(() => handleResetApp());
+
+    // View
+    window.electronAPI.onToggleView?.(() => handleToggle2D3D?.());
+    window.electronAPI.onForceRegenerate?.(() => handleForceRegenerate?.());
+    window.electronAPI.onResetZoom?.(() => handleResetZoom?.());
+
+    // Help
+    window.electronAPI.onShortcuts?.(() => {
+      setShowShortcutsModal(true);
+      setShortcutsModalTab('shortcuts');
+    });
+
+    // Clean up listeners on unmount
+    return () => {
+      window.electronAPI?.removeAllListeners?.();
+    };
+  }, [/* handlers if they change */]);
+
   // Preload all fonts when app starts (silent background loading)
   useEffect(() => {
     const preloadFonts = async () => {
