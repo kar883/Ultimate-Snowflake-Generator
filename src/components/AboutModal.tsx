@@ -3,10 +3,55 @@ import React, { useState } from 'react';
 interface AboutModalProps {
   isOpen: boolean;
   onClose: () => void;
+  version: string;
 }
 
-const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
+const REPO_URL = 'https://github.com/kar883/Ultimate-Snowflake-Generator';
+
+const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose, version }) => {
+  const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+  const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
+
+  const electronAPI = (window as any).electronAPI;
+
   if (!isOpen) return null;
+
+  const handleOpenRepo = () => {
+    if (electronAPI?.openExternal) {
+      electronAPI.openExternal(REPO_URL);
+      return;
+    }
+    window.open(REPO_URL, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleCheckForUpdates = async () => {
+    if (!electronAPI?.checkForUpdates) {
+      setUpdateStatus('Update check is available in the desktop app build.');
+      return;
+    }
+
+    try {
+      setIsCheckingUpdates(true);
+      setUpdateStatus('Checking for updates...');
+      const result = await electronAPI.checkForUpdates();
+
+      if (!result?.ok) {
+        setUpdateStatus(result?.error || 'Unable to check for updates right now.');
+        return;
+      }
+
+      if (result.hasUpdate && result.latestVersion) {
+        setUpdateStatus(`Update available: v${result.latestVersion}`);
+      } else {
+        const running = result.currentVersion || version;
+        setUpdateStatus(`You are up to date (v${running}).`);
+      }
+    } catch (error) {
+      setUpdateStatus(error instanceof Error ? error.message : 'Unable to check for updates right now.');
+    } finally {
+      setIsCheckingUpdates(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
@@ -30,7 +75,7 @@ const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
           <div className="p-4 bg-slate-800/40 rounded-xl border border-white/5">
             <h3 className="text-sm font-black text-white mb-3">Ultimate Snowflake Generator</h3>
             <p className="text-[11px] text-slate-300 mb-4 leading-relaxed">
-              Version 1.0.5 • Created by Kyle Russell
+              Version {version} • Created by Kyle Russell
             </p>
             <p className="text-[11px] text-slate-400 mb-4 leading-relaxed">
               A beautiful 3D snowflake design generator for art and 3D printing. 
@@ -43,15 +88,28 @@ const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
                 <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 4.142 9.5 9.5 3.5 0 1.993 2.143 4 4.5 4-5.299 0-3.965-1.826-7.5-1.826-3.535 0-5.299 1.826-7.5 1.826zm5.5 0c-1.993 0-3.5 1.826-3.5 4s1.507 4 3.5 4 1.993 0 3.5-1.826 3.5-4z"/>
               </svg>
               <div>
-                <a 
-                  href="https://github.com/kar883/Ultimate-Snowflake-Generator" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
+                <button
+                  type="button"
+                  onClick={handleOpenRepo}
                   className="text-[11px] font-black text-sky-400 hover:text-sky-300 transition-colors underline"
                 >
                   View on GitHub
-                </a>
+                </button>
               </div>
+            </div>
+
+            <div className="mt-3 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={handleCheckForUpdates}
+                disabled={isCheckingUpdates}
+                className="inline-flex items-center justify-center rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-[11px] font-black text-sky-300 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-70 transition-colors"
+              >
+                {isCheckingUpdates ? 'Checking Updates...' : 'Check for Updates'}
+              </button>
+              {updateStatus && (
+                <p className="text-[11px] text-slate-300">{updateStatus}</p>
+              )}
             </div>
           </div>
 

@@ -1,9 +1,14 @@
-name: Build Electron App
+name: CI Build Electron App
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - multiplane_version
+      - main
+  pull_request:
+    branches:
+      - multiplane_version
+      - main
   workflow_dispatch:
 
 jobs:

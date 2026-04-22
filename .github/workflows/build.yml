@@ -72,6 +72,11 @@ jobs:
           release-assets/**/*.dmg
           release-assets/**/*-mac.zip
           release-assets/**/*.AppImage
+          release-assets/**/*.deb
+          release-assets/**/*.tar.gz
+          !release-assets/**/*.blockmap
+          !release-assets/**/builder-debug.yml
+          !release-assets/**/builder-effective-config.yaml
         draft: false
         prerelease: false
       env:

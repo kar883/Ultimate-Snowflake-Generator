@@ -1,7 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
 import ShortcutsModal from './ShortcutsModal';
-// import AboutModal from './AboutModal';
 import { ShortcutConfig } from '../types';
 
 interface HeaderProps {
@@ -18,6 +17,7 @@ interface HeaderProps {
   onResetShortcuts?: () => void;
   onSaveAsDefault?: () => void;
   onRestoreFactoryDefaults?: () => void;
+  appVersion?: string;
   // Language and tooltips settings
   language?: string;
   onLanguageChange?: (lang: string) => void;
@@ -39,6 +39,7 @@ const Header: React.FC<HeaderProps> = ({
   onResetShortcuts,
   onSaveAsDefault,
   onRestoreFactoryDefaults,
+  appVersion = '1.0.5',
   language = 'en',
   onLanguageChange,
   showTooltips,
@@ -46,7 +47,6 @@ const Header: React.FC<HeaderProps> = ({
 }) => {
   const [localName, setLocalName] = useState(projectName);
   const [showSettings, setShowSettings] = useState(false);
-  const [showAbout, setShowAbout] = useState(false);
 
   useEffect(() => {
     setLocalName(projectName);
@@ -59,8 +59,7 @@ const Header: React.FC<HeaderProps> = ({
   };
 
   const handleAbout = () => {
-    // Show about modal
-    setShowAbout(true);
+    onAbout?.();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -88,9 +87,23 @@ const Header: React.FC<HeaderProps> = ({
               Ultimate Snowflake Generator
             </h1>
             <div className="flex items-center space-x-2">
-              <span className="text-[9px] font-bold text-slate-400 tracking-widest uppercase">
-                V1.0.5 • Created by: Kyle Russell
-              </span>
+              <button
+                type="button"
+                onClick={handleAbout}
+                className="text-[9px] font-bold text-slate-400 hover:text-sky-300 tracking-widest uppercase transition-colors"
+                title="About Ultimate Snowflake Generator"
+              >
+                V{appVersion}
+              </button>
+              <span className="text-[9px] font-bold text-slate-500 tracking-widest uppercase">•</span>
+              <button
+                type="button"
+                onClick={handleAbout}
+                className="text-[9px] font-bold text-slate-400 hover:text-sky-300 tracking-widest uppercase transition-colors"
+                title="About Ultimate Snowflake Generator"
+              >
+                Created by Kyle Russell
+              </button>
             </div>
           </div>
         </div>
@@ -177,13 +190,7 @@ const Header: React.FC<HeaderProps> = ({
             onRestoreFactoryDefaults={onRestoreFactoryDefaults}
           />
       )}
-      
-      {/* showAbout && (
-        <AboutModal
-          isOpen={showAbout}
-          onClose={() => setShowAbout(false)}
-        />
-      ) */}
+
     </div>
   );
 };

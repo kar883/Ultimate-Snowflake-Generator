@@ -7,9 +7,10 @@ import SnowflakePreview from './components/SnowflakePreview';
 import Snowflake3D from './components/Snowflake3D';
 import Header from './components/Header';
 import ShortcutsModal from './components/ShortcutsModal';
+import AboutModal from './components/AboutModal';
 import UpdateNotification from './components/UpdateNotification';
 import * as THREE_ACTUAL from 'three';
-import { STLExporter } from './stlExporter';
+import { STLExporter, ThreeMFExporter } from './stlExporter';
 // import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
 import opentype from 'opentype.js';
@@ -32,6 +33,7 @@ import { useTranslation } from './translations';
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, /*makeSlotKey,*/ getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, /*slotCutCache,*/ makeUnderlineKey } from './geometryCache';
 
 const MAX_HISTORY = 50;
+const APP_VERSION = '1.0.5';
 // Bump when mesh generation logic changes (slot geometry, CSG sequencing, etc.)
 // so cached groups from older algorithms are not reused.
 const GEOMETRY_ALGO_VERSION = 'slot-2026-04-15-k';
@@ -1988,6 +1990,72 @@ const App: React.FC = () => {
   const enabledLayersCache = useRef<Map<string, LayerConfig[]>>(new Map());
   const lastConfigHash = useRef<string>('');
   const lastQuality = useRef<string>('');
+  type ExportEstimateStats = { triangles: number; estimatedMb: number; estimatedSeconds: number };
+  type ExportEstimateCalibrationEntry = { trianglesFactor: number; bytesFactor: number; secondsFactor: number; samples: number; lastUpdatedAt?: number };
+  const exportEstimateCacheRef = useRef<Map<string, ExportEstimateStats>>(new Map());
+  const exportEstimateInFlightRef = useRef<Map<string, Promise<ExportEstimateStats | null>>>(new Map());
+  const exportEstimateCalibrationStorageKey = 'snowflake.exportEstimateCalibration.v1';
+  // STL baseline calibrated from two export-training attempts (sample-weighted blend).
+  // This keeps STL estimates stable even when 3MF training runs are flaky.
+  const stlSeedCalibration: Record<string, ExportEstimateCalibrationEntry> = {
+    'stl::low': {
+      trianglesFactor: 6.3006870994354465,
+      bytesFactor: 6.300521787155154,
+      secondsFactor: 7.9187558505876865,
+      samples: 30,
+      lastUpdatedAt: 1776875960940,
+    },
+    'stl::med': {
+      trianglesFactor: 7.9187558505876865,
+      bytesFactor: 7.9187558505876865,
+      secondsFactor: 7.9187558505876865,
+      samples: 15,
+      lastUpdatedAt: 1776876870732,
+    },
+    'stl::high': {
+      trianglesFactor: 7.9187558505876865,
+      bytesFactor: 7.9187558505876865,
+      secondsFactor: 7.9187558505876865,
+      samples: 15,
+      lastUpdatedAt: 1776877548368,
+    },
+  };
+
+  const mergeCalibrationEntry = (
+    seed: ExportEstimateCalibrationEntry,
+    existing?: ExportEstimateCalibrationEntry
+  ): ExportEstimateCalibrationEntry => {
+    if (!existing) return { ...seed };
+    const seedSamples = Math.max(1, seed.samples || 0);
+    const existingSamples = Math.max(0, existing.samples || 0);
+    const total = Math.max(1, seedSamples + existingSamples);
+
+    return {
+      trianglesFactor: ((seed.trianglesFactor * seedSamples) + (existing.trianglesFactor * existingSamples)) / total,
+      bytesFactor: ((seed.bytesFactor * seedSamples) + (existing.bytesFactor * existingSamples)) / total,
+      secondsFactor: ((seed.secondsFactor * seedSamples) + (existing.secondsFactor * existingSamples)) / total,
+      samples: Math.min(100, total),
+      lastUpdatedAt: Math.max(seed.lastUpdatedAt || 0, existing.lastUpdatedAt || 0),
+    };
+  };
+
+  const exportEstimateCalibrationRef = useRef<Record<string, ExportEstimateCalibrationEntry>>((() => {
+    try {
+      const raw = window.localStorage.getItem(exportEstimateCalibrationStorageKey);
+      const parsed = raw ? (JSON.parse(raw) as Record<string, ExportEstimateCalibrationEntry>) : {};
+      const safeParsed = parsed && typeof parsed === 'object' ? parsed : {};
+
+      // Always seed STL buckets from known-good blended calibration.
+      const merged: Record<string, ExportEstimateCalibrationEntry> = { ...safeParsed };
+      Object.entries(stlSeedCalibration).forEach(([key, seedEntry]) => {
+        merged[key] = mergeCalibrationEntry(seedEntry, safeParsed[key]);
+      });
+      return merged;
+    } catch {
+      return { ...stlSeedCalibration };
+    }
+  })());
+  const exportEstimateRunSeqRef = useRef(0);
 
   const initialState = useMemo(() => loadStartupState(), []);
 
@@ -2011,6 +2079,7 @@ const App: React.FC = () => {
   const { t } = useTranslation(language);
   const [showTooltips, setShowTooltips] = useState<boolean>(true);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+  const [showAboutModal, setShowAboutModal] = useState(false);
   const [shortcutsModalTab, setShortcutsModalTab] = useState<'shortcuts' | 'apikey' | 'aiscope' | 'settings'>('shortcuts');
   const [shortcutsModalMessage, setShortcutsModalMessage] = useState<string | null>(null);
 
@@ -2765,7 +2834,8 @@ const App: React.FC = () => {
       clearSlotCutResultCache();
     }
     const qualityToUse = overrideQuality || rendered3DConfig.quality;
-    const interactiveSlotPreview = generationMode === 'preview' && config.slotEnabled;
+    const interactiveSlotPreview = config.slotEnabled
+      && (generationMode === 'preview' || generationMode === 'refresh');
     
     // For preview + slots: aggressively reduce vertex count to prevent manifold crashes
     // and lag. Font glyphs × curve segments × bevel segments = millions of verts; preview
@@ -2816,6 +2886,29 @@ const App: React.FC = () => {
       curveSeg = Math.max(curveSeg, minCurveSeg);
       bevelSegCap = Math.max(bevelSegCap, minBevelSeg);
       qMult = Math.max(qMult, minQMult);
+    }
+
+    if (generationMode === 'export') {
+      // Adaptive tessellation guard for heavy models: keep detail high, but avoid
+      // explosive triangle counts that slow CSG and serialization.
+      const complexityScore = config.layers
+        .filter((layer) => layer.enabled)
+        .reduce((score, layer) => {
+          const primaryChars = layer.primary.enabled ? (layer.primary.text?.length ?? 0) : 0;
+          const secondaryChars = layer.secondary.enabled ? (layer.secondary.text?.length ?? 0) : 0;
+          const charArmsWeight = (primaryChars * Math.max(2, layer.primary.arms || 0)) + (secondaryChars * Math.max(2, layer.secondary.arms || 0));
+          const patternWeight = (layer.hubs?.length ?? 0) * 18 + (layer.abstracts?.length ?? 0) * 16 + (layer.images?.length ?? 0) * 10;
+          return score + charArmsWeight + patternWeight;
+        }, 0);
+
+      if (complexityScore > 420) {
+        const reduction = Math.min(0.35, (complexityScore - 420) / 1800);
+        const minCurveByQuality = qualityToUse === 'high' ? 18 : qualityToUse === 'med' ? 12 : 8;
+        const minBevelByQuality = qualityToUse === 'high' ? 8 : qualityToUse === 'med' ? 5 : 3;
+
+        curveSeg = Math.max(minCurveByQuality, Math.round(curveSeg * (1 - reduction)));
+        bevelSegCap = Math.max(minBevelByQuality, Math.round(bevelSegCap * (1 - reduction * 0.8)));
+      }
     }
 
     // `extrusionDepth` represents the overall material thickness INCLUDING any bevel.
@@ -4135,27 +4228,347 @@ const App: React.FC = () => {
       }
     });
 
+  const getExportCleanupOptions = (quality?: DesignQuality) => {
+    const q = quality || config.quality;
+    const weldTolerance = q === 'high'
+      ? 0.0000012
+      : q === 'med'
+        ? 0.0000018
+        : 0.0000026;
+
+    return {
+      optimize: true,
+      weldTolerance,
+      quality: q,
+      nearLosslessDecimation: true,
+      binary: true,
+    };
+  };
+
+  const persistEstimateCalibration = useCallback(() => {
+    try {
+      window.localStorage.setItem(exportEstimateCalibrationStorageKey, JSON.stringify(exportEstimateCalibrationRef.current));
+    } catch {
+      // Ignore persistence errors; calibration still works in-memory.
+    }
+  }, [exportEstimateCalibrationStorageKey]);
+
+  const buildRawExportEstimate = useCallback((
+    format: 'stl' | '3mf',
+    quality: DesignQuality,
+    targetLayers: LayerConfig[]
+  ): { triangles: number; estimatedBytes: number; estimatedSeconds: number } => {
+    const qualityFactor = quality === 'high' ? 1.35 : quality === 'med' ? 1.0 : 0.78;
+    const bevelFactor = config.bevelEnabled
+      ? 1 + Math.min(0.6, (config.bevelSegments * 0.03) + (config.bevelAmount * 0.09))
+      : 1;
+    const strokeFactor = Math.max(0.75, Math.min(2.1, 1 + ((config.globalStrokeWeight || 0) * 0.3)));
+    const extrusionFactor = Math.max(0.9, Math.min(1.7, 0.95 + (config.extrusionDepth * 0.18)));
+
+    const triangles = targetLayers.reduce((sum, layer) => {
+      const primaryChars = layer.primary.enabled ? (layer.primary.text?.length ?? 0) : 0;
+      const secondaryChars = layer.secondary.enabled ? (layer.secondary.text?.length ?? 0) : 0;
+      const primaryArms = layer.primary.enabled ? Math.max(2, layer.primary.arms || 6) : 0;
+      const secondaryArms = layer.secondary.enabled ? Math.max(2, layer.secondary.arms || 6) : 0;
+      const armDensity = Math.max(primaryArms, secondaryArms, 6);
+      const textChars = primaryChars + secondaryChars;
+
+      const charComplexity = ((primaryChars * primaryArms) + (secondaryChars * secondaryArms)) * 420;
+      const hubsComplexity = (layer.hubs?.length ?? 0) * 6500;
+      const abstractsComplexity = (layer.abstracts?.length ?? 0) * 5200;
+      const imagesComplexity = (layer.images?.length ?? 0) * 4200;
+      const baseComplexity = 12000 + (armDensity * 1500) + (textChars > 0 ? 8000 : 0);
+
+      const preSlotTriangles = Math.round(
+        (baseComplexity + charComplexity + hubsComplexity + abstractsComplexity + imagesComplexity)
+        * qualityFactor
+        * bevelFactor
+        * strokeFactor
+        * extrusionFactor
+      );
+
+      let estimatedLayerTriangles = Math.max(2000, preSlotTriangles);
+
+      if (config.slotEnabled) {
+        const slotDimFactor = Math.max(
+          0.85,
+          Math.min(1.9, ((config.slotLength / 60) * 0.6) + ((config.slotWidth / 2.5) * 0.5))
+        );
+        const slotAdjustmentFactor = 1 + Math.min(
+          0.6,
+          (Math.abs(layer.slotLengthAdjustment || 0) * 0.015)
+          + (Math.abs(layer.slotWidthOffset || 0) * 0.09)
+          + (Math.abs(layer.slotCrossTipInLengthAdjustment || 0) * 0.01)
+          + (Math.abs(layer.slotTiltExtensionLengthAdjustment || 0) * 0.01)
+        );
+        const slotModeFactor = config.slotMode === '3-plane' ? 7 : 5.5;
+        const slotQualityFactor = quality === 'high' ? 1.9 : quality === 'med' ? 1.45 : 1.15;
+        const slotAmplifier = slotModeFactor * slotQualityFactor * slotDimFactor * slotAdjustmentFactor;
+        const slotFloor = quality === 'high' ? 360000 : quality === 'med' ? 180000 : 90000;
+
+        estimatedLayerTriangles = Math.max(
+          slotFloor,
+          Math.round(estimatedLayerTriangles * slotAmplifier)
+        );
+      }
+
+      return sum + estimatedLayerTriangles;
+    }, 0);
+
+    const estimatedStlBytes = 84 + (triangles * 50);
+    const estimatedBytes = format === 'stl'
+      ? estimatedStlBytes
+      : Math.max(
+          2500,
+          Math.round(estimatedStlBytes * (quality === 'high' ? 0.42 : quality === 'med' ? 0.36 : 0.30))
+        );
+
+    const millionTriangles = triangles / 1_000_000;
+    const baseSecondsPerMillion = format === 'stl' ? 1.1 : 1.35;
+    const qualityTimeFactor = quality === 'high' ? 1.25 : quality === 'med' ? 1.0 : 0.8;
+    const estimatedSeconds = Math.max(
+      0.4,
+      (millionTriangles * baseSecondsPerMillion * qualityTimeFactor) + (targetLayers.length * 0.12)
+    );
+
+    return { triangles, estimatedBytes, estimatedSeconds };
+  }, [config]);
+
+  const updateEstimateCalibration = useCallback((
+    format: 'stl' | '3mf',
+    quality: DesignQuality,
+    targetLayers: LayerConfig[],
+    actualTriangles: number,
+    actualBytes: number,
+    actualSeconds: number
+  ) => {
+    if (targetLayers.length === 0 || actualTriangles <= 0 || actualBytes <= 0 || actualSeconds <= 0) return;
+
+    const calibrationKey = `${format}::${quality}`;
+    const raw = buildRawExportEstimate(format, quality, targetLayers);
+    if (raw.triangles <= 0 || raw.estimatedBytes <= 0 || raw.estimatedSeconds <= 0) return;
+
+    const observedTrianglesFactor = Math.max(0.2, Math.min(8, actualTriangles / raw.triangles));
+    const observedBytesFactor = Math.max(0.2, Math.min(8, actualBytes / raw.estimatedBytes));
+    const observedSecondsFactor = Math.max(0.2, Math.min(8, actualSeconds / raw.estimatedSeconds));
+
+    const prev = exportEstimateCalibrationRef.current[calibrationKey] || {
+      trianglesFactor: 1,
+      bytesFactor: 1,
+      secondsFactor: 1,
+      samples: 0,
+      lastUpdatedAt: 0,
+    };
+    const alpha = prev.samples < 4 ? 0.35 : 0.22;
+    const next: ExportEstimateCalibrationEntry = {
+      trianglesFactor: (1 - alpha) * prev.trianglesFactor + (alpha * observedTrianglesFactor),
+      bytesFactor: (1 - alpha) * prev.bytesFactor + (alpha * observedBytesFactor),
+      secondsFactor: (1 - alpha) * prev.secondsFactor + (alpha * observedSecondsFactor),
+      samples: Math.min(prev.samples + 1, 100),
+      lastUpdatedAt: Date.now(),
+    };
+
+    exportEstimateCalibrationRef.current[calibrationKey] = next;
+    persistEstimateCalibration();
+    exportEstimateCacheRef.current.clear();
+  }, [buildRawExportEstimate, persistEstimateCalibration]);
+
+  const resetEstimateCalibration = useCallback(() => {
+    exportEstimateCalibrationRef.current = {};
+    exportEstimateCacheRef.current.clear();
+    exportEstimateInFlightRef.current.clear();
+    try {
+      window.localStorage.removeItem(exportEstimateCalibrationStorageKey);
+    } catch {
+      // Ignore storage failures; in-memory reset still applies.
+    }
+    showNotification('Estimate learning reset. Export again to rebuild calibration.', 'success');
+  }, [showNotification]);
+
+  const estimateCalibrationReadout = useMemo(() => {
+    const buckets: Array<{ bucket: string; samples: number; lastUpdatedAt: number | null }> = [];
+    const formats: Array<'stl' | '3mf'> = ['stl', '3mf'];
+    const qualities: DesignQuality[] = ['low', 'med', 'high'];
+    formats.forEach((fmt) => {
+      qualities.forEach((q) => {
+        const key = `${fmt}::${q}`;
+        const entry = exportEstimateCalibrationRef.current[key];
+        buckets.push({
+          bucket: `${fmt.toUpperCase()}-${q.toUpperCase()}`,
+          samples: entry?.samples ?? 0,
+          lastUpdatedAt: entry?.lastUpdatedAt ?? null,
+        });
+      });
+    });
+    return buckets;
+  }, [config, exportLoading]);
+
+  const estimateCalibrationLastUpdatedLabel = useMemo(() => {
+    const latest = estimateCalibrationReadout.reduce((max, row) => {
+      const ts = row.lastUpdatedAt ?? 0;
+      return ts > max ? ts : max;
+    }, 0);
+    if (latest <= 0) return null;
+    return new Date(latest).toLocaleString();
+  }, [estimateCalibrationReadout]);
+
+  const estimateExportStats = useCallback(async (
+    format: 'stl' | '3mf',
+    quality: DesignQuality,
+    layerIndices?: number[]
+  ): Promise<ExportEstimateStats | null> => {
+    const EXPORT_ESTIMATE_ALGO_VERSION = 'estimate-v3-adaptive-calibration';
+    const safeLayerIndices = Array.isArray(layerIndices) ? layerIndices : [];
+    const targetLayerIds = safeLayerIndices
+      .map((idx) => config.layers[idx]?.id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+    const targetLayerSet = targetLayerIds.length > 0 ? new Set(targetLayerIds) : null;
+
+    const cacheKey = `${hashConfig(config)}::${format}::${quality}::${targetLayerIds.join(',') || 'all'}::${GEOMETRY_ALGO_VERSION}::${EXPORT_ESTIMATE_ALGO_VERSION}`;
+    const cached = exportEstimateCacheRef.current.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const inFlight = exportEstimateInFlightRef.current.get(cacheKey);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const pending = (async (): Promise<ExportEstimateStats | null> => {
+      try {
+        const targetLayers = config.layers.filter((layer) => {
+          if (!layer.enabled) return false;
+          if (!targetLayerSet) return true;
+          return targetLayerSet.has(layer.id);
+        });
+        if (targetLayers.length === 0) return null;
+
+        const raw = buildRawExportEstimate(format, quality, targetLayers);
+        const calibrationKey = `${format}::${quality}`;
+        const calibration = exportEstimateCalibrationRef.current[calibrationKey];
+
+        const calibratedTriangles = calibration
+          ? Math.max(1, Math.round(raw.triangles * calibration.trianglesFactor))
+          : raw.triangles;
+        const calibratedBytes = calibration
+          ? Math.max(1024, Math.round(raw.estimatedBytes * calibration.bytesFactor))
+          : raw.estimatedBytes;
+        const calibratedSecondsRaw = calibration
+          ? Math.max(0.3, raw.estimatedSeconds * calibration.secondsFactor)
+          : raw.estimatedSeconds;
+
+        const estimatedMbRaw = calibratedBytes / (1024 * 1024);
+        const estimatedMb = estimatedMbRaw < 1
+          ? Math.max(0.1, Math.round(estimatedMbRaw * 10) / 10)
+          : Math.round(estimatedMbRaw);
+        const estimatedSeconds = calibratedSecondsRaw < 10
+          ? Math.max(0.1, Math.round(calibratedSecondsRaw * 10) / 10)
+          : Math.round(calibratedSecondsRaw);
+
+        const stats: ExportEstimateStats = {
+          triangles: calibratedTriangles,
+          estimatedMb,
+          estimatedSeconds,
+        };
+
+        exportEstimateCacheRef.current.set(cacheKey, stats);
+        if (exportEstimateCacheRef.current.size > 80) {
+          const oldestKey = exportEstimateCacheRef.current.keys().next().value;
+          if (oldestKey) exportEstimateCacheRef.current.delete(oldestKey);
+        }
+
+        return stats;
+      } catch (error) {
+        console.warn('Failed to estimate export stats', error);
+        return null;
+      } finally {
+        exportEstimateInFlightRef.current.delete(cacheKey);
+      }
+    })();
+
+    exportEstimateInFlightRef.current.set(cacheKey, pending);
+    return pending;
+  }, [buildRawExportEstimate, config, generateMesh]);
+
+  const precomputeExportStats = useCallback((layerIndices?: number[]) => {
+    const runSeq = ++exportEstimateRunSeqRef.current;
+    const qualities: DesignQuality[] = ['low', 'med', 'high'];
+    const formats: Array<'stl' | '3mf'> = ['stl', '3mf'];
+    const targets = Array.isArray(layerIndices) && layerIndices.length > 0
+      ? [layerIndices, ...layerIndices.map((idx) => [idx])]
+      : [undefined];
+
+    const run = async () => {
+      for (const target of targets) {
+        if (runSeq !== exportEstimateRunSeqRef.current) return;
+        for (const fmt of formats) {
+          if (runSeq !== exportEstimateRunSeqRef.current) return;
+          for (const q of qualities) {
+            if (runSeq !== exportEstimateRunSeqRef.current) return;
+            await estimateExportStats(fmt, q, target);
+            await Promise.resolve();
+          }
+        }
+      }
+    };
+
+    void run();
+  }, [estimateExportStats]);
+
+  const countTrianglesInObject = useCallback((root: THREE_ACTUAL.Object3D): number => {
+    let total = 0;
+    root.traverse((obj) => {
+      if (!(obj instanceof THREE_ACTUAL.Mesh)) return;
+      const geometry = obj.geometry as THREE_ACTUAL.BufferGeometry | undefined;
+      if (!geometry) return;
+      const index = geometry.getIndex();
+      if (index) {
+        total += Math.floor(index.count / 3);
+      } else {
+        const pos = geometry.getAttribute('position');
+        if (pos) total += Math.floor(pos.count / 3);
+      }
+    });
+    return total;
+  }, []);
+
   const handleExportSTL = async (quality?: DesignQuality) => {
+    if (identifyBodiesMode && anyFloatingBodies) {
+      const confirmExport = window.confirm(
+        "Warning: Floating bodies detected in the model. Continue with combined export?"
+      );
+      if (!confirmExport) {
+        return;
+      }
+    }
+
     setExportLoading(true);
     setExportLoadingKey('combined-stl');
     try {
+        const exportStart = performance.now();
+        const qualityToUse = quality || config.quality;
+        const canReusePreviewGroup = qualityToUse === config.quality;
+        const previewMeshKey = hashConfig(config)
+          + '|q:' + qualityToUse
+          + '|targets:all'
+          + '|algo:' + GEOMETRY_ALGO_VERSION;
+
         await yieldToMainThread();
-        const group = await generateMesh(() => {}, quality, undefined, 'export');
-        if (identifyBodiesMode && anyFloatingBodies) {
-          const confirmExport = window.confirm(
-            "Warning: Floating bodies detected in the model. Continue with combined export?"
-          );
-          if (!confirmExport) {
-            return;
-          }
-        }
+        const group = canReusePreviewGroup
+          ? (modelCache3D.get(previewMeshKey) || await generateMesh(() => {}, qualityToUse, undefined, 'export'))
+          : await generateMesh(() => {}, qualityToUse, undefined, 'export');
 
         await yieldToMainThread();
         const exporter = new STLExporter();
-        const result = exporter.parse(group, { binary: true });
+        const result = await exporter.parseAsync(group, getExportCleanupOptions(quality));
         const blob = new Blob([result], { type: 'application/octet-stream' });
+        const actualTriangles = Math.max(0, Math.floor((blob.size - 84) / 50));
         const qLabel = quality ? `_${quality}` : '';
         downloadBlob(blob, `${config.projectName}${qLabel}.stl`);
+        const actualSeconds = Math.max(0.1, (performance.now() - exportStart) / 1000);
+        const targetLayers = config.layers.filter((layer) => layer.enabled);
+        updateEstimateCalibration('stl', qualityToUse, targetLayers, actualTriangles, blob.size, actualSeconds);
     } catch (e) {
       console.error("Export Failed", e);
       handleError(e, 'STL Export');
@@ -4165,32 +4578,137 @@ const App: React.FC = () => {
     }
   };
 
+  const handleExport3MF = async (quality?: DesignQuality) => {
+    if (identifyBodiesMode && anyFloatingBodies) {
+      const confirmExport = window.confirm(
+        "Warning: Floating bodies detected in the model. Continue with combined export?"
+      );
+      if (!confirmExport) {
+        return;
+      }
+    }
+
+    setExportLoading(true);
+    setExportLoadingKey('combined-3mf');
+    try {
+      const exportStart = performance.now();
+      const qualityToUse = quality || config.quality;
+      const canReusePreviewGroup = qualityToUse === config.quality;
+      const previewMeshKey = hashConfig(config)
+        + '|q:' + qualityToUse
+        + '|targets:all'
+        + '|algo:' + GEOMETRY_ALGO_VERSION;
+
+      await yieldToMainThread();
+      const group = canReusePreviewGroup
+        ? (modelCache3D.get(previewMeshKey) || await generateMesh(() => {}, qualityToUse, undefined, 'export'))
+        : await generateMesh(() => {}, qualityToUse, undefined, 'export');
+
+      await yieldToMainThread();
+      const exporter = new ThreeMFExporter();
+      const blob = await exporter.parse(group, getExportCleanupOptions(quality));
+      const actualTriangles = countTrianglesInObject(group);
+      const qLabel = quality ? `_${quality}` : '';
+      downloadBlob(blob, `${config.projectName}${qLabel}.3mf`);
+      const actualSeconds = Math.max(0.1, (performance.now() - exportStart) / 1000);
+      const targetLayers = config.layers.filter((layer) => layer.enabled);
+      updateEstimateCalibration('3mf', qualityToUse, targetLayers, actualTriangles, blob.size, actualSeconds);
+    } catch (e) {
+      console.error("Export Failed", e);
+      handleError(e, '3MF Export');
+    } finally {
+      setExportLoading(false);
+      setExportLoadingKey(null);
+    }
+  };
+
   const handleExportLayerSTL = async (layerIndex: number, quality?: DesignQuality) => {
     const layer = config.layers[layerIndex];
     if (!layer) return;
+
+    if (identifyBodiesMode && layer.enabled) {
+      const hasFloating = floatingBodiesByLayer[layer.id] ?? false;
+      if (hasFloating && !window.confirm("Warning: This layer has floating bodies. Export anyway?")) {
+        return;
+      }
+    }
+
     setExportLoading(true);
     setExportLoadingKey(`layer-${layerIndex}`);
     try {
+        const exportStart = performance.now();
+        const qualityToUse = quality || config.quality;
+        const canReusePreviewGroup = qualityToUse === config.quality;
+        const previewMeshKey = hashConfig(config)
+          + '|q:' + qualityToUse
+          + '|targets:all'
+          + '|algo:' + GEOMETRY_ALGO_VERSION;
+
         await yieldToMainThread();
-        const group = await generateMesh(() => {}, quality, undefined, 'export', { targetLayerIds: [layer.id] });
+        const group = canReusePreviewGroup
+          ? (modelCache3D.get(previewMeshKey) || await generateMesh(() => {}, qualityToUse, undefined, 'export', { targetLayerIds: [layer.id] }))
+          : await generateMesh(() => {}, qualityToUse, undefined, 'export', { targetLayerIds: [layer.id] });
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
         if (mesh) {
-          if (mesh.geometry && identifyBodiesMode) {
-             const hasFloating = floatingBodiesByLayer[layer.id] ?? !checkConnectivity(mesh.geometry);
-             if (hasFloating) {
-               if (!window.confirm("Warning: This layer has floating bodies. Export anyway?")) return;
-             }
-            }
             await yieldToMainThread();
             const exporter = new STLExporter();
-            const result = exporter.parse(mesh, { binary: true });
+            const result = await exporter.parseAsync(mesh, getExportCleanupOptions(quality));
             const blob = new Blob([result], { type: 'application/octet-stream' });
+            const actualTriangles = Math.max(0, Math.floor((blob.size - 84) / 50));
             const qLabel = quality ? `_${quality}` : '';
             downloadBlob(blob, `${config.projectName}_${layer.name.replace(/\s+/g, '_')}${qLabel}.stl`);
+            const actualSeconds = Math.max(0.1, (performance.now() - exportStart) / 1000);
+            updateEstimateCalibration('stl', qualityToUse, [layer], actualTriangles, blob.size, actualSeconds);
         }
     } catch(e) {
       console.error(e);
       handleError(e, 'Layer STL Export');
+    } finally {
+      setExportLoading(false);
+      setExportLoadingKey(null);
+    }
+  };
+
+  const handleExportLayer3MF = async (layerIndex: number, quality?: DesignQuality) => {
+    const layer = config.layers[layerIndex];
+    if (!layer) return;
+
+    if (identifyBodiesMode && layer.enabled) {
+      const hasFloating = floatingBodiesByLayer[layer.id] ?? false;
+      if (hasFloating && !window.confirm("Warning: This layer has floating bodies. Export anyway?")) {
+        return;
+      }
+    }
+
+    setExportLoading(true);
+    setExportLoadingKey(`layer-${layerIndex}`);
+    try {
+      const exportStart = performance.now();
+      const qualityToUse = quality || config.quality;
+      const canReusePreviewGroup = qualityToUse === config.quality;
+      const previewMeshKey = hashConfig(config)
+        + '|q:' + qualityToUse
+        + '|targets:all'
+        + '|algo:' + GEOMETRY_ALGO_VERSION;
+
+      await yieldToMainThread();
+      const group = canReusePreviewGroup
+        ? (modelCache3D.get(previewMeshKey) || await generateMesh(() => {}, qualityToUse, undefined, 'export', { targetLayerIds: [layer.id] }))
+        : await generateMesh(() => {}, qualityToUse, undefined, 'export', { targetLayerIds: [layer.id] });
+      const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
+      if (mesh) {
+        await yieldToMainThread();
+        const exporter = new ThreeMFExporter();
+        const blob = await exporter.parse(mesh, getExportCleanupOptions(quality));
+        const actualTriangles = countTrianglesInObject(mesh);
+        const qLabel = quality ? `_${quality}` : '';
+        downloadBlob(blob, `${config.projectName}_${layer.name.replace(/\s+/g, '_')}${qLabel}.3mf`);
+        const actualSeconds = Math.max(0.1, (performance.now() - exportStart) / 1000);
+        updateEstimateCalibration('3mf', qualityToUse, [layer], actualTriangles, blob.size, actualSeconds);
+      }
+    } catch (e) {
+      console.error(e);
+      handleError(e, 'Layer 3MF Export');
     } finally {
       setExportLoading(false);
       setExportLoadingKey(null);
@@ -4231,7 +4749,8 @@ const App: React.FC = () => {
                 // Yield between per-layer serialization steps so the UI stays responsive.
                 await yieldToMainThread();
               }
-              const result = exporter.parse(child, { binary: true });
+              const result = await exporter.parseAsync(child, getExportCleanupOptions(quality));
+              // STL ZIP remains binary STL files for slicer compatibility.
               const data = result as ArrayBuffer;
               const qLabel = quality ? `_${quality}` : '';
               zip.file(`${config.projectName}_${child.name.replace(/\s+/g, '_')}${qLabel}.stl`, data);
@@ -4247,6 +4766,113 @@ const App: React.FC = () => {
         setExportLoading(false);
         setExportLoadingKey(null);
       }
+  };
+
+  const handleExportSelectedLayersSTL = async (layerIndices: number[], quality?: DesignQuality) => {
+    const uniqueLayerIndices = Array.from(new Set(layerIndices)).filter((idx) => Number.isInteger(idx));
+    const selectedLayers = uniqueLayerIndices
+      .map((idx) => ({ idx, layer: config.layers[idx] }))
+      .filter((entry): entry is { idx: number; layer: LayerConfig } => Boolean(entry.layer && entry.layer.enabled));
+    if (selectedLayers.length === 0) return;
+
+    if (identifyBodiesMode) {
+      const hasFloating = selectedLayers.some(({ layer }) => (floatingBodiesByLayer[layer.id] ?? false));
+      if (hasFloating && !window.confirm("Warning: One or more selected planes have floating bodies. Continue export?")) {
+        return;
+      }
+    }
+
+    setExportLoading(true);
+    setExportLoadingKey('layers-batch-stl');
+    try {
+      const qualityToUse = quality || config.quality;
+      const canReusePreviewGroup = qualityToUse === config.quality;
+      const previewMeshKey = hashConfig(config)
+        + '|q:' + qualityToUse
+        + '|targets:all'
+        + '|algo:' + GEOMETRY_ALGO_VERSION;
+
+      await yieldToMainThread();
+      const targetLayerIds = selectedLayers.map(({ layer }) => layer.id);
+      const group = canReusePreviewGroup
+        ? (modelCache3D.get(previewMeshKey) || await generateMesh(() => {}, qualityToUse, undefined, 'export', { targetLayerIds }))
+        : await generateMesh(() => {}, qualityToUse, undefined, 'export', { targetLayerIds });
+      const exporter = new STLExporter();
+
+      for (let i = 0; i < selectedLayers.length; i++) {
+        const { layer } = selectedLayers[i];
+        const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
+        if (!mesh) continue;
+        const layerExportStart = performance.now();
+        if (i > 0) await yieldToMainThread();
+        const result = await exporter.parseAsync(mesh, getExportCleanupOptions(quality));
+        const blob = new Blob([result], { type: 'application/octet-stream' });
+        const actualTriangles = Math.max(0, Math.floor((blob.size - 84) / 50));
+        const qLabel = quality ? `_${quality}` : '';
+        downloadBlob(blob, `${config.projectName}_${layer.name.replace(/\s+/g, '_')}${qLabel}.stl`);
+        const actualSeconds = Math.max(0.1, (performance.now() - layerExportStart) / 1000);
+        updateEstimateCalibration('stl', qualityToUse, [layer], actualTriangles, blob.size, actualSeconds);
+      }
+    } catch (e) {
+      console.error(e);
+      handleError(e, 'Selected STL Export');
+    } finally {
+      setExportLoading(false);
+      setExportLoadingKey(null);
+    }
+  };
+
+  const handleExportSelectedLayers3MF = async (layerIndices: number[], quality?: DesignQuality) => {
+    const uniqueLayerIndices = Array.from(new Set(layerIndices)).filter((idx) => Number.isInteger(idx));
+    const selectedLayers = uniqueLayerIndices
+      .map((idx) => ({ idx, layer: config.layers[idx] }))
+      .filter((entry): entry is { idx: number; layer: LayerConfig } => Boolean(entry.layer && entry.layer.enabled));
+    if (selectedLayers.length === 0) return;
+
+    if (identifyBodiesMode) {
+      const hasFloating = selectedLayers.some(({ layer }) => (floatingBodiesByLayer[layer.id] ?? false));
+      if (hasFloating && !window.confirm("Warning: One or more selected planes have floating bodies. Continue export?")) {
+        return;
+      }
+    }
+
+    setExportLoading(true);
+    setExportLoadingKey('layers-batch-3mf');
+    try {
+      const qualityToUse = quality || config.quality;
+      const canReusePreviewGroup = qualityToUse === config.quality;
+      const previewMeshKey = hashConfig(config)
+        + '|q:' + qualityToUse
+        + '|targets:all'
+        + '|algo:' + GEOMETRY_ALGO_VERSION;
+
+      await yieldToMainThread();
+      const targetLayerIds = selectedLayers.map(({ layer }) => layer.id);
+      const group = canReusePreviewGroup
+        ? (modelCache3D.get(previewMeshKey) || await generateMesh(() => {}, qualityToUse, undefined, 'export', { targetLayerIds }))
+        : await generateMesh(() => {}, qualityToUse, undefined, 'export', { targetLayerIds });
+      const exporter = new ThreeMFExporter();
+
+      for (let i = 0; i < selectedLayers.length; i++) {
+        const { layer } = selectedLayers[i];
+        const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
+        if (!mesh) continue;
+        const layerExportStart = performance.now();
+        if (i > 0) await yieldToMainThread();
+        const blob = await exporter.parse(mesh, getExportCleanupOptions(quality));
+        const actualTriangles = countTrianglesInObject(mesh);
+        const qLabel = quality ? `_${quality}` : '';
+        downloadBlob(blob, `${config.projectName}_${layer.name.replace(/\s+/g, '_')}${qLabel}.3mf`);
+        const actualSeconds = Math.max(0.1, (performance.now() - layerExportStart) / 1000);
+        updateEstimateCalibration('3mf', qualityToUse, [layer], actualTriangles, blob.size, actualSeconds);
+      }
+    } catch (e) {
+      console.error(e);
+      handleError(e, 'Selected 3MF Export');
+    } finally {
+      setExportLoading(false);
+      setExportLoadingKey(null);
+    }
   };
 
   const handleExport2D = async (layerIndex: number, format: 'svg' | 'dxf') => {
@@ -5274,7 +5900,8 @@ const App: React.FC = () => {
                             onSaveConfig={handleSaveProject}
                             onLoadConfig={handleLoadProject}
                             onResetApp={handleResetApp}
-                            // onAbout={handleAbout}  // Add About handler - Temporarily commented out
+                          onAbout={() => setShowAboutModal(true)}
+                          appVersion={APP_VERSION}
                             shortcuts={shortcuts}
                             onUpdateShortcuts={(s) => setShortcuts(s)}
                             onResetShortcuts={() => setShortcuts(DEFAULT_SHORTCUTS)}
@@ -5304,7 +5931,13 @@ const App: React.FC = () => {
                         aiLoading={aiLoading}
                         aiProgress={aiProgress}
                         onExportSTL={handleExportSTL}
+                        onExport3MF={handleExport3MF}
                         onExportLayerSTL={handleExportLayerSTL}
+                        onExportLayer3MF={handleExportLayer3MF}
+                        onExportSelectedLayersSTL={handleExportSelectedLayersSTL}
+                        onExportSelectedLayers3MF={handleExportSelectedLayers3MF}
+                        onEstimateExportStats={estimateExportStats}
+                        onPrecomputeExportStats={precomputeExportStats}
                         onExportAllLayersZip={handleExportAllLayersZip}
                         onExport2D={handleExport2D}
                         exportLoading={exportLoading}
@@ -5454,7 +6087,16 @@ const App: React.FC = () => {
                 message={shortcutsModalMessage}
                 onSaveAsDefault={saveCurrentAsDefaults}
                 onRestoreFactoryDefaults={restoreFactoryDefaults}
+                onResetEstimateCalibration={resetEstimateCalibration}
+                estimateCalibrationReadout={estimateCalibrationReadout}
+                estimateCalibrationLastUpdatedLabel={estimateCalibrationLastUpdatedLabel}
             />
+
+              <AboutModal
+                isOpen={showAboutModal}
+                onClose={() => setShowAboutModal(false)}
+                version={APP_VERSION}
+              />
 
             {/* Notifications */}
             <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none">
@@ -5466,7 +6108,7 @@ const App: React.FC = () => {
             </div>
 
             {/* Update Notification */}
-            <UpdateNotification currentVersion="1.0.5" />
+            <UpdateNotification currentVersion={APP_VERSION} />
         </div>
     );
   };
