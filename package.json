@@ -77,7 +77,7 @@
       "perMachine": false,
       "allowElevation": true,
       "allowToChangeInstallationDirectory": true,
-      "upgradeCode": "{A1B2C3D4-E5F6-47A8-9B0C-1D2E3F4A5B6C}"
+      "guid": "{B7E2A1C4-9F3B-4D2A-8C1E-2F3A4B5C6D7E}"
     },
     "mac": {
       "target": [
