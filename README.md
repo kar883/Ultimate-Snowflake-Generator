@@ -1,13 +1,13 @@
-# Ultimate Snowflake Generator
+# Ultimate Snowflake Generator - Createdby Kyle Russell
 
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
 
 ## Download
-- Windows Installer: [Snowflake.Generator.Setup.1.0.5.exe](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.5/Snowflake.Generator.Setup.1.0.5.exe)
-- Windows ZIP: [Snowflake.Generator-1.0.5-win.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.5/Snowflake.Generator-1.0.5-win.zip)
-- macOS DMG: [Snowflake.Generator-1.0.5-arm64.dmg](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.5/Snowflake.Generator-1.0.5-arm64.dmg)
-- macOS ZIP: [Snowflake.Generator-1.0.5-arm64-mac.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.5/Snowflake.Generator-1.0.5-arm64-mac.zip)
-- Linux AppImage: [Snowflake.Generator-1.0.5.AppImage](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.5/Snowflake.Generator-1.0.5.AppImage)
+- Windows Installer: [Snowflake.Generator.Setup.1.0.6.exe](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.6/Snowflake.Generator.Setup.1.0.6.exe)
+- Windows ZIP: [Snowflake.Generator-1.0.6-win.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.6/Snowflake.Generator-1.0.6-win.zip)
+- macOS DMG: [Snowflake.Generator-1.0.6-arm64.dmg](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.6/Snowflake.Generator-1.0.6-arm64.dmg)
+- macOS ZIP: [Snowflake.Generator-1.0.6-arm64-mac.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.6/Snowflake.Generator-1.0.6-arm64-mac.zip)
+- Linux AppImage: [Snowflake.Generator-1.0.6.AppImage](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.6/Snowflake.Generator-1.0.6.AppImage)
 - All release assets: [GitHub Releases](https://github.com/kar883/Ultimate-Snowflake-Generator/releases)
 
 Design complex 2D and 3D snowflakes from text, hubs, abstracts, and multi-plane controls, then export for 3D printing or vector workflows.
@@ -36,6 +36,12 @@ Design complex 2D and 3D snowflakes from text, hubs, abstracts, and multi-plane 
 
 ### Export Options
 ![Export options](assets/screenshots/export-options.png)
+
+
+## Tips
+- Start with simple text and 1 plane to get familiar, then explore more complex features.
+- turn off "autoregenerate" for faster editing, then click "Regenerate" when ready to see updates.
+- Use the 3D previews "ID Bodies" to check for free floating/disconnected bodies before exporting for 3d printing.
 
 ## License
 

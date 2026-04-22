@@ -135,7 +135,7 @@ function showAbout() {
     type: 'info',
     title: 'About Ultimate Snowflake Generator',
     message: 'Ultimate Snowflake Generator',
-    detail: 'Version 1.0.5\nCreated by Kyle Russell\n\nA beautiful 3D snowflake design generator for art and 3D printing.\n\nVisit the GitHub repository for more information and to report issues.',
+    detail: 'Version 1.0.6\nCreated by Kyle Russell\n\nA beautiful 3D snowflake design generator for art and 3D printing.\n\nVisit the GitHub repository for more information and to report issues.',
     buttons: ['GitHub Repository', 'OK'],
     defaultId: 1,
     cancelId: 1

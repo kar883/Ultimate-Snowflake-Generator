@@ -33,7 +33,7 @@ import { useTranslation } from './translations';
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, /*makeSlotKey,*/ getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, /*slotCutCache,*/ makeUnderlineKey } from './geometryCache';
 
 const MAX_HISTORY = 50;
-const APP_VERSION = '1.0.5';
+const APP_VERSION = '1.0.6';
 // Bump when mesh generation logic changes (slot geometry, CSG sequencing, etc.)
 // so cached groups from older algorithms are not reused.
 const GEOMETRY_ALGO_VERSION = 'slot-2026-04-15-k';
