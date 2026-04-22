@@ -221,8 +221,13 @@ const getDescription = (key: string, t?: (key: string) => string): string => {
 
 interface ExportMenuProps {
   label: string;
-  onExportSTL: (quality: DesignQuality) => void;
+  onExportSTL: (quality: DesignQuality) => void | Promise<void>;
+  onExport3MF?: (quality: DesignQuality) => void | Promise<void>;
+  onExportSelectedPlanesSTL?: (layerIndices: number[], quality: DesignQuality) => void | Promise<void>;
+  onExportSelectedPlanes3MF?: (layerIndices: number[], quality: DesignQuality) => void | Promise<void>;
   onExport2D?: (format: 'svg' | 'dxf') => void;
+  onEstimateExportStats?: (format: 'stl' | '3mf', quality: DesignQuality, layerIndices?: number[]) => Promise<{ triangles: number; estimatedMb: number; estimatedSeconds: number } | null>;
+  onPrecomputeExportStats?: (layerIndices?: number[]) => void;
   isLoading: boolean;
   disabled?: boolean;
   className?: string;
@@ -232,14 +237,28 @@ interface ExportMenuProps {
   shortcut?: any;
   t?: (key: string) => string;
   compact?: boolean;
+  planeActions?: Array<{
+    label: string;
+    onExportSTL: (quality: DesignQuality) => void | Promise<void>;
+    onExport3MF?: (quality: DesignQuality) => void | Promise<void>;
+    layerIndex?: number;
+    isActive?: boolean;
+  }>;
+  defaultEstimateLayerIndices?: number[];
 }
 
 const ExportMenu: React.FC<ExportMenuProps> = ({
-  label, onExportSTL, onExport2D, isLoading, disabled, className, baseColor = "bg-sky-600", direction = 'up', show2D = false, shortcut, t, compact = false
+  label, onExportSTL, onExport3MF, onExportSelectedPlanesSTL, onExportSelectedPlanes3MF, onExport2D, onEstimateExportStats, onPrecomputeExportStats, isLoading, disabled, className, baseColor = "bg-sky-600", direction = 'up', show2D = false, shortcut, t, compact = false, planeActions, defaultEstimateLayerIndices
 }) => {
   const [quality, setQuality] = useState<DesignQuality>('med');
-  const [format, setFormat] = useState<'stl' | 'svg' | 'dxf'>('stl');
+  const [format, setFormat] = useState<'stl' | '3mf' | 'svg' | 'dxf'>('stl');
   const [isOpen, setIsOpen] = useState(false);
+  const [selectedPlaneIndices, setSelectedPlaneIndices] = useState<number[]>([]);
+  const [hoveredFormat, setHoveredFormat] = useState<'stl' | '3mf' | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [hoverStats, setHoverStats] = useState<{ format: 'stl' | '3mf'; quality: DesignQuality; triangles: number; estimatedMb: number; estimatedSeconds: number; perPlane?: Array<{ label: string; triangles: number; estimatedMb: number; estimatedSeconds: number }> } | null>(null);
+  const [disabledPlaneTooltip, setDisabledPlaneTooltip] = useState<{ text: string; top: number; left: number } | null>(null);
+  const estimateRequestRef = useRef(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ top: 0, left: 0, width: 0 });
@@ -289,9 +308,42 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
     setIsOpen(!isOpen);
   };
 
-  const handleMainClick = () => {
+  const handleMainClick = async () => {
     if (disabled || isLoading) return;
-    if (format === 'stl') onExportSTL(quality);
+
+    const hasPlaneActions = Array.isArray(planeActions) && planeActions.length > 0;
+    const hasSelectedPlanes = hasPlaneActions && selectedPlaneIndices.length > 0;
+
+    if (hasSelectedPlanes && (format === 'stl' || format === '3mf')) {
+      const selectedLayerIndices = selectedPlaneIndices
+        .map((idx) => planeActions?.[idx]?.layerIndex)
+        .filter((value): value is number => typeof value === 'number');
+
+      if (selectedLayerIndices.length > 0) {
+        if (format === 'stl' && onExportSelectedPlanesSTL) {
+          await Promise.resolve(onExportSelectedPlanesSTL(selectedLayerIndices, quality));
+          return;
+        }
+        if (format === '3mf' && onExportSelectedPlanes3MF) {
+          await Promise.resolve(onExportSelectedPlanes3MF(selectedLayerIndices, quality));
+          return;
+        }
+      }
+
+      for (const idx of selectedPlaneIndices) {
+        const action = planeActions?.[idx];
+        if (!action) continue;
+        if (format === 'stl') {
+          await Promise.resolve(action.onExportSTL(quality));
+        } else if (action.onExport3MF) {
+          await Promise.resolve(action.onExport3MF(quality));
+        }
+      }
+      return;
+    }
+
+    if (format === 'stl') await Promise.resolve(onExportSTL(quality));
+    else if (format === '3mf') await Promise.resolve(onExport3MF?.(quality));
     else onExport2D?.(format);
   };
 
@@ -302,6 +354,141 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
   const toggleButtonClass = compact
     ? `px-1.5 rounded-r-lg flex items-center justify-center transition-all border-l border-black/10 ${baseColor} hover:brightness-110 text-white shrink-0`
     : `px-2 rounded-r-lg flex items-center justify-center transition-all border-l border-black/10 ${baseColor} hover:brightness-110 text-white`;
+
+  const hasPlaneActions = Array.isArray(planeActions) && planeActions.length > 0;
+  const has3DFormat = format === 'stl' || format === '3mf';
+
+  const togglePlaneSelection = (idx: number) => {
+    if (!hasPlaneActions) return;
+    const action = planeActions?.[idx];
+    const isPlaneActive = action?.isActive !== false;
+    const supportsFormat = format === 'stl' || Boolean(action?.onExport3MF);
+    if (!action || !isPlaneActive || !supportsFormat) return;
+
+    setSelectedPlaneIndices((prev) =>
+      prev.includes(idx) ? prev.filter((v) => v !== idx) : [...prev, idx]
+    );
+  };
+
+  const getEstimateLayerIndices = useCallback((): number[] | undefined => {
+    if (selectedPlaneIndices.length > 0 && hasPlaneActions) {
+      const selected = selectedPlaneIndices
+        .map((idx) => {
+          const action = planeActions?.[idx];
+          if (!action || action.isActive === false) return undefined;
+          return action.layerIndex;
+        })
+        .filter((value): value is number => typeof value === 'number');
+      return selected.length > 0 ? selected : undefined;
+    }
+    return defaultEstimateLayerIndices;
+  }, [defaultEstimateLayerIndices, hasPlaneActions, planeActions, selectedPlaneIndices]);
+
+  useEffect(() => {
+    if (!hasPlaneActions) {
+      if (selectedPlaneIndices.length > 0) setSelectedPlaneIndices([]);
+      return;
+    }
+
+    setSelectedPlaneIndices((prev) =>
+      prev.filter((idx) => {
+        const action = planeActions?.[idx];
+        if (!action) return false;
+        const isPlaneActive = action.isActive !== false;
+        const supportsFormat = format === 'stl' || Boolean(action.onExport3MF);
+        return isPlaneActive && supportsFormat;
+      })
+    );
+  }, [format, hasPlaneActions, planeActions, selectedPlaneIndices.length]);
+
+  useEffect(() => {
+    if (!isOpen || !onPrecomputeExportStats) return;
+    onPrecomputeExportStats(getEstimateLayerIndices());
+  }, [getEstimateLayerIndices, isOpen, onPrecomputeExportStats]);
+
+  const requestHoverStats = useCallback(async (hoverFormat: 'stl' | '3mf') => {
+    if (!onEstimateExportStats) {
+      setHoverStats(null);
+      return;
+    }
+
+    const requestId = ++estimateRequestRef.current;
+    setStatsLoading(true);
+    try {
+      const stats = await onEstimateExportStats(hoverFormat, quality, getEstimateLayerIndices());
+      if (estimateRequestRef.current !== requestId) return;
+      if (stats) {
+        setHoverStats({
+          format: hoverFormat,
+          quality,
+          triangles: stats.triangles,
+          estimatedMb: stats.estimatedMb,
+          estimatedSeconds: stats.estimatedSeconds,
+        });
+
+        if (hasPlaneActions && selectedPlaneIndices.length > 1) {
+          const selectedActions = selectedPlaneIndices
+            .map((idx) => planeActions?.[idx])
+            .filter((action): action is NonNullable<typeof action> => Boolean(action && typeof action.layerIndex === 'number'));
+
+          const perPlaneResults = await Promise.all(
+            selectedActions.map(async (action) => {
+              const one = await onEstimateExportStats(hoverFormat, quality, [action.layerIndex as number]);
+              return one
+                ? { label: action.label, triangles: one.triangles, estimatedMb: one.estimatedMb, estimatedSeconds: one.estimatedSeconds }
+                : null;
+            })
+          );
+
+          if (estimateRequestRef.current !== requestId) return;
+          const perPlane = perPlaneResults.filter((row): row is { label: string; triangles: number; estimatedMb: number; estimatedSeconds: number } => Boolean(row));
+          setHoverStats((prev) => {
+            if (!prev || prev.format !== hoverFormat || prev.quality !== quality) return prev;
+            return { ...prev, perPlane };
+          });
+        }
+      } else {
+        setHoverStats(null);
+      }
+    } catch {
+      if (estimateRequestRef.current === requestId) {
+        setHoverStats(null);
+      }
+    } finally {
+      if (estimateRequestRef.current === requestId) {
+        setStatsLoading(false);
+      }
+    }
+  }, [getEstimateLayerIndices, onEstimateExportStats, quality]);
+
+  useEffect(() => {
+    if (hoveredFormat) {
+      void requestHoverStats(hoveredFormat);
+    }
+  }, [hoveredFormat, quality, selectedPlaneIndices, requestHoverStats]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setHoveredFormat(null);
+      setHoverStats(null);
+      setStatsLoading(false);
+      setDisabledPlaneTooltip(null);
+    }
+  }, [isOpen]);
+
+  const formatMb = (value: number): string => {
+    if (value < 1) {
+      return value.toFixed(1);
+    }
+    return String(Math.round(value));
+  };
+
+  const formatSeconds = (value: number): string => {
+    if (value < 10) {
+      return value.toFixed(1);
+    }
+    return String(Math.round(value));
+  };
 
   return (
     <div ref={containerRef} className={`relative flex rounded-lg shadow-lg ${disabled ? 'opacity-50 pointer-events-none' : ''} ${className}`}>
@@ -340,17 +527,61 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
         >
            {/* Format section */}
            <div className="px-2 pt-1 pb-0.5 text-[8px] font-black uppercase text-slate-500 tracking-wider">Format</div>
-           <div className="grid grid-cols-3 gap-1 bg-slate-900/60 p-1 rounded-md">
-             {(['stl', 'svg', 'dxf'] as const).filter(f => f === 'stl' || show2D).map(f => (
-               <button key={f} onClick={() => setFormat(f)}
-                 className={`py-1.5 text-[9px] font-black uppercase rounded transition-all ${format === f ? 'bg-sky-500 text-white' : 'text-slate-400 hover:text-white'}`}>
-                 {f.toUpperCase()}
-               </button>
-             ))}
+           <div
+             className="space-y-1"
+             onMouseLeave={() => {
+               setHoveredFormat(null);
+             }}
+           >
+             <div className="grid grid-cols-3 gap-1 bg-slate-900/60 p-1 rounded-md">
+               {(['stl', '3mf', 'svg', 'dxf'] as const)
+                .filter(f => f === 'stl' || f === '3mf' || show2D)
+                .filter(f => f !== '3mf' || Boolean(onExport3MF))
+                .map(f => (
+                 <button key={f} onClick={() => setFormat(f)}
+                   onMouseEnter={() => {
+                     if (f === 'stl' || f === '3mf') {
+                       setHoveredFormat(f);
+                     } else {
+                       setHoveredFormat(null);
+                     }
+                   }}
+                   className={`py-1.5 text-[9px] font-black uppercase rounded transition-all ${format === f ? 'bg-sky-500 text-white' : 'text-slate-400 hover:text-white'}`}>
+                   {f.toUpperCase()}
+                 </button>
+               ))}
+             </div>
+
+             <div className={`bg-slate-900/70 border border-white/10 rounded-md px-2 py-1 text-[9px] text-slate-300 h-20 overflow-y-auto ${hoveredFormat ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+               {hoveredFormat && (statsLoading ? (
+                 <span>Estimating {hoveredFormat.toUpperCase()}...</span>
+               ) : hoverStats && hoverStats.format === hoveredFormat ? (
+                 <>
+                   <div>
+                     Est. {hoveredFormat.toUpperCase()} ({hoverStats.quality.toUpperCase()}): {hoverStats.triangles.toLocaleString()} tris, {formatMb(hoverStats.estimatedMb)} MB, ~{formatSeconds(hoverStats.estimatedSeconds)}s
+                   </div>
+                   {selectedPlaneIndices.length > 1 && (!hoverStats.perPlane || hoverStats.perPlane.length === 0) && (
+                     <div className="text-[8px] text-slate-400">Loading selected-plane breakdown...</div>
+                   )}
+                   {hoverStats.perPlane && hoverStats.perPlane.length > 0 && (
+                     <div className="border-t border-white/10 pt-1 space-y-0.5">
+                       {hoverStats.perPlane.map((item) => (
+                         <div key={item.label} className="text-[8px] text-slate-200 flex items-center justify-between gap-2">
+                           <span className="truncate">{item.label}</span>
+                           <span className="shrink-0">{item.triangles.toLocaleString()} tris, {formatMb(item.estimatedMb)} MB, ~{formatSeconds(item.estimatedSeconds)}s</span>
+                         </div>
+                       ))}
+                     </div>
+                   )}
+                 </>
+               ) : (
+                 <span>Estimation unavailable for current selection.</span>
+               ))}
+             </div>
            </div>
 
-           {/* Quality section — only for STL */}
-           {format === 'stl' && (
+           {/* Quality section — for 3D exports */}
+           {has3DFormat && (
              <>
                <div className="px-2 pt-1 pb-0.5 text-[8px] font-black uppercase text-slate-500 tracking-wider">Quality</div>
                <div className="grid grid-cols-3 gap-1 bg-slate-900/60 p-1 rounded-md">
@@ -366,11 +597,90 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
 
            {/* Export action */}
            <button
-             onClick={() => { handleMainClick(); setIsOpen(false); }}
+             onClick={async () => { await handleMainClick(); setIsOpen(false); }}
              className={`mt-0.5 w-full py-2 text-[10px] font-black uppercase rounded-md text-white transition-all ${baseColor} hover:brightness-110`}
+             disabled={format === '3mf' && !onExport3MF}
            >
-             Export {format.toUpperCase()}{format === 'stl' ? ` (${t ? t(quality) : quality})` : ''}
+             {selectedPlaneIndices.length > 0 && has3DFormat
+               ? `Export Selected (${selectedPlaneIndices.length}) ${format.toUpperCase()}${has3DFormat ? ` (${t ? t(quality) : quality})` : ''}`
+               : `Export ${format.toUpperCase()}${has3DFormat ? ` (${t ? t(quality) : quality})` : ''}`}
            </button>
+
+           {hasPlaneActions && has3DFormat && (
+             <>
+               <div className="px-2 pt-1 pb-0.5 text-[8px] font-black uppercase text-slate-500 tracking-wider">Single Plane</div>
+               <div className="grid grid-cols-1 gap-1 bg-slate-900/60 p-1 rounded-md">
+                 {planeActions!.map((action, idx) => {
+                   const isPlaneActive = action.isActive !== false;
+                   const supportsFormat = format === 'stl' || Boolean(action.onExport3MF);
+                   const canExport = isPlaneActive && supportsFormat;
+                   const isSelected = selectedPlaneIndices.includes(idx);
+                   const disabledReason = !isPlaneActive
+                     ? 'Plane is not active. Enable it in the Planes tab to export.'
+                     : !supportsFormat
+                       ? `${format.toUpperCase()} export is unavailable for this plane.`
+                       : '';
+                   return (
+                     <div
+                       key={action.label}
+                       onMouseEnter={(e) => {
+                         if (!canExport && disabledReason) {
+                           const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+                           setDisabledPlaneTooltip({
+                             text: disabledReason,
+                             top: rect.top - 8,
+                             left: rect.left + (rect.width / 2),
+                           });
+                         }
+                       }}
+                       onMouseLeave={() => {
+                         setDisabledPlaneTooltip((prev) => (prev ? null : prev));
+                       }}
+                     >
+                       <button
+                         onClick={() => {
+                           togglePlaneSelection(idx);
+                         }}
+                         disabled={!canExport}
+                         className={`w-full py-1.5 text-[9px] font-black uppercase rounded transition-all text-left px-2 flex items-center justify-between ${canExport ? (isSelected ? 'bg-sky-600 text-white' : 'bg-slate-700/70 text-white hover:bg-slate-600') : 'bg-slate-800/70 text-slate-500 cursor-not-allowed'}`}
+                       >
+                         <span>{action.label}</span>
+                         <span className={`text-[8px] ${isSelected ? 'text-white' : 'text-slate-400'}`}>{isSelected ? 'Selected' : 'Select'}</span>
+                       </button>
+                     </div>
+                   );
+                 })}
+                 {selectedPlaneIndices.length > 0 && (
+                   <button
+                     onClick={() => setSelectedPlaneIndices([])}
+                     className="py-1.5 text-[9px] font-black uppercase rounded transition-all text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700"
+                   >
+                     Clear Selection
+                   </button>
+                 )}
+               </div>
+             </>
+           )}
+
+           {disabledPlaneTooltip && createPortal(
+             <div
+               className="fixed z-[10010] pointer-events-none"
+               style={{
+                 top: disabledPlaneTooltip.top,
+                 left: disabledPlaneTooltip.left,
+                 transform: 'translate(-50%, -100%)',
+               }}
+             >
+               <div className="max-w-[230px] rounded-md border border-amber-200/20 bg-slate-900/95 text-[9px] leading-relaxed text-amber-100 px-2 py-1.5 shadow-2xl">
+                 {disabledPlaneTooltip.text}
+               </div>
+               <div
+                 className="mx-auto h-0 w-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-slate-900"
+                 style={{ marginTop: '-1px' }}
+               />
+             </div>,
+             document.body
+           )}
         </div>,
         document.body
       )}
@@ -1072,7 +1382,13 @@ interface ControlPanelProps {
   aiLoading: boolean;
   aiProgress: number;
   onExportSTL: (quality?: DesignQuality) => void;
+  onExport3MF: (quality?: DesignQuality) => void;
   onExportLayerSTL: (layerIndex: number, quality?: DesignQuality) => void;
+  onExportLayer3MF: (layerIndex: number, quality?: DesignQuality) => void;
+  onExportSelectedLayersSTL?: (layerIndices: number[], quality?: DesignQuality) => void;
+  onExportSelectedLayers3MF?: (layerIndices: number[], quality?: DesignQuality) => void;
+  onEstimateExportStats?: (format: 'stl' | '3mf', quality: DesignQuality, layerIndices?: number[]) => Promise<{ triangles: number; estimatedMb: number; estimatedSeconds: number } | null>;
+  onPrecomputeExportStats?: (layerIndices?: number[]) => void;
   onExportAllLayersZip: (quality?: DesignQuality) => void;
   onExport2D?: (layerIndex: number, format: 'svg' | 'dxf') => void;
   exportLoading: boolean;
@@ -1096,7 +1412,7 @@ interface ControlPanelProps {
 }
 
 const ControlPanel: React.FC<ControlPanelProps> = ({
-  config, onUpdate, updateGroup, updateCharOffset, updateHubs, updateAbstracts, updateImages, onAiPolish, aiLoading, aiProgress, onExportSTL, onExportLayerSTL, onExportAllLayersZip, onExport2D, exportLoading, exportLoadingKey, onFetchFont, onFontUpload, dynamicFonts, /* SLOT-DISABLED: onAutoConfigureSlots, calculateOptimalSlots, */ setViewMode, undo, redo, canUndo, canRedo, shortcuts, onUpdateShortcuts, onResetShortcuts, onOpenShortcutsModal, onSaveAsDefault, onRestoreFactoryDefaults, activeTab, onTabChange
+  config, onUpdate, updateGroup, updateCharOffset, updateHubs, updateAbstracts, updateImages, onAiPolish, aiLoading, aiProgress, onExportSTL, onExport3MF, onExportLayerSTL, onExportLayer3MF, onExportSelectedLayersSTL, onExportSelectedLayers3MF, onEstimateExportStats, onPrecomputeExportStats, onExportAllLayersZip, onExport2D, exportLoading, exportLoadingKey, onFetchFont, onFontUpload, dynamicFonts, /* SLOT-DISABLED: onAutoConfigureSlots, calculateOptimalSlots, */ setViewMode, undo, redo, canUndo, canRedo, shortcuts, onUpdateShortcuts, onResetShortcuts, onOpenShortcutsModal, onSaveAsDefault, onRestoreFactoryDefaults, activeTab, onTabChange
 }) => {
   const { t } = useTranslation(config.language || 'en');
   const tabContentRef = useRef<HTMLDivElement>(null);
@@ -2505,7 +2821,11 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                 <ExportMenu
                                   label={t('Export')}
                                   onExportSTL={(q) => onExportLayerSTL(idx, q)}
+                                  onExport3MF={(q) => onExportLayer3MF(idx, q)}
                                   onExport2D={(format) => onExport2D?.(idx, format)}
+                                  onEstimateExportStats={onEstimateExportStats}
+                                  onPrecomputeExportStats={onPrecomputeExportStats}
+                                  defaultEstimateLayerIndices={[idx]}
                                   isLoading={Boolean(exportLoading && exportLoadingKey === `layer-${idx}`)}
                                   t={t}
                                   disabled={!layer.enabled}
@@ -2520,8 +2840,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                          </div>
                          {layer.enabled && (
                             <div className="mt-2 space-y-3 pt-2 border-t border-white/5">
-                               {renderSlider(t('Rot X'), layer.rotation3D.x, -180, 180, 1, (v, c) => handleLayerUpdate(idx, { rotation3D: { ...layer.rotation3D, x: v } }, c), "°")}
-                               {renderSlider(t('Rot Y'), layer.rotation3D.y, -180, 180, 1, (v, c) => handleLayerUpdate(idx, { rotation3D: { ...layer.rotation3D, y: v } }, c), "°")}
+                               {renderSlider(t('Rot X'), layer.rotation3D.x, -180, 180, 1, (v, c) => handleLayerUpdate(idx, { rotation3D: { ...layer.rotation3D, x: v } }, c), "°", false, 0)}
+                               {renderSlider(t('Rot Y'), layer.rotation3D.y, -180, 180, 1, (v, c) => handleLayerUpdate(idx, { rotation3D: { ...layer.rotation3D, y: v } }, c), "°", false, 0)}
                                {config.slotEnabled && (
                                    <>
                                        <div className="w-full h-px bg-white/5 my-1"></div>
@@ -2561,13 +2881,25 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
               <ExportMenu
                 label="Export"
                 onExportSTL={onExportSTL}
+                onExport3MF={onExport3MF}
+                onExportSelectedPlanesSTL={(layerIndices, quality) => onExportSelectedLayersSTL?.(layerIndices, quality)}
+                onExportSelectedPlanes3MF={(layerIndices, quality) => onExportSelectedLayers3MF?.(layerIndices, quality)}
                 onExport2D={(fmt) => onExport2D?.(config.activeLayerIndex, fmt)}
-                isLoading={Boolean(exportLoading && exportLoadingKey === 'combined-stl')}
+                onEstimateExportStats={onEstimateExportStats}
+                onPrecomputeExportStats={onPrecomputeExportStats}
+                isLoading={Boolean(exportLoading && (exportLoadingKey === 'combined-stl' || exportLoadingKey === 'combined-3mf' || exportLoadingKey === 'layers-batch-stl' || exportLoadingKey === 'layers-batch-3mf' || exportLoadingKey?.startsWith('layer-')))}
                 t={t}
                 className="w-full h-8"
                 baseColor="bg-sky-600"
                 show2D={true}
                 shortcut={shortcuts?.exportCombinedSTL}
+                planeActions={config.layers.slice(0, 3).map((layer, idx) => ({
+                  label: `${layer.name || `Plane ${idx + 1}`}`,
+                  onExportSTL: (q) => onExportLayerSTL(idx, q),
+                  onExport3MF: (q) => onExportLayer3MF(idx, q),
+                  layerIndex: idx,
+                  isActive: layer.enabled,
+                }))}
               />
             </div>
         </div>

@@ -1,0 +1,52 @@
+{
+  "startedAt": "2026-04-22T17:39:01.396Z",
+  "runsPerBucket": 15,
+  "totalRuns": 90,
+  "succeeded": 90,
+  "failed": 0,
+  "failures": [],
+  "calibration": {
+    "stl::low": {
+      "trianglesFactor": 6.3006870994354465,
+      "bytesFactor": 6.300521787155154,
+      "secondsFactor": 7.9187558505876865,
+      "samples": 15,
+      "lastUpdatedAt": 1776876425326
+    },
+    "stl::med": {
+      "trianglesFactor": 7.9187558505876865,
+      "bytesFactor": 7.9187558505876865,
+      "secondsFactor": 7.9187558505876865,
+      "samples": 15,
+      "lastUpdatedAt": 1776876870732
+    },
+    "stl::high": {
+      "trianglesFactor": 7.9187558505876865,
+      "bytesFactor": 7.9187558505876865,
+      "secondsFactor": 7.9187558505876865,
+      "samples": 15,
+      "lastUpdatedAt": 1776877548368
+    },
+    "3mf::low": {
+      "trianglesFactor": 6.300980679903767,
+      "bytesFactor": 4.227021066840173,
+      "secondsFactor": 7.9187558505876865,
+      "samples": 15,
+      "lastUpdatedAt": 1776877994437
+    },
+    "3mf::med": {
+      "trianglesFactor": 7.9187558505876865,
+      "bytesFactor": 4.8334045258831555,
+      "secondsFactor": 7.9187558505876865,
+      "samples": 15,
+      "lastUpdatedAt": 1776878840729
+    },
+    "3mf::high": {
+      "trianglesFactor": 7.9187558505876865,
+      "bytesFactor": 5.211621125482837,
+      "secondsFactor": 7.9187558505876865,
+      "samples": 15,
+      "lastUpdatedAt": 1776879540906
+    }
+  }
+}

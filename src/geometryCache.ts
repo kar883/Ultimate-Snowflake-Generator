@@ -73,7 +73,11 @@ export function makeTextKey(
 ): string {
   const underline = textGroup.underline;
   const underlineStr = underline ? `${underline.enabled}_${underline.thickness}_${underline.startXOffset}_${underline.length}_${underline.yOffset}_${underline.capType}_${underline.capWidth}` : 'none';
-  return `${layerId}::text::${textGroup.text}::${textGroup.fontFamily}::${fontSize}::${extrusionDepth}::${bevelEnabled}::${bevelAmount}::${bevelType || 'none'}::${bevelSegments ?? 0}::${curveSegments ?? 0}::${textGroup.arms}::${textGroup.mirrorEnabled}::${textGroup.mirrorOffset}::${textGroup.textX}::${textGroup.letterSpacing}::${underlineStr}::${globalStrokeWeight}::${textStrokeWeight}`;
+  const charOffsets = Array.isArray(textGroup.charOffsets) ? textGroup.charOffsets : [];
+  const charOffsetsStr = charOffsets
+    .map((offset: { x?: number; y?: number }) => `${offset?.x ?? 0},${offset?.y ?? 0}`)
+    .join('|');
+  return `${layerId}::text::${textGroup.text}::${textGroup.fontFamily}::${fontSize}::${extrusionDepth}::${bevelEnabled}::${bevelAmount}::${bevelType || 'none'}::${bevelSegments ?? 0}::${curveSegments ?? 0}::${textGroup.arms}::${textGroup.mirrorEnabled}::${textGroup.mirrorOffset}::${textGroup.textX}::${textGroup.letterSpacing}::${charOffsetsStr}::${underlineStr}::${globalStrokeWeight}::${textStrokeWeight}`;
 }
 
 // Helper to generate cache key for underline geometries

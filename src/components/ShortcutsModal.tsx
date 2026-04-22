@@ -287,6 +287,9 @@ interface ShortcutsModalProps {
   onTooltipsChange?: (show: boolean) => void;
   onSaveAsDefault?: () => void;
   onRestoreFactoryDefaults?: () => void;
+  onResetEstimateCalibration?: () => void;
+  estimateCalibrationReadout?: Array<{ bucket: string; samples: number; lastUpdatedAt: number | null }>;
+  estimateCalibrationLastUpdatedLabel?: string | null;
   activeTab?: 'shortcuts' | 'apikey' | 'aiscope' | 'settings';
   message?: string | null;
 }
@@ -323,7 +326,7 @@ const translateShortcutAction = (action: keyof ShortcutConfig, t: (key: string) 
 const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
   isOpen, onClose, config, onSave, onReset,
   language = 'en', onLanguageChange, showTooltips, onTooltipsChange,
-  onSaveAsDefault, onRestoreFactoryDefaults,
+  onSaveAsDefault, onRestoreFactoryDefaults, onResetEstimateCalibration, estimateCalibrationReadout, estimateCalibrationLastUpdatedLabel,
   activeTab: initialTab = 'shortcuts', message
 }) => {
   const { t } = useTranslation(language);
@@ -1010,6 +1013,37 @@ const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
                   className="w-full h-9 rounded-lg bg-rose-600/20 text-rose-200 border border-rose-500/40 text-xs font-black uppercase tracking-wider hover:bg-rose-500 hover:text-white transition-all"
                 >
                   {t('restoreFactoryDefaults')}
+                </button>
+              </div>
+
+              <div className="p-3 bg-amber-900/20 rounded-xl border border-amber-500/20 space-y-3">
+                <div className="text-[10px] font-black uppercase tracking-wider text-amber-300">Estimate Learning</div>
+                <p className="text-[11px] text-amber-100/80 leading-relaxed">
+                  Clears adaptive export estimate calibration for size, triangles, and time. The app will relearn from your next exports.
+                </p>
+                <div className="rounded-lg border border-amber-500/25 bg-black/20 p-2">
+                  <div className="text-[9px] font-black uppercase tracking-wider text-amber-200/90 mb-1">Current Sample Counts</div>
+                  <div className="text-[9px] text-amber-100/75 mb-2">
+                    Last updated: {estimateCalibrationLastUpdatedLabel || 'Never'}
+                  </div>
+                  {(estimateCalibrationReadout && estimateCalibrationReadout.length > 0) ? (
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                      {estimateCalibrationReadout.map((entry) => (
+                        <div key={entry.bucket} className="flex items-center justify-between text-[10px]">
+                          <span className="text-amber-100/85">{entry.bucket}</span>
+                          <span className="text-amber-300 font-bold">{entry.samples}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-[10px] text-amber-100/70">No calibration samples yet.</div>
+                  )}
+                </div>
+                <button
+                  onClick={() => onResetEstimateCalibration?.()}
+                  className="w-full h-9 rounded-lg bg-amber-600/20 text-amber-100 border border-amber-500/40 text-xs font-black uppercase tracking-wider hover:bg-amber-500 hover:text-white transition-all"
+                >
+                  Reset Estimate Learning
                 </button>
               </div>
             </div>
