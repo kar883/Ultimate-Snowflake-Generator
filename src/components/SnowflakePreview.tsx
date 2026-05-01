@@ -41,6 +41,9 @@ interface SnowflakePreviewProps {
   calculatedDiameter?: number;
   shortcuts?: ShortcutConfig;
   fontsPreloaded?: boolean;
+  activeLayerId?: string;
+  syncAllLayers?: boolean;
+  highlightActivePlaneOnly?: boolean;
 }
 
 const seededRandom = (seed: number) => {
@@ -52,7 +55,7 @@ const seededRandom = (seed: number) => {
 };
 
 const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
-  config, globalColor, globalBevel, globalBevelAmount, slotEnabled, slotLength, slotWidth, svgRef, dynamicFonts, undo, redo, canUndo, canRedo, calculatedDiameter, shortcuts, fontsPreloaded
+  config, globalColor, globalBevel, globalBevelAmount, slotEnabled, slotLength, slotWidth, svgRef, dynamicFonts, undo, redo, canUndo, canRedo, calculatedDiameter, shortcuts, fontsPreloaded, activeLayerId, syncAllLayers = true, highlightActivePlaneOnly = false
 }) => {
   const { t } = useTranslation(config.language || 'en');
   // Use a ref for the font cache so loading a font never triggers an infinite
@@ -808,38 +811,67 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
           transform={`translate(${centerX + viewTransform.x}, ${centerY + viewTransform.y}) scale(${viewTransform.scale})`}
           style={{ opacity: layersVisible ? 1 : 0, transition: layersVisible ? 'opacity 0.2s ease' : 'none' }}
         >
-          {enabledLayers.map((layer, index) => {
-            const offsetX = (index - (enabledLayers.length - 1) / 2) * layerSpacing;
-            const layerColor = globalColor;
-            const zRotation = (slotEnabled && index === 0) ? 180 : 0;
-            return (
-              <g key={layer.id} transform={`translate(${offsetX}, 0)`}>
-                <circle cx="0" cy="0" r="95" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="1" strokeDasharray="5,5" className="group"><title>Reference Radius (95mm)&#10;This dotted line shows the standard size for a snowflake arm.</title></circle>
-                <text
-                  x="0"
-                  y="-118"
-                  textAnchor="middle"
-                  fill="#cbd5e1"
-                  fontSize="13"
-                  fontWeight="700"
-                  style={{ textTransform: 'uppercase', letterSpacing: '0.08em' }}
-                >
-                  {layer.name}
-                </text>
+          {(() => {
+            const shouldEmphasizeActiveLayer = highlightActivePlaneOnly && !syncAllLayers && enabledLayers.length > 1;
+            return enabledLayers.map((layer, index) => {
+              const offsetX = (index - (enabledLayers.length - 1) / 2) * layerSpacing;
+              const layerColor = globalColor;
+              const zRotation = (slotEnabled && index === 0) ? 180 : 0;
+              const isActiveLayer = !!activeLayerId && layer.id === activeLayerId;
+              const layerOpacity = shouldEmphasizeActiveLayer ? (isActiveLayer ? 1.0 : 0.32) : 1.0;
+              const layerLabelOpacity = shouldEmphasizeActiveLayer ? (isActiveLayer ? 1.0 : 0.55) : 1.0;
+              const emphasisFilter = shouldEmphasizeActiveLayer
+                ? (isActiveLayer ? 'drop-shadow(0 0 10px rgba(14,165,233,0.65))' : 'grayscale(0.45) brightness(0.72)')
+                : 'none';
+              return (
                 <g
-                  transform={`scale(1, -1) rotate(${zRotation})`}
+                  key={layer.id}
+                  transform={`translate(${offsetX}, 0)`}
+                  style={{
+                    opacity: layerOpacity,
+                    filter: emphasisFilter,
+                    transition: 'opacity 140ms ease, filter 140ms ease',
+                  }}
                 >
-                  <circle cx="0" cy="0" r="2" fill="#ef4444" />
-                  {renderHubs(layer.hubs, layerColor)}
-                  {renderImages(layer.images || [], layerColor)}
-                  {renderAbstracts(layer.abstracts, layerColor)}
-                  {renderTextGroup(layer.primary, layerColor)}
-                  {layer.secondaryEnabled && renderTextGroup(layer.secondary, layerColor)}
-                  {renderSlotPreview(layer, index, enabledLayers, slotLength, slotWidth)}
+                  {shouldEmphasizeActiveLayer && isActiveLayer && (
+                    <circle
+                      cx="0"
+                      cy="0"
+                      r="101"
+                      fill="none"
+                      stroke="rgba(14,165,233,0.8)"
+                      strokeWidth="1.5"
+                      strokeDasharray="6,4"
+                    />
+                  )}
+                  <circle cx="0" cy="0" r="95" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="1" strokeDasharray="5,5" className="group"><title>Reference Radius (95mm)&#10;This dotted line shows the standard size for a snowflake arm.</title></circle>
+                  <text
+                    x="0"
+                    y="-118"
+                    textAnchor="middle"
+                    fill="#cbd5e1"
+                    fontSize="13"
+                    fontWeight="700"
+                    opacity={layerLabelOpacity}
+                    style={{ textTransform: 'uppercase', letterSpacing: '0.08em' }}
+                  >
+                    {layer.name}
+                  </text>
+                  <g
+                    transform={`scale(1, -1) rotate(${zRotation})`}
+                  >
+                    <circle cx="0" cy="0" r="2" fill="#ef4444" />
+                    {renderHubs(layer.hubs, layerColor)}
+                    {renderImages(layer.images || [], layerColor)}
+                    {renderAbstracts(layer.abstracts, layerColor)}
+                    {renderTextGroup(layer.primary, layerColor)}
+                    {layer.secondaryEnabled && renderTextGroup(layer.secondary, layerColor)}
+                    {renderSlotPreview(layer, index, enabledLayers, slotLength, slotWidth)}
+                  </g>
                 </g>
-              </g>
-            );
-          })}
+              );
+            });
+          })()}
         </g>
       </svg>
       {!layersVisible && (

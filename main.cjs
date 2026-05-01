@@ -135,7 +135,7 @@ function showAbout() {
     type: 'info',
     title: 'About Ultimate Snowflake Generator',
     message: 'Ultimate Snowflake Generator',
-    detail: 'Version 1.0.6\nCreated by Kyle Russell\n\nA beautiful 3D snowflake design generator for art and 3D printing.\n\nVisit the GitHub repository for more information and to report issues.',
+    detail: 'Version 1.0.7\nCreated by Kyle Russell\n\nA beautiful 3D snowflake design generator for art and 3D printing.\n\nVisit the GitHub repository for more information and to report issues.',
     buttons: ['GitHub Repository', 'OK'],
     defaultId: 1,
     cancelId: 1
@@ -259,6 +259,7 @@ const template = [
       { type: 'separator' },
       {
         label: 'Reset Zoom',
+        accelerator: 'CmdOrCtrl+0',
         click: () => {
           mainWindow.webContents.send('menu-reset-zoom');
         }
@@ -272,13 +273,14 @@ const template = [
       {
         label: 'About Ultimate Snowflake Generator',
         click: () => {
-          showAbout();
+          mainWindow.webContents.send('menu-about');
         }
       },
       {
         label: 'Check for Updates',
+        accelerator: 'CmdOrCtrl+U',
         click: () => {
-          checkAndPromptForUpdates(true);
+          mainWindow.webContents.send('menu-check-for-updates');
         }
       },
       {

@@ -3,11 +3,11 @@
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
 
 ## Download
-- Windows Installer: [Snowflake.Generator.Setup.1.0.6.exe](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.6/Snowflake.Generator.Setup.1.0.6.exe)
-- Windows ZIP: [Snowflake.Generator-1.0.6-win.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.6/Snowflake.Generator-1.0.6-win.zip)
-- macOS DMG: [Snowflake.Generator-1.0.6-arm64.dmg](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.6/Snowflake.Generator-1.0.6-arm64.dmg)
-- macOS ZIP: [Snowflake.Generator-1.0.6-arm64-mac.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.6/Snowflake.Generator-1.0.6-arm64-mac.zip)
-- Linux AppImage: [Snowflake.Generator-1.0.6.AppImage](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.6/Snowflake.Generator-1.0.6.AppImage)
+- Windows Installer: [Snowflake.Generator.Setup.1.0.7.exe](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.7/Snowflake.Generator.Setup.1.0.7.exe)
+- Windows ZIP: [Snowflake.Generator-1.0.7-win.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.7/Snowflake.Generator-1.0.7-win.zip)
+- macOS DMG: [Snowflake.Generator-1.0.7-arm64.dmg](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.7/Snowflake.Generator-1.0.7-arm64.dmg)
+- macOS ZIP: [Snowflake.Generator-1.0.7-arm64-mac.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.7/Snowflake.Generator-1.0.7-arm64-mac.zip)
+- Linux AppImage: [Snowflake.Generator-1.0.7.AppImage](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.7/Snowflake.Generator-1.0.7.AppImage)
 - All release assets: [GitHub Releases](https://github.com/kar883/Ultimate-Snowflake-Generator/releases)
 
 Design complex 2D and 3D snowflakes from text, hubs, abstracts, and multi-plane controls, then export for 3D printing or vector workflows.
@@ -40,8 +40,13 @@ Design complex 2D and 3D snowflakes from text, hubs, abstracts, and multi-plane 
 
 ## Tips
 - Start with simple text and 1 plane to get familiar, then explore more complex features.
-- turn off "autoregenerate" for faster editing, then click "Regenerate" when ready to see updates.
+- Do most of your modeling in the 2D view to keep things fast and turn off "auto regenerate 3D" for faster editing. When you are ready to see the 3D model, turn auto regenerate back on and toggle the 3D preview to see your changes in real time.
 - Use the 3D previews "ID Bodies" to check for free floating/disconnected bodies before exporting for 3d printing.
+
+## Plane Sync Modes
+- Sync All Planes ON (synchronous mode): text, hub, abstract, and image pattern changes are applied to all enabled planes together.
+- Sync All Planes OFF (asynchronous mode): each plane keeps its own independent text/pattern settings, and only the active plane is edited when you change controls.
+- In asynchronous mode, the active plane is visually emphasized in 2D and 3D previews so you can quickly see which plane you are editing.
 
 ## License
 

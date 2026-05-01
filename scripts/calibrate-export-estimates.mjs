@@ -2,7 +2,8 @@ import { chromium } from '@playwright/test';
 import fs from 'node:fs';
 
 const BASE_URL = process.env.CALIBRATION_URL || 'http://localhost:5173/';
-const RUNS_PER_BUCKET = Number(process.env.CALIBRATION_RUNS || '15');
+const RUNS_PER_BUCKET = Number(process.env.CALIBRATION_RUNS || '5');
+const CALIBRATION_PRESET = String(process.env.CALIBRATION_PRESET || '').trim().toLowerCase();
 const FORMATS = ['stl', '3mf'];
 const QUALITIES = ['low', 'med', 'high'];
 const SUMMARY_PATH = 'calibration-summary.json';
@@ -32,11 +33,80 @@ async function openExportMenu(page) {
 }
 
 async function setFormat(page, format) {
-  await page.getByRole('button', { name: new RegExp(`^${format}$`, 'i') }).first().click({ timeout: 10000 });
+  const btn = page.getByRole('button', { name: new RegExp(`^${format}$`, 'i') }).first();
+  try {
+    await btn.click({ timeout: 10000 });
+  } catch {
+    await btn.scrollIntoViewIfNeeded().catch(() => {});
+    await btn.dispatchEvent('click').catch(async () => {
+      await btn.evaluate((el) => el.click());
+    });
+  }
 }
 
 async function setQuality(page, quality) {
-  await page.getByRole('button', { name: new RegExp(`^${quality}$`, 'i') }).first().click({ timeout: 10000 });
+  const btn = page.getByRole('button', { name: new RegExp(`^${quality}$`, 'i') }).first();
+  try {
+    await btn.click({ timeout: 10000 });
+  } catch {
+    await btn.scrollIntoViewIfNeeded().catch(() => {});
+    await btn.dispatchEvent('click').catch(async () => {
+      await btn.evaluate((el) => el.click());
+    });
+  }
+}
+
+async function setRangeByLabel(page, label, value) {
+  const slider = page
+    .locator(`text=${label}`)
+    .locator('xpath=ancestor::div[1]//input[@type="range"]')
+    .first();
+
+  const visible = await slider.isVisible({ timeout: 3000 }).catch(() => false);
+  if (!visible) return false;
+
+  await slider.evaluate((el, nextValue) => {
+    const input = el;
+    input.value = String(nextValue);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }, value);
+  return true;
+}
+
+async function configureSlotHeavy3PlanePreset(page) {
+  await page.getByRole('button', { name: /^global$/i }).first().click({ timeout: 10000 });
+
+  const cutSlotsBtn = page.locator('button').filter({ hasText: /cut slots/i }).first();
+  await cutSlotsBtn.waitFor({ timeout: 10000 });
+  await cutSlotsBtn.click({ timeout: 10000, noWaitAfter: true }).catch(async () => {
+    await cutSlotsBtn.dispatchEvent('click');
+  });
+
+  const threePlaneBtn = page.getByRole('button', { name: /3-plane/i }).first();
+  if (await threePlaneBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await threePlaneBtn.click({ timeout: 5000 });
+  }
+
+  await setRangeByLabel(page, 'Slot Length', 108);
+  await setRangeByLabel(page, 'Slot Width', 0.9);
+
+  await page.getByRole('button', { name: /^planes$/i }).first().click({ timeout: 10000 });
+
+  // Ensure all three default planes are enabled.
+  const visibilityToggles = page.locator('label:has(input[type="checkbox"]) input[type="checkbox"]');
+  const togglesToEnable = Math.min(3, await visibilityToggles.count());
+  for (let i = 0; i < togglesToEnable; i++) {
+    await visibilityToggles.nth(i).evaluate((el) => {
+      const input = el;
+      if (!input.checked) {
+        input.checked = true;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+  }
+
+  await page.waitForTimeout(800);
 }
 
 async function runSingleExport(page, format, quality, iteration) {
@@ -52,7 +122,10 @@ async function runSingleExport(page, format, quality, iteration) {
 
       const downloadPromise = page.waitForEvent('download', { timeout: 120000 }).catch(() => null);
       const exportAction = page.getByRole('button', { name: new RegExp(`^Export\\s+${format.toUpperCase()}`, 'i') }).last();
-      await exportAction.click({ timeout: 120000, noWaitAfter: true });
+      await exportAction.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
+      await exportAction.click({ timeout: 5000, noWaitAfter: true }).catch(async () => {
+        await exportAction.evaluate((el) => el.click());
+      });
 
       const download = await downloadPromise;
       if (download) {
@@ -79,7 +152,7 @@ async function runSingleExport(page, format, quality, iteration) {
 
 async function readCalibration(page) {
   return page.evaluate(() => {
-    const raw = window.localStorage.getItem('snowflake.exportEstimateCalibration.v1');
+    const raw = window.localStorage.getItem('snowflake.exportEstimateCalibration.v2');
     if (!raw) return null;
     try {
       return JSON.parse(raw);
@@ -101,6 +174,11 @@ async function main() {
   try {
     await ensureAppReady(page);
 
+    if (CALIBRATION_PRESET === 'slot-heavy-3-plane') {
+      console.log('Applying preset: slot-heavy-3-plane');
+      await configureSlotHeavy3PlanePreset(page);
+    }
+
     const results = [];
     for (const format of FORMATS) {
       for (const quality of QUALITIES) {
@@ -121,6 +199,7 @@ async function main() {
     const calibration = await readCalibration(page);
     const summary = {
       startedAt: new Date().toISOString(),
+      preset: CALIBRATION_PRESET || null,
       runsPerBucket: RUNS_PER_BUCKET,
       totalRuns: results.length,
       succeeded: results.filter((r) => r.ok).length,

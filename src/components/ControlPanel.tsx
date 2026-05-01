@@ -111,6 +111,7 @@ const DESCRIPTIONS: Record<string, string> = {
   "Rot X": "3D rotation around the X-axis for this specific plane.",
   "Rot Y": "3D rotation around the Y-axis for this specific plane.",
   "Sync All Planes": "Applies Text and Design changes to all planes simultaneously.",
+  "Highlight Active Plane Only": "When enabled, the active plane is emphasized while other enabled planes are visually dimmed in 2D and 3D previews.",
   "AI Randomizer": "Only works while online. Generates a random base plane design optimized for 3D printing, 2D aesthetics, or purely traditional fractal geometry.",
   "Export STL": "Export the current 3D design as a combined single mesh body. Ideal for 3D printing.",
   "Export All Planes": "Export each plane individually and package them into a single ZIP file.",
@@ -2777,6 +2778,13 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                         </div>
                         <Toggle label={config.syncAllLayers ? t('ON') : t('OFF')} checked={config.syncAllLayers} onChange={(c) => onUpdate({ syncAllLayers: c })} />
                     </div>
+                      <div className="flex justify-between items-center">
+                        <div className="flex items-center">
+                          <InfoTooltip label={t('Highlight Active Plane Only')} description={getDescription('Highlight Active Plane Only', t)} />
+                          {config.highlightActivePlaneOnly && <button onClick={() => onUpdate({ highlightActivePlaneOnly: false })} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
+                        </div>
+                        <Toggle label={config.highlightActivePlaneOnly ? t('ON') : t('OFF')} checked={config.highlightActivePlaneOnly} onChange={(c) => onUpdate({ highlightActivePlaneOnly: c })} />
+                      </div>
                 </div>
 
                 <div className="space-y-2">

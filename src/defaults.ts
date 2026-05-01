@@ -96,6 +96,7 @@ export const createDefaultGlobalConfig = (): Omit<SnowflakeConfig, 'projectName'
   slotMode: '3-plane',
   quality: 'low',
   syncAllLayers: true, // Default ON
+  highlightActivePlaneOnly: false, // Default OFF
   globalStrokeWeight: 0,
   freeFloatingCheck: true
 });

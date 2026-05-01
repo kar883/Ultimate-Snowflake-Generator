@@ -12,9 +12,9 @@
  * simple, reliable test that requires no BVH, no raycasting, no AABB
  * fraction counting.
  *
- * Filling: once a qualifying loop is found, we fan-triangulate it from
- * its centroid. This is correct because the loop is planar (all verts on
- * the same plane) so a fan from the centroid always produces valid triangles.
+ * Filling: once a qualifying loop is found, we triangulate it in the
+ * cutter-plane basis using THREE.ShapeUtils. This handles concave and tiny
+ * distal loops more reliably than centroid-fan triangulation.
  *
  * Dependencies: three only (no three-mesh-bvh needed)
  */
@@ -29,9 +29,6 @@ import * as THREE from 'three';
  * decrease if font loops are accidentally filled.
  */
 const PLANE_TOL = 0.18; // world units
-const MICRO_LOOP_MAX_VERTS = 20;
-const MICRO_LOOP_MAX_PERIMETER = 4.0;
-
 // public API
 
 /**
@@ -77,10 +74,12 @@ export function fillSlotHoles(
   }
 
   const boundaryAdj = new Map<number, number[]>();
+  const boundaryEdges: Array<[number, number]> = [];
   let totalBoundary = 0;
   for (const { v0, v1, count } of edgeValence.values()) {
     if (count === 1) {
       totalBoundary++;
+      boundaryEdges.push([v0, v1]);
       if (!boundaryAdj.has(v0)) boundaryAdj.set(v0, []);
       if (!boundaryAdj.has(v1)) boundaryAdj.set(v1, []);
       boundaryAdj.get(v0)!.push(v1);
@@ -93,29 +92,57 @@ export function fillSlotHoles(
 
   // 2. Walk into loops
 
-  const visited = new Set<number>();
+  const usedBoundaryEdges = new Set<string>();
   const allLoops: number[][] = [];
 
-  for (const startV of boundaryAdj.keys()) {
-    if (visited.has(startV)) continue;
-    const loop = [startV];
-    visited.add(startV);
-    let cur = startV, prev = -1;
+  const edgeKey = (a: number, b: number) => (a < b ? `${a}_${b}` : `${b}_${a}`);
+
+  for (const [seedA, seedB] of boundaryEdges) {
+    const seedKey = edgeKey(seedA, seedB);
+    if (usedBoundaryEdges.has(seedKey)) continue;
+
+    const loop: number[] = [seedA, seedB];
+    usedBoundaryEdges.add(seedKey);
+
+    let prev = seedA;
+    let cur = seedB;
 
     for (let safety = 0; safety < 200000; safety++) {
       const nbrs = boundaryAdj.get(cur) ?? [];
       let next = -1;
+
       for (const n of nbrs) {
-        if (n !== prev && !visited.has(n)) { next = n; break; }
+        if (n === prev) continue;
+        const candidateKey = edgeKey(cur, n);
+        if (usedBoundaryEdges.has(candidateKey)) continue;
+        next = n;
+        break;
       }
-      if (next === -1) break;
-      visited.add(next);
+
+      if (next === -1) {
+        // If we can close back to start using an unused edge, do it.
+        const closeKey = edgeKey(cur, seedA);
+        const canClose = (boundaryAdj.get(cur) ?? []).includes(seedA) && !usedBoundaryEdges.has(closeKey);
+        if (canClose) {
+          usedBoundaryEdges.add(closeKey);
+        }
+        break;
+      }
+
+      const nextKey = edgeKey(cur, next);
+      usedBoundaryEdges.add(nextKey);
       loop.push(next);
       prev = cur;
       cur = next;
+
+      if (cur === seedA) break;
     }
 
-    if (loop.length >= 3) allLoops.push(loop);
+    if (loop.length >= 3) {
+      // Drop repeated closing vertex if present.
+      if (loop[loop.length - 1] === loop[0]) loop.pop();
+      allLoops.push(loop);
+    }
   }
 
   console.log(`  ${allLoops.length} boundary loop(s) detected`);
@@ -125,8 +152,6 @@ export function fillSlotHoles(
   const slotLoops: Array<{ loop: number[]; plane: THREE.Plane }> = [];
 
   for (const loop of allLoops) {
-    if (isMicroLoop(loop, posAttr)) continue;
-
     const pts = loop.map(vi => new THREE.Vector3(
       posAttr.getX(vi), posAttr.getY(vi), posAttr.getZ(vi)
     ));
@@ -158,18 +183,18 @@ export function fillSlotHoles(
     for (const info of cutterInfos) {
       if (!info.expandedBox.containsPoint(centroid)) continue;
       const insideRatio = pts.filter((p) => info.expandedBox.containsPoint(p)).length / pts.length;
-      if (insideRatio < 0.75) continue;
+      if (insideRatio < 0.65) continue;
 
       for (const plane of info.planes) {
         let within = 0;
         let maxAbs = 0;
         for (const p of pts) {
           const distance = Math.abs(plane.distanceToPoint(p));
-          if (distance <= (PLANE_TOL * 1.35)) within++;
+          if (distance <= (PLANE_TOL * 2.2)) within++;
           if (distance > maxAbs) maxAbs = distance;
         }
         const ratio = within / pts.length;
-        if (ratio >= 0.85 && maxAbs <= (PLANE_TOL * 3.0)) {
+        if (ratio >= 0.6 && maxAbs <= (PLANE_TOL * 6.0)) {
           recoveredPlane = plane;
           break;
         }
@@ -181,6 +206,42 @@ export function fillSlotHoles(
     if (recoveredPlane) {
       slotLoops.push({ loop, plane: recoveredPlane });
       console.log(`  Loop (${loop.length} verts) recovered inside cutter footprint -> SLOT HOLE`);
+      continue;
+    }
+
+    // Final rescue for noisy loops near slot origins/tips.
+    // These can appear where multiple cutter passes meet and produce
+    // jagged boundaries that fail stricter plane checks.
+    {
+      let rescuedTinyPlane: THREE.Plane | null = null;
+      for (const info of cutterInfos) {
+        if (!info.expandedBox.containsPoint(centroid)) continue;
+
+        const insideRatio = pts.filter((p) => info.expandedBox.containsPoint(p)).length / pts.length;
+        if (insideRatio < 0.55) continue;
+
+        for (const plane of info.planes) {
+          let within = 0;
+          let maxAbs = 0;
+          for (const p of pts) {
+            const distance = Math.abs(plane.distanceToPoint(p));
+            if (distance <= (PLANE_TOL * 3.2)) within++;
+            if (distance > maxAbs) maxAbs = distance;
+          }
+          const ratio = within / pts.length;
+          if (ratio >= 0.5 && maxAbs <= (PLANE_TOL * 8.0)) {
+            rescuedTinyPlane = plane;
+            break;
+          }
+        }
+
+        if (rescuedTinyPlane) break;
+      }
+
+      if (rescuedTinyPlane) {
+        slotLoops.push({ loop, plane: rescuedTinyPlane });
+        console.log(`  Loop (${loop.length} verts) noisy-loop rescue near cutter footprint -> SLOT HOLE`);
+      }
     }
   }
 
@@ -191,81 +252,78 @@ export function fillSlotHoles(
     return geometry;
   }
 
-  // 4. Fan-triangulate each planar slot loop from its centroid
+  // 4. Triangulate each planar slot loop in a stable 2D basis
 
-  const fillIndices: number[] = [];
+  const resolvedIndices: number[] = [];
 
   for (const entry of slotLoops) {
     const { loop, plane } = entry;
-    const pts = loop.map(vi => new THREE.Vector3(
+    const pts3 = loop.map(vi => new THREE.Vector3(
       posAttr.getX(vi), posAttr.getY(vi), posAttr.getZ(vi)
     ));
 
-    // Compute centroid
-    const centroid = new THREE.Vector3();
-    pts.forEach(p => centroid.add(p));
-    centroid.divideScalar(pts.length);
+    // Build a stable local 2D basis from the matched cutter plane normal.
+    const n = plane.normal.clone().normalize();
+    const tangentSeed = Math.abs(n.z) < 0.9
+      ? new THREE.Vector3(0, 0, 1)
+      : new THREE.Vector3(1, 0, 0);
+    const u = tangentSeed.clone().cross(n).normalize();
+    const v = n.clone().cross(u).normalize();
+    const origin = pts3[0];
 
-    // Determine correct winding based on matched cutter plane normal
-    const p0 = pts[0], p1 = pts[1];
-    const fanNormal = new THREE.Vector3()
-      .crossVectors(p0.clone().sub(centroid), p1.clone().sub(centroid))
-      .normalize();
-
-    const planeNormal = plane.normal.clone();
-    const needsFlip = fanNormal.dot(planeNormal) < 0;
-
+    // Remove consecutive duplicate points before triangulation.
+    const cleanLoopIndices: number[] = [];
+    const cleanPts2: THREE.Vector2[] = [];
+    let prev2: THREE.Vector2 | null = null;
     for (let i = 0; i < loop.length; i++) {
-      const ia = loop[i];
-      const ib = loop[(i + 1) % loop.length];
-      if (needsFlip) {
-        fillIndices.push(-1, ib, ia);
-      } else {
-        fillIndices.push(-1, ia, ib);
+      const p = pts3[i];
+      const rel = p.clone().sub(origin);
+      const p2 = new THREE.Vector2(rel.dot(u), rel.dot(v));
+      if (!prev2 || p2.distanceToSquared(prev2) > 1e-10) {
+        cleanLoopIndices.push(loop[i]);
+        cleanPts2.push(p2);
+        prev2 = p2;
+      }
+    }
+    if (cleanPts2.length >= 2) {
+      const first = cleanPts2[0];
+      const last = cleanPts2[cleanPts2.length - 1];
+      if (first.distanceToSquared(last) <= 1e-10) {
+        cleanPts2.pop();
+        cleanLoopIndices.pop();
       }
     }
 
-    (fillIndices as any).__centroids = (fillIndices as any).__centroids ?? [];
-    (fillIndices as any).__centroids.push({
-      centroid,
-      startTri: fillIndices.length / 3 - loop.length,
-      count: loop.length,
-    });
+    if (cleanPts2.length < 3) continue;
+
+    const tris = THREE.ShapeUtils.triangulateShape(cleanPts2, []);
+    if (!tris.length) {
+      // Fallback to a simple fan for extremely small/noisy loops.
+      for (let i = 1; i < cleanLoopIndices.length - 1; i++) {
+        resolvedIndices.push(cleanLoopIndices[0], cleanLoopIndices[i], cleanLoopIndices[i + 1]);
+      }
+      continue;
+    }
+
+    for (const tri of tris) {
+      const ia = cleanLoopIndices[tri[0]];
+      const ib = cleanLoopIndices[tri[1]];
+      const ic = cleanLoopIndices[tri[2]];
+      resolvedIndices.push(ia, ib, ic);
+    }
   }
 
-  // 5. Resolve centroid placeholders and build final buffers
-
-  const centroids: { centroid: THREE.Vector3; startTri: number; count: number }[] =
-    (fillIndices as any).__centroids ?? [];
+  // 5. Build final buffers
 
   const origPos = (geo.attributes.position as THREE.BufferAttribute).array as Float32Array;
   const origIdx = geo.index!.array as Uint32Array;
-
-  const newPosArr: number[] = Array.from(origPos);
-  const centroidBaseIdx = origPos.length / 3;
-
-  centroids.forEach(({ centroid }) => {
-    newPosArr.push(centroid.x, centroid.y, centroid.z);
-  });
-
-  const resolvedIndices: number[] = [];
-  for (let ti = 0; ti < fillIndices.length / 3; ti++) {
-    const ci = centroids.findIndex(c => ti >= c.startTri && ti < c.startTri + c.count);
-    const centroidIdx = centroidBaseIdx + ci;
-    const base = ti * 3;
-    resolvedIndices.push(
-      fillIndices[base] === -1 ? centroidIdx : fillIndices[base],
-      fillIndices[base + 1] === -1 ? centroidIdx : fillIndices[base + 1],
-      fillIndices[base + 2] === -1 ? centroidIdx : fillIndices[base + 2],
-    );
-  }
 
   const newIdxArr = new Uint32Array(origIdx.length + resolvedIndices.length);
   newIdxArr.set(origIdx);
   newIdxArr.set(resolvedIndices, origIdx.length);
 
   const result = new THREE.BufferGeometry();
-  result.setAttribute('position', new THREE.BufferAttribute(new Float32Array(newPosArr), 3));
+  result.setAttribute('position', new THREE.BufferAttribute(new Float32Array(origPos), 3));
   result.setIndex(new THREE.BufferAttribute(newIdxArr, 1));
   result.computeVertexNormals();
   result.computeBoundingBox();
@@ -341,22 +399,5 @@ function ensureIndexed(geo: THREE.BufferGeometry): THREE.BufferGeometry {
   const out = geo.clone();
   out.setIndex(new THREE.BufferAttribute(idx, 1));
   return out;
-}
-
-function isMicroLoop(loop: number[], posAttr: THREE.BufferAttribute): boolean {
-  if (loop.length > MICRO_LOOP_MAX_VERTS) return false;
-
-  let perimeter = 0;
-  const a = new THREE.Vector3();
-  const b = new THREE.Vector3();
-  for (let i = 0; i < loop.length; i++) {
-    const ia = loop[i];
-    const ib = loop[(i + 1) % loop.length];
-    a.set(posAttr.getX(ia), posAttr.getY(ia), posAttr.getZ(ia));
-    b.set(posAttr.getX(ib), posAttr.getY(ib), posAttr.getZ(ib));
-    perimeter += a.distanceTo(b);
-  }
-
-  return perimeter <= MICRO_LOOP_MAX_PERIMETER;
 }
 

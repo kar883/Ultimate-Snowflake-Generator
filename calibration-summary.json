@@ -1,52 +1,67 @@
 {
-  "startedAt": "2026-04-22T17:39:01.396Z",
-  "runsPerBucket": 15,
-  "totalRuns": 90,
-  "succeeded": 90,
+  "startedAt": "2026-05-01T16:18:34.693Z",
+  "preset": "slot-heavy-3-plane",
+  "runsPerBucket": 2,
+  "totalRuns": 12,
+  "succeeded": 12,
   "failed": 0,
   "failures": [],
   "calibration": {
-    "stl::low": {
+    "stl::low::slot-off": {
       "trianglesFactor": 6.3006870994354465,
       "bytesFactor": 6.300521787155154,
       "secondsFactor": 7.9187558505876865,
-      "samples": 15,
-      "lastUpdatedAt": 1776876425326
+      "samples": 10,
+      "lastUpdatedAt": 1776875960940
     },
-    "stl::med": {
+    "stl::med::slot-off": {
       "trianglesFactor": 7.9187558505876865,
       "bytesFactor": 7.9187558505876865,
       "secondsFactor": 7.9187558505876865,
-      "samples": 15,
+      "samples": 5,
       "lastUpdatedAt": 1776876870732
     },
-    "stl::high": {
+    "stl::high::slot-off": {
       "trianglesFactor": 7.9187558505876865,
       "bytesFactor": 7.9187558505876865,
       "secondsFactor": 7.9187558505876865,
-      "samples": 15,
+      "samples": 5,
       "lastUpdatedAt": 1776877548368
     },
-    "3mf::low": {
-      "trianglesFactor": 6.300980679903767,
-      "bytesFactor": 4.227021066840173,
-      "secondsFactor": 7.9187558505876865,
-      "samples": 15,
-      "lastUpdatedAt": 1776877994437
+    "stl::low::slot-on": {
+      "trianglesFactor": 2.2412101233889206,
+      "bytesFactor": 2.24120526604243,
+      "secondsFactor": 5.0424999999999995,
+      "samples": 2,
+      "lastUpdatedAt": 1777651292839
     },
-    "3mf::med": {
-      "trianglesFactor": 7.9187558505876865,
-      "bytesFactor": 4.8334045258831555,
-      "secondsFactor": 7.9187558505876865,
-      "samples": 15,
-      "lastUpdatedAt": 1776878840729
+    "stl::med::slot-on": {
+      "trianglesFactor": 2.1350499208155065,
+      "bytesFactor": 2.1350471729489477,
+      "secondsFactor": 5.0424999999999995,
+      "samples": 2,
+      "lastUpdatedAt": 1777651801795
     },
-    "3mf::high": {
-      "trianglesFactor": 7.9187558505876865,
-      "bytesFactor": 5.211621125482837,
-      "secondsFactor": 7.9187558505876865,
-      "samples": 15,
-      "lastUpdatedAt": 1776879540906
+    "3mf::low::slot-on": {
+      "trianglesFactor": 0.8813131299601904,
+      "bytesFactor": 0.8114130861164515,
+      "secondsFactor": 5.0424999999999995,
+      "samples": 2,
+      "lastUpdatedAt": 1777651844206
+    },
+    "stl::high::slot-on": {
+      "trianglesFactor": 0.8979751082013046,
+      "bytesFactor": 0.8979752478276922,
+      "secondsFactor": 5.0424999999999995,
+      "samples": 2,
+      "lastUpdatedAt": 1777651797073
+    },
+    "3mf::med::slot-on": {
+      "trianglesFactor": 0.9215366150826645,
+      "bytesFactor": 0.7247024254125652,
+      "secondsFactor": 5.0424999999999995,
+      "samples": 2,
+      "lastUpdatedAt": 1777652308144
     }
   }
 }

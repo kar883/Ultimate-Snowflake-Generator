@@ -485,6 +485,7 @@ const XYZGizmo: React.FC<{
   const cx = size / 2;
   const cy = size / 2;
   const radius = 64.0625;
+  const faceLabelColor = 'rgba(0,0,0,1)';
 
   if (!camQ) {
     return (
@@ -641,7 +642,10 @@ const XYZGizmo: React.FC<{
             x={cxFace}
             y={cyFace + 2.5}
             textAnchor="middle"
-            fill="rgba(241,245,249,0.92)"
+            fill={faceLabelColor}
+            stroke="rgba(2,6,23,0.95)"
+            strokeWidth="0.8"
+            paintOrder="stroke"
             fontSize={textSize}
             fontWeight="800"
             letterSpacing="0.55"
@@ -782,6 +786,7 @@ const XYZGizmo: React.FC<{
         <g
           className="cursor-pointer"
           data-gizmo-interactive="true"
+          data-gizmo-drag-disabled="true"
           onMouseEnter={() => setHovered({ kind: 'arrow', key: 'left', label: 'Rotate Left' })}
           onMouseLeave={() => setHovered(null)}
           onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
@@ -795,6 +800,7 @@ const XYZGizmo: React.FC<{
         <g
           className="cursor-pointer"
           data-gizmo-interactive="true"
+          data-gizmo-drag-disabled="true"
           onMouseEnter={() => setHovered({ kind: 'arrow', key: 'right', label: 'Rotate Right' })}
           onMouseLeave={() => setHovered(null)}
           onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
@@ -808,6 +814,7 @@ const XYZGizmo: React.FC<{
         <g
           className="cursor-pointer"
           data-gizmo-interactive="true"
+          data-gizmo-drag-disabled="true"
           onMouseEnter={() => setHovered({ kind: 'arrow', key: 'up', label: 'Rotate Up' })}
           onMouseLeave={() => setHovered(null)}
           onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
@@ -821,6 +828,7 @@ const XYZGizmo: React.FC<{
         <g
           className="cursor-pointer"
           data-gizmo-interactive="true"
+          data-gizmo-drag-disabled="true"
           onMouseEnter={() => setHovered({ kind: 'arrow', key: 'down', label: 'Rotate Down' })}
           onMouseLeave={() => setHovered(null)}
           onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
@@ -865,6 +873,9 @@ interface Snowflake3DProps {
   onFloatingBodiesChange?: (floatingByLayer: Record<string, boolean>) => void;
   onProcessingChange?: (isProcessing: boolean) => void;
   emergencyStopSeq?: number;
+  activeLayerId?: string;
+  syncAllLayers?: boolean;
+  highlightActivePlaneOnly?: boolean;
 }
 
 // Worker code at module scope — array of lines avoids Babel TSX template-literal parsing.
@@ -1098,6 +1109,9 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   onFloatingBodiesChange,
   onProcessingChange,
   emergencyStopSeq = 0,
+  activeLayerId,
+  syncAllLayers = true,
+  highlightActivePlaneOnly = false,
 }) => {
   const generateMeshRef = useRef(generateMesh);
   const containerRef  = useRef<HTMLDivElement>(null);
@@ -1115,10 +1129,24 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   const isVisibleRef  = useRef(isVisible);
   const frameRef      = useRef(0);
   const snapAnimRef   = useRef<number | null>(null);
-  const gizmoDragRef  = useRef<{ active: boolean; moved: boolean; pointerId: number | null; x: number; y: number }>({
+  const gizmoDragRef  = useRef<{
+    active: boolean;
+    engaged: boolean;
+    moved: boolean;
+    startedOnInteractive: boolean;
+    pointerId: number | null;
+    startX: number;
+    startY: number;
+    x: number;
+    y: number;
+  }>({
     active: false,
+    engaged: false,
     moved: false,
+    startedOnInteractive: false,
     pointerId: null,
+    startX: 0,
+    startY: 0,
     x: 0,
     y: 0,
   });
@@ -1236,21 +1264,26 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     if (!controlsRef.current) return;
 
     const targetEl = e.target as Element | null;
-    if (targetEl?.closest('[data-gizmo-interactive="true"]')) {
-      return;
-    }
+    const startedOnInteractive = !!targetEl?.closest('[data-gizmo-interactive="true"]');
 
-    e.preventDefault();
-    e.stopPropagation();
     gizmoDragRef.current = {
       active: true,
+      engaged: !startedOnInteractive,
       moved: false,
+      startedOnInteractive,
       pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
       x: e.clientX,
       y: e.clientY,
     };
-    setIsGizmoDragging(true);
-    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+
+    if (!startedOnInteractive) {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsGizmoDragging(true);
+      (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+    }
   }, []);
 
   const handleGizmoPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -1258,11 +1291,23 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     const controls = controlsRef.current;
     if (!drag.active || drag.pointerId !== e.pointerId || !controls) return;
 
+    const dx = e.clientX - drag.x;
+    const dy = e.clientY - drag.y;
+    const threshold = 5;
+    const movedFromStart = Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY);
+
+    if (!drag.engaged) {
+      if (drag.startedOnInteractive && movedFromStart < threshold) {
+        return;
+      }
+      drag.engaged = true;
+      setIsGizmoDragging(true);
+      (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+    }
+
     e.preventDefault();
     e.stopPropagation();
 
-    const dx = e.clientX - drag.x;
-    const dy = e.clientY - drag.y;
     drag.x = e.clientX;
     drag.y = e.clientY;
     if (Math.abs(dx) > 1 || Math.abs(dy) > 1) drag.moved = true;
@@ -1271,13 +1316,28 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     if (!camera) return;
 
     const offset = camera.position.clone().sub(controls.target);
-    const spherical = new THREE.Spherical().setFromVector3(offset);
     const rotateScale = 0.0085;
-    spherical.theta -= dx * rotateScale;
-    spherical.phi -= dy * rotateScale;
-    spherical.phi = THREE.MathUtils.clamp(spherical.phi, 0.05, Math.PI - 0.05);
 
-    offset.setFromSpherical(spherical);
+    // Trackball-style local-axis rotation: yaw around current camera up,
+    // pitch around current camera right. This avoids world-axis locking.
+    const yaw = new THREE.Quaternion().setFromAxisAngle(
+      camera.up.clone().normalize(),
+      -dx * rotateScale,
+    );
+
+    const rightAxis = offset.clone().cross(camera.up).normalize();
+    if (rightAxis.lengthSq() > 1e-8) {
+      const pitch = new THREE.Quaternion().setFromAxisAngle(
+        rightAxis,
+        -dy * rotateScale,
+      );
+      offset.applyQuaternion(yaw).applyQuaternion(pitch);
+      camera.up.applyQuaternion(yaw).applyQuaternion(pitch).normalize();
+    } else {
+      offset.applyQuaternion(yaw);
+      camera.up.applyQuaternion(yaw).normalize();
+    }
+
     camera.position.copy(controls.target).add(offset);
     camera.lookAt(controls.target);
     controls.update();
@@ -1287,12 +1347,29 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   const handleGizmoPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const drag = gizmoDragRef.current;
     if (!drag.active || drag.pointerId !== e.pointerId) return;
-    e.preventDefault();
-    e.stopPropagation();
+
+    if (drag.engaged) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
     if (drag.moved) gizmoLastDragAtRef.current = performance.now();
-    gizmoDragRef.current = { active: false, moved: false, pointerId: null, x: 0, y: 0 };
+    gizmoDragRef.current = {
+      active: false,
+      engaged: false,
+      moved: false,
+      startedOnInteractive: false,
+      pointerId: null,
+      startX: 0,
+      startY: 0,
+      x: 0,
+      y: 0,
+    };
     setIsGizmoDragging(false);
-    (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
+
+    if ((e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) {
+      (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
+    }
   }, []);
 
   const snapToDirection = useCallback((direction: THREE.Vector3, up?: THREE.Vector3) => {
@@ -1525,6 +1602,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   // ── Apply appearance whenever visibility/transparency changes ────
   const applyAppearance = useCallback(() => {
     if (!meshGroupRef.current) return;
+    const enabledLayerCount = config.layers.filter((l) => l.enabled).length;
     meshGroupRef.current.traverse(child => {
       if (!(child instanceof THREE.Mesh)) return;
       const lid: string = child.userData.layerId;
@@ -1552,25 +1630,31 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
       // Standard appearance (or floating-body color mode when enabled)
       const hasBodyColors = identifyBodiesMode && !!(child.geometry as THREE.BufferGeometry).getAttribute('color');
       const ghost = planeTransparencyEnabled[lid] ?? false;
-      const baseColor = new THREE.Color(color || '#38bdf8');
-      const accentEmissive = baseColor.clone().multiplyScalar(0.35);
+      const baseLayerColor = new THREE.Color(color || '#38bdf8');
+      const isActiveLayer = !!activeLayerId && lid === activeLayerId;
+      const shouldEmphasizeActiveLayer = highlightActivePlaneOnly && !syncAllLayers && enabledLayerCount > 1;
+      const isInactiveLayer = shouldEmphasizeActiveLayer && !isActiveLayer;
+      const layerColor = shouldEmphasizeActiveLayer
+        ? (isActiveLayer ? baseLayerColor.clone().multiplyScalar(1.22) : baseLayerColor.clone().multiplyScalar(0.45))
+        : baseLayerColor;
+      const accentEmissive = layerColor.clone().multiplyScalar(isInactiveLayer ? 0.18 : (shouldEmphasizeActiveLayer && isActiveLayer ? 0.72 : 0.35));
       const mat = new THREE.MeshStandardMaterial({
         vertexColors:     hasBodyColors,
-        color:            hasBodyColors ? new THREE.Color(0xffffff) : baseColor,
+        color:            hasBodyColors ? new THREE.Color(0xffffff) : layerColor,
         emissive:         hasBodyColors ? new THREE.Color(0x000000) : accentEmissive,
-        emissiveIntensity: hasBodyColors ? 0 : 0.015,
-        metalness:        0.14,
-        roughness:        0.52,
-        envMapIntensity:  0.36,
-        transparent:      ghost,
-        opacity:          ghost ? (planeTransparency[lid] ?? 0.12) : 1.0,
+        emissiveIntensity: hasBodyColors ? 0 : (isInactiveLayer ? 0.006 : (shouldEmphasizeActiveLayer && isActiveLayer ? 0.085 : 0.015)),
+        metalness:        isInactiveLayer ? 0.06 : 0.14,
+        roughness:        isInactiveLayer ? 0.78 : 0.52,
+        envMapIntensity:  isInactiveLayer ? 0.14 : 0.36,
+        transparent:      ghost || isInactiveLayer,
+        opacity:          ghost ? (planeTransparency[lid] ?? 0.12) : (isInactiveLayer ? 0.44 : 1.0),
         side:             THREE.DoubleSide,
         flatShading:      false,
       });
       child.material = mat;
     });
     syncMiniModel();
-  }, [planeVisibility, planeTransparency, planeTransparencyEnabled, color, showSlotDebug, syncMiniModel, identifyBodiesMode]);
+  }, [planeVisibility, planeTransparency, planeTransparencyEnabled, color, showSlotDebug, syncMiniModel, identifyBodiesMode, activeLayerId, syncAllLayers, highlightActivePlaneOnly, config.layers]);
 
   useEffect(() => { applyAppearance(); },
     [planeVisibility, planeTransparency, planeTransparencyEnabled, showSlotDebug, applyAppearance]);

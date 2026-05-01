@@ -39,7 +39,7 @@ const Header: React.FC<HeaderProps> = ({
   onResetShortcuts,
   onSaveAsDefault,
   onRestoreFactoryDefaults,
-  appVersion = '1.0.6',
+  appVersion = '1.0.7',
   language = 'en',
   onLanguageChange,
   showTooltips,
@@ -179,6 +179,10 @@ const Header: React.FC<HeaderProps> = ({
           <ShortcutsModal
             isOpen={showSettings}
             onClose={() => setShowSettings(false)}
+            onAbout={() => {
+              setShowSettings(false);
+              onAbout?.();
+            }}
             config={shortcuts}
             onSave={onUpdateShortcuts}
             onReset={onResetShortcuts}

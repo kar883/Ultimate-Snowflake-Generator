@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onExportSvg: (callback) => ipcRenderer.on('menu-export-svg', callback),
   onExportDxf: (callback) => ipcRenderer.on('menu-export-dxf', callback),
   onAbout: (callback) => ipcRenderer.on('menu-about', callback),
+  onCheckForUpdates: (callback) => ipcRenderer.on('menu-check-for-updates', callback),
   onShortcuts: (callback) => ipcRenderer.on('menu-shortcuts', callback),
 
   // App utilities
@@ -36,6 +37,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.removeAllListeners('menu-export-svg');
     ipcRenderer.removeAllListeners('menu-export-dxf');
     ipcRenderer.removeAllListeners('menu-about');
+    ipcRenderer.removeAllListeners('menu-check-for-updates');
     ipcRenderer.removeAllListeners('menu-shortcuts');
   }
 });

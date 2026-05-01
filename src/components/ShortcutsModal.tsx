@@ -278,6 +278,7 @@ const VarRow: React.FC<{
 interface ShortcutsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onAbout?: () => void;
   config: ShortcutConfig;
   onSave: (newConfig: ShortcutConfig) => void;
   onReset: () => void;
@@ -324,7 +325,7 @@ const translateShortcutAction = (action: keyof ShortcutConfig, t: (key: string) 
 // MAIN MODAL
 // ─────────────────────────────────────────────────────────────────────────────
 const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
-  isOpen, onClose, config, onSave, onReset,
+  isOpen, onClose, onAbout, config, onSave, onReset,
   language = 'en', onLanguageChange, showTooltips, onTooltipsChange,
   onSaveAsDefault, onRestoreFactoryDefaults, onResetEstimateCalibration, estimateCalibrationReadout, estimateCalibrationLastUpdatedLabel,
   activeTab: initialTab = 'shortcuts', message
@@ -559,7 +560,16 @@ const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
 
         {/* ── Modal header ─────────────────────────────────────────────── */}
         <div className="flex justify-between items-center px-5 pt-5 pb-3 border-b border-white/5 shrink-0">
-          <h2 className="text-base font-black text-white uppercase tracking-tight">{t('settings')}</h2>
+          <div className="flex items-center gap-3">
+            <h2 className="text-base font-black text-white uppercase tracking-tight">{t('settings')}</h2>
+            <button
+              type="button"
+              onClick={onAbout}
+              className="text-[11px] font-black text-sky-400 hover:text-sky-300 transition-colors underline uppercase tracking-wide"
+            >
+              About
+            </button>
+          </div>
           <button onClick={onClose} className="p-1.5 hover:bg-white/5 rounded-lg text-slate-400 hover:text-white transition-colors">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>

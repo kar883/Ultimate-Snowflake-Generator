@@ -1,20 +1,24 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import buyMeACoffeeQrImage from '../assets/buymeacoffee-qr.png';
 
 interface AboutModalProps {
   isOpen: boolean;
   onClose: () => void;
   version: string;
+  requestUpdateCheckSignal?: number;
 }
 
 const REPO_URL = 'https://github.com/kar883/Ultimate-Snowflake-Generator';
+const BUY_ME_A_COFFEE_URL = 'https://www.buymeacoffee.com/kylerussell';
+const BUY_ME_A_COFFEE_BUTTON_IMG = 'https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=&slug=kylerussell&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff';
+const BUY_ME_A_COFFEE_LOGO_IMG = 'https://cdn.buymeacoffee.com/buttons/bmc-new-btn-logo.svg';
 
-const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose, version }) => {
+const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose, version, requestUpdateCheckSignal = 0 }) => {
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
 
   const electronAPI = (window as any).electronAPI;
-
-  if (!isOpen) return null;
+  const isDesktopBuild = !!electronAPI?.checkForUpdates;
 
   const handleOpenRepo = () => {
     if (electronAPI?.openExternal) {
@@ -24,22 +28,33 @@ const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose, version }) => 
     window.open(REPO_URL, '_blank', 'noopener,noreferrer');
   };
 
-  const handleCheckForUpdates = async () => {
-    if (!electronAPI?.checkForUpdates) {
-      setUpdateStatus('Update check is available in the desktop app build.');
+  const handleOpenBuyMeACoffee = () => {
+    if (electronAPI?.openExternal) {
+      electronAPI.openExternal(BUY_ME_A_COFFEE_URL);
       return;
     }
+    window.open(BUY_ME_A_COFFEE_URL, '_blank', 'noopener,noreferrer');
+  };
 
+  const handleCheckForUpdates = async () => {
+    // If not Electron, show message
+    if (!isDesktopBuild) {
+      setUpdateStatus('Update check is only available in the desktop app build.');
+      return;
+    }
+    // If Electron but no preload, show fallback
+    if (!electronAPI?.checkForUpdates) {
+      setUpdateStatus('Update check is not available (preload script missing). Please reinstall or contact support.');
+      return;
+    }
     try {
       setIsCheckingUpdates(true);
       setUpdateStatus('Checking for updates...');
       const result = await electronAPI.checkForUpdates();
-
       if (!result?.ok) {
         setUpdateStatus(result?.error || 'Unable to check for updates right now.');
         return;
       }
-
       if (result.hasUpdate && result.latestVersion) {
         setUpdateStatus(`Update available: v${result.latestVersion}`);
       } else {
@@ -52,6 +67,14 @@ const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose, version }) => 
       setIsCheckingUpdates(false);
     }
   };
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (!requestUpdateCheckSignal) return;
+    handleCheckForUpdates();
+  }, [requestUpdateCheckSignal, isOpen]);
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
@@ -102,8 +125,9 @@ const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose, version }) => 
               <button
                 type="button"
                 onClick={handleCheckForUpdates}
-                disabled={isCheckingUpdates}
+                disabled={isCheckingUpdates || !isDesktopBuild}
                 className="inline-flex items-center justify-center rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-[11px] font-black text-sky-300 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-70 transition-colors"
+                title={!isDesktopBuild ? 'Update check only available in desktop app.' : undefined}
               >
                 {isCheckingUpdates ? 'Checking Updates...' : 'Check for Updates'}
               </button>
@@ -113,31 +137,49 @@ const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose, version }) => 
             </div>
           </div>
 
-          {/* Features */}
+          {/* Buy Me a Coffee */}
           <div className="p-4 bg-slate-800/40 rounded-xl border border-white/5">
-            <h4 className="text-xs font-black text-white mb-3">Key Features</h4>
-            <ul className="text-[11px] text-slate-300 space-y-2">
-              <li className="flex items-start gap-2">
-                <span className="text-sky-400">•</span>
-                <span>Custom text and font support with real-time preview</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="text-sky-400">•</span>
-                <span>Abstract shapes and fractal generators</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="text-sky-400">•</span>
-                <span>3D STL export for printing</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="text-sky-400">•</span>
-                <span>AI-powered randomization</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="text-sky-400">•</span>
-                <span>Cross-platform desktop app</span>
-              </li>
-            </ul>
+            <h4 className="text-xs font-black text-white mb-3">Buy Me a Coffee</h4>
+            <div className="flex items-start gap-3 p-3 bg-slate-900/50 rounded-lg border border-white/10">
+              <img
+                src={BUY_ME_A_COFFEE_LOGO_IMG}
+                alt="Buy Me a Coffee logo"
+                className="w-8 h-8 flex-shrink-0"
+              />
+              <div className="space-y-2">
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  If you enjoy Ultimate Snowflake Generator and want to support future updates, you can buy me a coffee.
+                </p>
+                <div className="flex items-start gap-3 flex-wrap">
+                  <a
+                    href={BUY_ME_A_COFFEE_URL}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      handleOpenBuyMeACoffee();
+                    }}
+                    className="shrink-0"
+                  >
+                    <img
+                      src={BUY_ME_A_COFFEE_BUTTON_IMG}
+                      alt="Buy me a coffee"
+                      className="h-10 w-auto"
+                    />
+                  </a>
+                  <button
+                    type="button"
+                    onClick={handleOpenBuyMeACoffee}
+                    className="inline-flex"
+                    title="Open Buy Me a Coffee page"
+                  >
+                    <img
+                      src={buyMeACoffeeQrImage}
+                      alt="Buy Me a Coffee QR code for kylerussell"
+                      className="w-32 max-w-full rounded-lg border border-white/15 bg-white"
+                    />
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* License */}

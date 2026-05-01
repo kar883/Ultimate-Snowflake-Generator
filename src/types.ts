@@ -170,6 +170,7 @@ export interface SnowflakeConfig {
   slotMode: '2-plane' | '3-plane';
   quality: DesignQuality;
   syncAllLayers: boolean;
+  highlightActivePlaneOnly: boolean;
   globalStrokeWeight: number;
   freeFloatingCheck: boolean;
 }
