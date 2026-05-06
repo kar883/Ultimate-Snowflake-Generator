@@ -6,6 +6,7 @@ import { SystemFontButton } from './LocalFontPicker';
 import { TooltipContext, InfoTooltip } from './Tooltip';
 import { useTranslation } from '../translations';
 import { clearGeometryCache } from '../geometryCache';
+import { buildTextControlEntries, getPathCommandBounds, getAdjustedGlyphPathCommands } from '../utils/textControl';
 import opentype from 'opentype.js';
 
 const Toggle: React.FC<{
@@ -112,6 +113,7 @@ const DESCRIPTIONS: Record<string, string> = {
   "Rot Y": "3D rotation around the Y-axis for this specific plane.",
   "Sync All Planes": "Applies Text and Design changes to all planes simultaneously.",
   "Highlight Active Plane Only": "When enabled, the active plane is emphasized while other enabled planes are visually dimmed in 2D and 3D previews.",
+  "Enable All Slot Bridges": "Global bridge switch. Turn OFF to disable bridge generation on all planes and hide per-plane bridge controls.",
   "AI Randomizer": "Only works while online. Generates a random base plane design optimized for 3D printing, 2D aesthetics, or purely traditional fractal geometry.",
   "Export STL": "Export the current 3D design as a combined single mesh body. Ideal for 3D printing.",
   "Export All Planes": "Export each plane individually and package them into a single ZIP file.",
@@ -152,6 +154,15 @@ const DESCRIPTIONS: Record<string, string> = {
   "Cap Length": "Length of the connecting cap shape.",
   "Slot Length Adj": "Fine-tune the slot cut length for this specific plane.",
   "Slot Width Offset": "Fine-tune the slot cut width (clearance) for this specific plane.",
+  "Enable Slot Bridges": "Add connector segments along this plane's slot edge to reconnect free-floating islands.",
+  "Manual Slot Bridge Width": "Overrides the automatic slot bridge width with a wider minimum width for added strength.",
+  "Slot Bridge Width": "Minimum width of the baked slot bridge block used when manual bridge width is enabled.",
+  "Protect Mating Clearance": "First-class fit rule. Keeps bridge geometry out of the mating slot envelope so assembly remains possible.",
+  "Bridge Position": "Position of this connector along the slot path.",
+  "Bridge Length": "Length of this connector segment measured along the slot path.",
+  "Bridge Width": "Width of this connector segment away from the slot edge.",
+  "Bridge Edge Offset": "Signed offset from slot edge into or away from the plane face.",
+  "Bridge Clearance Margin": "Extra no-go margin from mating slot volume used by clearance protection.",
   "Cross Tip-In Adj": "Adjust the Cross plane tip-in slot segment length independently from the main slot length.",
   "Tilt Extension Adj": "Adjust the Tilt plane extension slot segment length independently from the main slot length.",
   "Trunk Length": "Distance before the first branching occurs.",
@@ -1001,23 +1012,22 @@ const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, m
     const parsed = parseFloat(localValue);
     if (!isNaN(parsed)) {
       const clamped = Math.max(min, Math.min(max, parsed));
-      if (isDirty.current || Math.abs(clamped - value) > 0.0001) {
+      // Commit only when the numeric value truly changed.
+      if ((isDirty.current || Math.abs(clamped - value) > 0.0001) && Math.abs(clamped - value) > 0.0001) {
           onChange(clamped, true);
-          isDirty.current = false;
       }
+      isDirty.current = false;
       setLocalValue(clamped.toFixed(decimals));
     } else {
+      isDirty.current = false;
       setLocalValue(value.toFixed(decimals));
     }
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setLocalValue(e.target.value);
-    const parsed = parseFloat(e.target.value);
-    if (!isNaN(parsed)) {
-        isDirty.current = true;
-        onChange(Math.max(min, Math.min(max, parsed)), false);
-    }
+    isDirty.current = true;
+    // Don't call onChange during typing - wait for commit
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -1442,7 +1452,16 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   if (!activeLayer) return null;
 
   const groupData = activeLayer[activeGroup];
+  const charControlEntries = buildTextControlEntries(groupData.text);
+  const safeSelectedCharIndex = Math.min(selectedCharIndex, Math.max(0, charControlEntries.length - 1));
+  const selectedCharEntry = charControlEntries[safeSelectedCharIndex];
   const currentLockState = radiusLocks[activeGroup];
+
+  useEffect(() => {
+    if (selectedCharIndex !== safeSelectedCharIndex) {
+      setSelectedCharIndex(safeSelectedCharIndex);
+    }
+  }, [safeSelectedCharIndex, selectedCharIndex]);
 
   useEffect(() => {
     if (activeLayer.hubs && selectedHubIndex >= activeLayer.hubs.length && activeLayer.hubs.length > 0) {
@@ -1484,10 +1503,11 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
             const glyphs = font.stringToGlyphs(group.text);
             let furthestX = 0; let currentX = 0;
             glyphs.forEach((glyph, i) => {
-              const offset = group.charOffsets[i] || { x: 0, y: 0 };
-              const bbox = glyph.getBoundingBox();
-              const charFarX = currentX + offset.x + (bbox.x2 * scale);
-              furthestX = Math.max(furthestX, charFarX);
+              const adjustedCommands = getAdjustedGlyphPathCommands(glyph, group.text, group.charOffsets, i, currentX, group.fontSize);
+              const bounds = getPathCommandBounds(adjustedCommands);
+              if (bounds) {
+                furthestX = Math.max(furthestX, bounds.maxX);
+              }
               currentX += (glyph.advanceWidth * scale) + group.letterSpacing;
             });
             textExtent = furthestX + (group.thickness / 2) + (config.bevelEnabled ? config.bevelAmount : 0);
@@ -2158,9 +2178,9 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                        paddingBottom: '8px',
                        height: '44px'
                      }}>
-                    {groupData.text.split('').map((char, i) => (
+                    {charControlEntries.map((entry, i) => (
                       <button
-                        key={i}
+                        key={`${entry.storageIndex}-${entry.label}`}
                         onClick={() => setSelectedCharIndex(i)}
                         className={`min-w-[40px] h-9 rounded-lg text-lg font-bold border transition-all ${selectedCharIndex === i ? 'bg-sky-600 border-sky-500 text-white shadow-lg' : 'bg-slate-800 border-white/5 text-slate-400'}`}
                         style={{
@@ -2178,7 +2198,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                           boxShadow: selectedCharIndex === i ? '0 10px 15px -3px rgba(0,0,0,0.1)' : 'none'
                         }}
                       >
-                        {char}
+                        {entry.label}
                       </button>
                     ))}
                 </div>
@@ -2202,10 +2222,10 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                        paddingBottom: '8px',
                        marginBottom: '8px'
                      }}>
-                    {t('Selected Character')}: <span className="text-white text-base ml-2" style={{ color: 'white', fontSize: '16px', marginLeft: '8px' }}>"{groupData.text[selectedCharIndex]}"</span>
+                    {t('Selected Character')}: <span className="text-white text-base ml-2" style={{ color: 'white', fontSize: '16px', marginLeft: '8px' }}>"{selectedCharEntry?.label ?? ''}"</span>
                   </p>
-                  {renderSlider(t('Offset X'), groupData.charOffsets[selectedCharIndex]?.x || 0, -50, 50, 0.1, (v, c) => updateCharOffset(activeGroup, selectedCharIndex, { x: v }, c), "mm", false, 0)}
-                  {renderSlider(t('Offset Y'), groupData.charOffsets[selectedCharIndex]?.y || 0, -50, 50, 0.1, (v, c) => updateCharOffset(activeGroup, selectedCharIndex, { y: v }, c), "mm", false, 0)}
+                  {renderSlider(t('Offset X'), groupData.charOffsets[selectedCharEntry?.storageIndex ?? 0]?.x || 0, -50, 50, 0.1, (v, c) => updateCharOffset(activeGroup, selectedCharEntry?.storageIndex ?? 0, { x: v }, c), "mm", false, 0)}
+                  {renderSlider(t('Offset Y'), groupData.charOffsets[selectedCharEntry?.storageIndex ?? 0]?.y || 0, -50, 50, 0.1, (v, c) => updateCharOffset(activeGroup, selectedCharEntry?.storageIndex ?? 0, { y: v }, c), "mm", false, 0)}
                 </div>
              </div>
           )}
@@ -2785,6 +2805,16 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                         </div>
                         <Toggle label={config.highlightActivePlaneOnly ? t('ON') : t('OFF')} checked={config.highlightActivePlaneOnly} onChange={(c) => onUpdate({ highlightActivePlaneOnly: c })} />
                       </div>
+                      {config.slotEnabled && (
+                        <div className="flex justify-between items-center">
+                          <InfoTooltip label={t('Enable All Slot Bridges')} description={getDescription('Enable All Slot Bridges', t)} />
+                          <Toggle
+                            label={(config.slotBridgesEnabled !== false) ? t('ON') : t('OFF')}
+                            checked={config.slotBridgesEnabled !== false}
+                            onChange={(checked) => onUpdate({ slotBridgesEnabled: checked })}
+                          />
+                        </div>
+                      )}
                 </div>
 
                 <div className="space-y-2">
@@ -2861,6 +2891,56 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                       {config.slotMode === '3-plane' && idx === 2 &&
                                         renderSlider(t('Tilt Extension Adj'), layer.slotTiltExtensionLengthAdjustment || 0, -50, 50, 0.05, (v, c) => handleLayerUpdate(idx, { slotTiltExtensionLengthAdjustment: v }, c), "mm", false, 0)
                                       }
+
+                                      {config.slotBridgesEnabled !== false && (
+                                        <>
+                                          <div className="w-full h-px bg-white/5 my-1"></div>
+                                          <div className="flex justify-between items-center">
+                                            <InfoTooltip label={t('Enable Slot Bridges')} description={getDescription('Enable Slot Bridges', t)} />
+                                            <Toggle
+                                              label={layer.slotBridgeEnabled ? t('ON') : t('OFF')}
+                                              checked={Boolean(layer.slotBridgeEnabled)}
+                                              onChange={(checked) => handleLayerUpdate(idx, { slotBridgeEnabled: checked }, true)}
+                                            />
+                                          </div>
+
+                                          {layer.slotBridgeEnabled && (
+                                            <>
+                                              <div className="flex justify-between items-center">
+                                                <InfoTooltip label={t('Manual Slot Bridge Width')} description={getDescription('Manual Slot Bridge Width', t)} />
+                                                <Toggle
+                                                  label={layer.slotBridgeManualWidthEnabled ? t('ON') : t('OFF')}
+                                                  checked={Boolean(layer.slotBridgeManualWidthEnabled)}
+                                                  onChange={(checked) => handleLayerUpdate(idx, { slotBridgeManualWidthEnabled: checked }, false)}
+                                                />
+                                              </div>
+
+                                              {layer.slotBridgeManualWidthEnabled && (
+                                                renderSlider(
+                                                  t('Slot Bridge Width'),
+                                                  layer.slotBridgeManualWidth || 6,
+                                                  0.5,
+                                                  20,
+                                                  0.05,
+                                                  (v, c) => handleLayerUpdate(idx, { slotBridgeManualWidth: v }, c),
+                                                  "mm",
+                                                  false,
+                                                  6
+                                                )
+                                              )}
+                                            </>
+                                          )}
+                                        </>
+                                      )}
+
+                                      <div className="flex justify-between items-center">
+                                        <InfoTooltip label={t('Protect Mating Clearance')} description={getDescription('Protect Mating Clearance', t)} />
+                                        <Toggle
+                                          label={(layer.protectMatingClearance !== false) ? t('ON') : t('OFF')}
+                                          checked={layer.protectMatingClearance !== false}
+                                          onChange={(checked) => handleLayerUpdate(idx, { protectMatingClearance: checked }, true)}
+                                        />
+                                      </div>
                                    </>
                                )}
                             </div>

@@ -8,6 +8,7 @@ import { modelCache2D, hashConfig } from '../geometryCache';
 import { useSvgRotationWorker } from '../hooks/useSvgRotationWorker';
 import { useTranslation } from '../translations';
 import { fontPreloader } from '../utils/fontPreloader';
+import { getAdjustedGlyphPathCommands, makePathFromCommands } from '../utils/textControl';
 
 // Helper function to get translated description
 const getDescription = (key: string, t?: (key: string) => string): string => {
@@ -428,17 +429,15 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
         const glyphEntries: Array<{ d: string; minX: number; minY: number; maxX: number; maxY: number }> = [];
 
         glyphs.forEach((glyph, i) => {
-          const offset = group.charOffsets[i] || { x: 0, y: 0 };
-          const glyphX = currentX + offset.x;
-          const glyphY = offset.y;
-          const path = glyph.getPath(glyphX, glyphY, group.fontSize);
+          const adjustedCommands = getAdjustedGlyphPathCommands(glyph, group.text, group.charOffsets, i, currentX, group.fontSize);
+          const path = makePathFromCommands(adjustedCommands);
           const d = path.toPathData(2);
 
-          const bbox = glyph.getBoundingBox();
-          const minX = glyphX + (bbox.x1 * scale);
-          const minY = glyphY + (bbox.y1 * scale);
-          const maxX = glyphX + (bbox.x2 * scale);
-          const maxY = glyphY + (bbox.y2 * scale);
+          const bbox = path.getBoundingBox();
+          const minX = bbox.x1;
+          const minY = bbox.y1;
+          const maxX = bbox.x2;
+          const maxY = bbox.y2;
 
           glyphEntries.push({ d, minX, minY, maxX, maxY });
           currentX += (glyph.advanceWidth * scale) + group.letterSpacing;

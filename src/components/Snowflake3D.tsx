@@ -1632,7 +1632,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
       const ghost = planeTransparencyEnabled[lid] ?? false;
       const baseLayerColor = new THREE.Color(color || '#38bdf8');
       const isActiveLayer = !!activeLayerId && lid === activeLayerId;
-      const shouldEmphasizeActiveLayer = highlightActivePlaneOnly && !syncAllLayers && enabledLayerCount > 1;
+      const shouldEmphasizeActiveLayer = !identifyBodiesMode && highlightActivePlaneOnly && !syncAllLayers && enabledLayerCount > 1;
       const isInactiveLayer = shouldEmphasizeActiveLayer && !isActiveLayer;
       const layerColor = shouldEmphasizeActiveLayer
         ? (isActiveLayer ? baseLayerColor.clone().multiplyScalar(1.22) : baseLayerColor.clone().multiplyScalar(0.45))
@@ -1701,7 +1701,19 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     const meshes: THREE.Mesh[] = [];
     meshGroupRef.current.traverse((child) => {
       if (!(child instanceof THREE.Mesh)) return;
-      if (!child.userData.layerId || child.userData.slotDebug) return;
+      const layerId = String(child.userData.layerId ?? '');
+      if (!layerId || child.userData.slotDebug) return;
+
+      const isLayerVisible = planeVisibility[layerId] ?? true;
+      if (!isLayerVisible) {
+        const geo = child.geometry as THREE.BufferGeometry;
+        if (geo.getAttribute('color')) {
+          geo.deleteAttribute('color');
+        }
+        child.userData.hasFloatingBodies = false;
+        return;
+      }
+
       meshes.push(child);
     });
 
@@ -1786,7 +1798,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
       onFloatingBodiesChange?.(floatingByLayer);
       applyAppearanceRef.current();
     });
-  }, [color, onFloatingBodiesChange, terminateBodiesWorkers]);
+  }, [color, onFloatingBodiesChange, planeVisibility, terminateBodiesWorkers]);
 
   useEffect(() => {
     runBodiesAnalysisRef.current = runBodiesAnalysis;
@@ -1812,6 +1824,11 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
       clearFloatingBodyHighlights();
     }
   }, [identifyBodiesMode, terminateBodiesWorkers, clearFloatingBodyHighlights]);
+
+  useEffect(() => {
+    if (!identifyBodiesMode) return;
+    runBodiesAnalysisRef.current();
+  }, [identifyBodiesMode, planeVisibility]);
 
   useEffect(() => {
     return () => {

@@ -155,20 +155,41 @@ export async function manifoldUnionGeometries(
 
   let unionResult: any = null;
 
-  for (let i = 0; i < geometries.length; i++) {
-    const clean = prepare(geometries[i], { weld: false });
-    const pos = clean.attributes.position.array as Float32Array;
-    const idx = clean.index!.array as Uint32Array;
+  const makeOperandManifold = (geometry: THREE.BufferGeometry) => {
+    const weldTolerances = [1e-5, 5e-5, 1e-4, 2e-4];
+    let lastError: unknown = null;
 
-    const meshObj = new Mesh({
-      numProp: 3,
-      vertProperties: pos,
-      triVerts: idx,
-    });
-    meshObj.merge();
+    for (const tolerance of weldTolerances) {
+      const clean = prepare(geometry, { weld: true, tolerance });
+      const pos = clean.attributes.position.array as Float32Array;
+      const idx = clean.index!.array as Uint32Array;
+
+      const meshObj = new Mesh({
+        numProp: 3,
+        vertProperties: pos,
+        triVerts: idx,
+      });
+      meshObj.merge();
+
+      try {
+        const piece = createManifoldFromMesh(Manifold, meshObj);
+        return { piece, clean, meshObj };
+      } catch (err) {
+        lastError = err;
+        meshObj.delete?.();
+        clean.dispose();
+      }
+    }
+
+    throw lastError instanceof Error
+      ? lastError
+      : new Error('Failed to create manifold operand for union');
+  };
+
+  for (let i = 0; i < geometries.length; i++) {
+    const { piece, clean, meshObj } = makeOperandManifold(geometries[i]);
 
     try {
-      const piece = createManifoldFromMesh(Manifold, meshObj);
       if (!unionResult) {
         unionResult = piece;
       } else {

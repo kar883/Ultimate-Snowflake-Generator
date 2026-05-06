@@ -79,6 +79,11 @@ export const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isE
   slotWidthOffset: 0,
   slotCrossTipInLengthAdjustment: 0,
   slotTiltExtensionLengthAdjustment: 0,
+  slotBridgeEnabled: true,
+  slotBridgeManualWidthEnabled: false,
+  slotBridgeManualWidth: 6,
+  protectMatingClearance: true,
+  slotBridges: [],
   images: []
 });
 
@@ -91,6 +96,7 @@ export const createDefaultGlobalConfig = (): Omit<SnowflakeConfig, 'projectName'
   bevelAmount: 0.4,
   bevelSegments: 5,
   slotEnabled: false,
+  slotBridgesEnabled: true,
   slotLength: 95,
   slotWidth: 4.0,
   slotMode: '3-plane',
@@ -139,6 +145,11 @@ export const resetSettingsToDefaults = (currentConfig: SnowflakeConfig): Snowfla
       slotWidthOffset: layer.slotWidthOffset,
       slotCrossTipInLengthAdjustment: layer.slotCrossTipInLengthAdjustment,
       slotTiltExtensionLengthAdjustment: layer.slotTiltExtensionLengthAdjustment,
+      slotBridgeEnabled: layer.slotBridgeEnabled,
+      slotBridgeManualWidthEnabled: layer.slotBridgeManualWidthEnabled,
+      slotBridgeManualWidth: layer.slotBridgeManualWidth,
+      protectMatingClearance: layer.protectMatingClearance,
+      slotBridges: layer.slotBridges,
       images: layer.images, // Preserve images as they're user-added content
       
       // Reset all settings to defaults

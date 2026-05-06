@@ -134,6 +134,19 @@ export const createDefaultImage = (
   thickness: 0,
 });
 
+export interface SlotBridgeConfig {
+  id: string;
+  enabled: boolean;
+  // Position measured along the slot path from near end (0) to far end (100).
+  positionPct: number;
+  length: number;
+  width: number;
+  // Signed offset from the slot edge into the source plane face.
+  edgeOffset: number;
+  // Extra keep-out margin from mating slot envelope.
+  clearanceMargin: number;
+}
+
 export interface LayerConfig {
   id: string;
   name: string;
@@ -149,6 +162,11 @@ export interface LayerConfig {
   slotWidthOffset?: number;
   slotCrossTipInLengthAdjustment?: number;
   slotTiltExtensionLengthAdjustment?: number;
+  slotBridgeEnabled?: boolean;
+  slotBridgeManualWidthEnabled?: boolean;
+  slotBridgeManualWidth?: number;
+  protectMatingClearance?: boolean;
+  slotBridges?: SlotBridgeConfig[];
   images: ImageConfig[];
 }
 
@@ -165,6 +183,7 @@ export interface SnowflakeConfig {
   bevelAmount: number;
   bevelSegments: number;
   slotEnabled: boolean;
+  slotBridgesEnabled: boolean;
   slotLength: number;
   slotWidth: number;
   slotMode: '2-plane' | '3-plane';

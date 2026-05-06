@@ -21,6 +21,8 @@
 
 import * as THREE from 'three';
 
+const SLOT_HOLE_FILLER_DEBUG = false;
+
 // tunables
 
 /**
@@ -55,7 +57,9 @@ export function fillSlotHoles(
   });
   const cutterPlanes = cutterInfos.flatMap((info) => info.planes);
 
-  console.log(`SlotHoleFiller: ${cutterPlanes.length} cutter planes from ${cutters.length} cutter(s)`);
+  if (SLOT_HOLE_FILLER_DEBUG) {
+    console.log(`SlotHoleFiller: ${cutterPlanes.length} cutter planes from ${cutters.length} cutter(s)`);
+  }
 
   // 1. Find boundary edges
 
@@ -87,7 +91,9 @@ export function fillSlotHoles(
     }
   }
 
-  console.log(`  ${totalBoundary} boundary edges found`);
+  if (SLOT_HOLE_FILLER_DEBUG) {
+    console.log(`  ${totalBoundary} boundary edges found`);
+  }
   if (!totalBoundary) return geometry;
 
   // 2. Walk into loops
@@ -145,7 +151,9 @@ export function fillSlotHoles(
     }
   }
 
-  console.log(`  ${allLoops.length} boundary loop(s) detected`);
+  if (SLOT_HOLE_FILLER_DEBUG) {
+    console.log(`  ${allLoops.length} boundary loop(s) detected`);
+  }
 
   // 3. Filter: keep only loops that lie on a cutter face plane
 
@@ -173,7 +181,9 @@ export function fillSlotHoles(
         pts.every((p) => Math.abs(candidate.distanceToPoint(p)) < PLANE_TOL)
       ) ?? strictMatch.planes[0];
       slotLoops.push({ loop, plane });
-      console.log(`  Loop (${loop.length} verts) lies on cutter plane -> SLOT HOLE`);
+      if (SLOT_HOLE_FILLER_DEBUG) {
+        console.log(`  Loop (${loop.length} verts) lies on cutter plane -> SLOT HOLE`);
+      }
       continue;
     }
 
@@ -205,7 +215,9 @@ export function fillSlotHoles(
 
     if (recoveredPlane) {
       slotLoops.push({ loop, plane: recoveredPlane });
-      console.log(`  Loop (${loop.length} verts) recovered inside cutter footprint -> SLOT HOLE`);
+      if (SLOT_HOLE_FILLER_DEBUG) {
+        console.log(`  Loop (${loop.length} verts) recovered inside cutter footprint -> SLOT HOLE`);
+      }
       continue;
     }
 
@@ -240,12 +252,16 @@ export function fillSlotHoles(
 
       if (rescuedTinyPlane) {
         slotLoops.push({ loop, plane: rescuedTinyPlane });
-        console.log(`  Loop (${loop.length} verts) noisy-loop rescue near cutter footprint -> SLOT HOLE`);
+        if (SLOT_HOLE_FILLER_DEBUG) {
+          console.log(`  Loop (${loop.length} verts) noisy-loop rescue near cutter footprint -> SLOT HOLE`);
+        }
       }
     }
   }
 
-  console.log(`  Filling ${slotLoops.length} slot loop(s), skipping ${allLoops.length - slotLoops.length} other loop(s)`);
+  if (SLOT_HOLE_FILLER_DEBUG) {
+    console.log(`  Filling ${slotLoops.length} slot loop(s), skipping ${allLoops.length - slotLoops.length} other loop(s)`);
+  }
 
   if (!slotLoops.length) {
     console.warn('  No slot holes found. Check PLANE_TOL or that cutters are in world space.');
@@ -328,7 +344,9 @@ export function fillSlotHoles(
   result.computeVertexNormals();
   result.computeBoundingBox();
 
-  console.log(`SlotHoleFiller: ${resolvedIndices.length / 3} fill triangles across ${slotLoops.length} slot hole(s)`);
+  if (SLOT_HOLE_FILLER_DEBUG) {
+    console.log(`SlotHoleFiller: ${resolvedIndices.length / 3} fill triangles across ${slotLoops.length} slot hole(s)`);
+  }
   return result;
 }
 

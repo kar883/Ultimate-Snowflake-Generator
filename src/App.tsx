@@ -24,10 +24,11 @@ import {
   manifoldUnionAndExtrudeShapeInstances,
   manifoldUnionGeometries,
 } from './manifoldCSG';
-import { getTopologyReport } from './surgicalSlotRepair';
+import { getTopologyReport, surgicalSlotRepair } from './surgicalSlotRepair';
 import { fillSlotHoles } from './slotHoleFiller';
 import { postCSGJob, terminateWorker } from './csgWorkerManager';
 import { useTranslation } from './translations';
+import { getAdjustedGlyphPathCommands, getPathCommandBounds, makePathFromCommands } from './utils/textControl';
 // @ts-ignore
 // import { fillHolesManifold } from './holeFillingRepair'; // Temporarily commented
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, /*makeSlotKey,*/ getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, /*slotCutCache,*/ makeUnderlineKey } from './geometryCache';
@@ -808,6 +809,296 @@ const getRearMateReach = (
   return Math.max(0.01, fullRearReach * Math.cos(halfGapRad));
 };
 
+const SLOT_BRIDGE_RULE_VERSION = 'slot-bridge-phase1-u';
+const BAKED_BRIDGE_END_INSET_MM = 0.1;
+const failedBridgeUnionAttemptKeys = new Set<string>();
+const FORCE_WORKER_SLOT_CUT_VERTEX_THRESHOLD = 450000;
+const BRIDGE_SURGICAL_REPAIR_VERTEX_THRESHOLD = 450000;
+
+const makeBridgeUnionAttemptKey = (
+  layer: LayerConfig,
+  layerIndex: number,
+  config: SnowflakeConfig,
+  sourceVertexCount: number
+): string => {
+  return [
+    SLOT_BRIDGE_RULE_VERSION,
+    layer.id,
+    layerIndex,
+    config.slotMode,
+    Number(config.slotWidth || 0).toFixed(3),
+    Number(layer.slotWidthOffset || 0).toFixed(3),
+    Number(layer.slotLengthAdjustment || 0).toFixed(3),
+    Number(layer.slotCrossTipInLengthAdjustment || 0).toFixed(3),
+    Number(layer.slotTiltExtensionLengthAdjustment || 0).toFixed(3),
+    layer.slotBridgeEnabled ? 1 : 0,
+    layer.slotBridgeManualWidthEnabled ? 1 : 0,
+    Number(layer.slotBridgeManualWidth || 0).toFixed(3),
+    sourceVertexCount,
+  ].join('|');
+};
+
+const normalizeSlotBridgeList = (layer: LayerConfig) => {
+  const bridges = Array.isArray(layer.slotBridges) ? layer.slotBridges : [];
+  return bridges
+    .map((bridge, index) => ({
+      id: typeof bridge?.id === 'string' && bridge.id.trim().length > 0
+        ? bridge.id
+        : `slot-bridge-${layer.id}-${index}`,
+      enabled: bridge?.enabled !== false,
+      positionPct: Math.min(100, Math.max(0, Number(bridge?.positionPct ?? 50))),
+      length: Math.max(0.2, Number(bridge?.length ?? 6)),
+      width: Math.max(0.2, Number(bridge?.width ?? 1.2)),
+      edgeOffset: Number(bridge?.edgeOffset ?? 0),
+      clearanceMargin: Math.max(0, Number(bridge?.clearanceMargin ?? 0.35)),
+    }))
+    .filter((bridge) => Number.isFinite(bridge.positionPct)
+      && Number.isFinite(bridge.length)
+      && Number.isFinite(bridge.width)
+      && Number.isFinite(bridge.edgeOffset)
+      && Number.isFinite(bridge.clearanceMargin));
+};
+
+const getClearanceProtectedBridges = (
+  layer: LayerConfig,
+  slotThickness: number
+) => {
+  const normalized = normalizeSlotBridgeList(layer);
+  const protectionOn = layer.protectMatingClearance !== false;
+
+  if (!protectionOn) {
+    return normalized;
+  }
+
+  // First-class rule: any enabled bridge must keep a safety envelope clear
+  // around mating slot volume. Phase 1 clamps width to guarantee minimum
+  // open channel remains for assembly.
+  const maxBridgeWidth = Math.max(0.2, (slotThickness * 0.5) - 0.1);
+  return normalized.map((bridge) => {
+    if (!bridge.enabled) return bridge;
+    const guardedMax = Math.max(0.2, maxBridgeWidth - bridge.clearanceMargin);
+    return {
+      ...bridge,
+      edgeOffset: Math.max(bridge.edgeOffset, bridge.clearanceMargin),
+      width: Math.min(bridge.width, guardedMax),
+    };
+  });
+};
+
+const createSlotBridgeGeometriesForLayer = (
+  layer: LayerConfig,
+  layerIndex: number,
+  enabledLayers: LayerConfig[],
+  config: SnowflakeConfig,
+  materialThickness: number,
+  centerZ: number,
+  layerDepth: number
+): THREE_ACTUAL.BufferGeometry[] => {
+  if (!config.slotEnabled || config.slotBridgesEnabled === false || !layer.slotBridgeEnabled) return [];
+
+  const createBridgeBlockGeometry = (
+    length: number,
+    width: number,
+    height: number
+  ): THREE_ACTUAL.BufferGeometry => {
+    const safeLength = Math.max(0.01, length);
+    const safeWidth = Math.max(0.01, width);
+    const safeHeight = Math.max(0.01, height);
+
+    if (!config.bevelEnabled) {
+      return new THREE_ACTUAL.BoxGeometry(safeLength, safeWidth, safeHeight);
+    }
+
+    // Match layer edge profile when slots/bridges are baked into the body.
+    const bevelPerSide = Math.min(
+      config.bevelAmount,
+      safeLength * 0.5,
+      safeWidth * 0.5,
+      safeHeight * 0.5
+    );
+
+    if (bevelPerSide <= 0.0001) {
+      return new THREE_ACTUAL.BoxGeometry(safeLength, safeWidth, safeHeight);
+    }
+
+    const halfLen = safeLength * 0.5;
+    const halfWid = safeWidth * 0.5;
+    const shape = new THREE_ACTUAL.Shape();
+    shape.moveTo(-halfLen, -halfWid);
+    shape.lineTo(halfLen, -halfWid);
+    shape.lineTo(halfLen, halfWid);
+    shape.lineTo(-halfLen, halfWid);
+    shape.lineTo(-halfLen, -halfWid);
+
+    const coreDepth = Math.max(0.001, safeHeight - (bevelPerSide * 2));
+    const bevelSegments = config.bevelType === 'chamfer'
+      ? 1
+      : Math.max(2, Math.min(config.bevelSegments, 8));
+    const beveled = new THREE_ACTUAL.ExtrudeGeometry(shape, {
+      depth: coreDepth,
+      bevelEnabled: true,
+      bevelThickness: bevelPerSide,
+      bevelSize: bevelPerSide,
+      bevelSegments,
+      curveSegments: 4,
+      steps: 1,
+    });
+    beveled.translate(0, 0, (-safeHeight * 0.5) + bevelPerSide);
+    return beveled;
+  };
+
+  const widthAdjustmentPerSide = layer.slotWidthOffset ?? 0;
+  const enabledTextThicknesses = [
+    layer.primary.enabled ? (layer.primary.thickness || 0) : 0,
+    (layer.secondaryEnabled && layer.secondary.enabled) ? (layer.secondary.thickness || 0) : 0,
+  ];
+  const maxLayerTextThickness = Math.max(0, ...enabledTextThicknesses);
+  const effectiveBoldnessForSlot = Math.max(0, (config.globalStrokeWeight || 0) + (maxLayerTextThickness - 1.0));
+  const slotThickness = Math.max(
+    0.1,
+    materialThickness + effectiveBoldnessForSlot + config.slotWidth + widthAdjustmentPerSide
+  );
+
+  const protectedBridges = getClearanceProtectedBridges(layer, slotThickness).filter((bridge) => bridge.enabled);
+
+  const profiles = createSlotProfilesForLayer(layer, layerIndex, enabledLayers, config, materialThickness);
+  if (profiles.length === 0) return [];
+
+  const profSegments = profiles
+    .map((profile) => ({
+      profile,
+      length: Math.max(0.01, profile.length ?? 0),
+    }))
+    .filter((seg) => seg.length > 0.01);
+  if (profSegments.length === 0) return [];
+
+  const totalPathLength = profSegments.reduce((sum, seg) => sum + seg.length, 0);
+  if (totalPathLength <= 0.01) return [];
+
+  const bridgesForLayer = protectedBridges.length > 0
+    ? protectedBridges
+    : [{
+        id: `slot-bridge-auto-${layer.id}`,
+        enabled: true,
+        positionPct: 50,
+        length: Math.max(4, Math.min(12, totalPathLength * 0.18)),
+        width: Math.max(0.9, Math.min(2.2, slotThickness * 0.3)),
+        edgeOffset: 0,
+        clearanceMargin: 0.35,
+      }];
+
+  const bridgeDepth = Math.max(0.01, layerDepth);
+  const bridgeGeometries: THREE_ACTUAL.BufferGeometry[] = [];
+
+  bridgesForLayer.forEach((bridge) => {
+    const actualLength = Math.max(0.2, Math.min(totalPathLength, bridge.length));
+    const desiredCenter = totalPathLength * (bridge.positionPct / 100);
+    const clampedCenter = Math.min(
+      totalPathLength - (actualLength / 2),
+      Math.max(actualLength / 2, desiredCenter)
+    );
+    const bridgeStartOnPath = clampedCenter - (actualLength / 2);
+    const bridgeEndOnPath = clampedCenter + (actualLength / 2);
+
+    // Slightly embed into surrounding body so boolean/merge unions are robust
+    // instead of tangent-only contacts that can produce non-manifold joins.
+    const embed = Math.min(Math.max(0.05, bridge.width * 0.35), Math.max(0.05, bridge.width * 0.5));
+
+    let pathCursor = 0;
+    profSegments.forEach(({ profile, length: segmentLength }) => {
+      const segmentStart = pathCursor;
+      const segmentEnd = pathCursor + segmentLength;
+      pathCursor = segmentEnd;
+
+      const overlapStart = Math.max(bridgeStartOnPath, segmentStart);
+      const overlapEnd = Math.min(bridgeEndOnPath, segmentEnd);
+      const overlapLength = overlapEnd - overlapStart;
+      if (overlapLength <= 0.01) {
+        return;
+      }
+
+      const overlapStartInSegment = overlapStart - segmentStart;
+      const localCenterX = (profile.xOffset ?? 0) + overlapStartInSegment + (overlapLength / 2);
+      const segmentCenterY = profile.yOffset ?? 0;
+      const segmentHalfSlot = Math.max(0.05, (profile.width ?? slotThickness) / 2);
+      const segmentRotation = ((profile.rotationDeg ?? 0) * Math.PI) / 180;
+
+      [-1, 1].forEach((side) => {
+        const localY = segmentCenterY + side * (segmentHalfSlot + bridge.edgeOffset + (bridge.width / 2) - embed);
+        const geo = createBridgeBlockGeometry(overlapLength, Math.max(0.2, bridge.width), bridgeDepth);
+        geo.translate(localCenterX, localY, centerZ);
+        geo.rotateZ(segmentRotation);
+        bridgeGeometries.push(geo);
+      });
+    });
+  });
+
+  return bridgeGeometries;
+};
+
+const unionSlotBridgeGeometry = async (
+  baseGeometry: THREE_ACTUAL.BufferGeometry,
+  bridgeGeometries: THREE_ACTUAL.BufferGeometry[],
+  layerName: string,
+  options?: { preferFastMerge?: boolean; weldTolerance?: number }
+): Promise<THREE_ACTUAL.BufferGeometry> => {
+  if (bridgeGeometries.length === 0) return baseGeometry;
+
+  // Bridge union often fails manifold on complex meshes. Use fast merge as primary strategy
+  // for bridges since they just need stable geometry for slot cutting, not manifold strictness.
+  const runFastMerge = () => {
+    const makeMergeCompatible = (geometry: THREE_ACTUAL.BufferGeometry) => {
+      let clone = geometry.clone();
+      if (clone.index) {
+        const expanded = clone.toNonIndexed();
+        clone.dispose();
+        clone = expanded;
+      }
+
+      Object.keys(clone.attributes).forEach((name) => {
+        if (name !== 'position') {
+          clone.deleteAttribute(name);
+        }
+      });
+      return clone;
+    };
+
+    const mergeCompatible = [baseGeometry, ...bridgeGeometries].map(makeMergeCompatible);
+    try {
+      const merged = BufferGeometryUtils.mergeGeometries(mergeCompatible, false) as THREE_ACTUAL.BufferGeometry | null;
+      if (!merged) {
+        throw new Error(`Bridge merge fallback returned null for ${layerName}`);
+      }
+      const weldTolerance = options?.weldTolerance ?? 0.0001;
+      const shouldWeld = weldTolerance > 0;
+      const out = shouldWeld
+        ? (BufferGeometryUtils.mergeVertices(merged, weldTolerance) as THREE_ACTUAL.BufferGeometry)
+        : merged;
+      if (out !== merged) {
+        merged.dispose();
+      }
+      out.computeVertexNormals();
+      out.computeBoundingBox();
+      return out;
+    } finally {
+      mergeCompatible.forEach((geometry) => geometry.dispose());
+    }
+  };
+
+  // Default to fast merge for bridges since manifold union often fails on complex meshes
+  // and we don't need strict manifold properties for slot cutting
+  if (options?.preferFastMerge !== false) {
+    return runFastMerge();
+  }
+
+  try {
+    return await manifoldUnionGeometries([baseGeometry, ...bridgeGeometries]);
+  } catch (unionErr) {
+    console.warn(`Bridge manifold union failed for ${layerName}; using fast merge`, unionErr);
+    return runFastMerge();
+  }
+};
+
 const createSlotProfilesForLayer = (
   layer: LayerConfig,
   layerIndex: number,
@@ -1043,6 +1334,426 @@ const createAngledSlotCuttersForLayer = (
   return cutters;
 };
 
+/**
+ * Create full-length bridge planes positioned at the same angles as slot cutters.
+ * These bridges will be unioned into the layer geometry before slot cutting,
+ * so the slot cutters naturally trim them to match the contour and preserve slot width.
+ */
+const createBakedBridgePlanesForLayer = (
+  layer: LayerConfig,
+  layerIndex: number,
+  enabledLayers: LayerConfig[],
+  config: SnowflakeConfig,
+  materialThickness: number,
+  centerZ: number,
+  depthZ: number,
+  meshMinX: number,
+  meshMaxX: number,
+  sourceGeoForContact: THREE_ACTUAL.BufferGeometry
+): THREE_ACTUAL.BufferGeometry[] => {
+  if (!config.slotEnabled || config.slotBridgesEnabled === false || !layer.slotBridgeEnabled) return [];
+
+  const widthAdjustmentPerSide = layer.slotWidthOffset ?? 0;
+  const enabledTextThicknesses = [
+    layer.primary.enabled ? (layer.primary.thickness || 0) : 0,
+    (layer.secondaryEnabled && layer.secondary.enabled) ? (layer.secondary.thickness || 0) : 0,
+  ];
+  const maxLayerTextThickness = Math.max(0, ...enabledTextThicknesses);
+  const effectiveBoldnessForSlot = Math.max(0, (config.globalStrokeWeight || 0) + (maxLayerTextThickness - 1.0));
+  const slotThickness = Math.max(
+    0.1,
+    materialThickness + effectiveBoldnessForSlot + config.slotWidth + widthAdjustmentPerSide
+  );
+
+  // Baked bridge mode is driven by the layer-level slotBridgeEnabled toggle.
+  // Do not require explicit bridge segment entries in layer.slotBridges.
+
+  const modelDiameter = 190;
+  const lengthAdjustmentPerSide = layer.slotLengthAdjustment ?? 0;
+  const adjLength = Math.max(2, config.slotLength + (lengthAdjustmentPerSide * 2));
+  const drawLength = Math.max(adjLength, (modelDiameter / 2) + 20);
+  const baseTiltExtensionLength = Math.max(0.01, adjLength * 0.6);
+  const tiltExtensionLengthAdjustment = layer.slotTiltExtensionLengthAdjustment ?? 0;
+  const tiltExtensionLength = Math.max(0.01, baseTiltExtensionLength + tiltExtensionLengthAdjustment);
+  const armAngle = layer.primary.rotationOffset ?? 0;
+  const armCount = getSlotArmCount(layer);
+  const bridge = Math.min(0.4, Math.max(0.15, slotThickness * 0.08));
+  const halfChannel = Math.max(0.12, (slotThickness - bridge) / 2);
+  const mateOverlap = Math.min(1.5, Math.max(0.35, slotThickness * 0.4));
+  const rearMateReach = getRearMateReach(drawLength, armCount, config.slotMode);
+  const rearExtensionReach = Math.min(tiltExtensionLength, rearMateReach);
+  const baseCrossTipInLength = Math.max(0.01, rearMateReach - rearExtensionReach);
+  const crossTipInLengthAdjustment = layer.slotCrossTipInLengthAdjustment ?? 0;
+  const crossTipInLength = Math.max(0.01, Math.min(rearMateReach, baseCrossTipInLength + crossTipInLengthAdjustment));
+
+  const bridgeGeometries: THREE_ACTUAL.BufferGeometry[] = [];
+  const seenBridgePlanes = new Set<string>();
+  let tiltBridgeDebugCount = 0;
+  const sourcePositions = sourceGeoForContact.getAttribute('position');
+  const createBridgePlaneGeometry = (
+    length: number,
+    width: number,
+    height: number
+  ): THREE_ACTUAL.BufferGeometry => {
+    const safeLength = Math.max(0.01, length);
+    const safeWidth = Math.max(0.01, width);
+    const safeHeight = Math.max(0.01, height);
+
+    if (!config.bevelEnabled) {
+      return new THREE_ACTUAL.BoxGeometry(safeLength, safeWidth, safeHeight);
+    }
+
+    const bevelPerSide = Math.min(
+      config.bevelAmount,
+      safeLength * 0.5,
+      safeWidth * 0.5,
+      safeHeight * 0.5
+    );
+
+    if (bevelPerSide <= 0.0001) {
+      return new THREE_ACTUAL.BoxGeometry(safeLength, safeWidth, safeHeight);
+    }
+
+    const halfLen = safeLength * 0.5;
+    const halfWid = safeWidth * 0.5;
+    const shape = new THREE_ACTUAL.Shape();
+    shape.moveTo(-halfLen, -halfWid);
+    shape.lineTo(halfLen, -halfWid);
+    shape.lineTo(halfLen, halfWid);
+    shape.lineTo(-halfLen, halfWid);
+    shape.lineTo(-halfLen, -halfWid);
+
+    const coreDepth = Math.max(0.001, safeHeight - (bevelPerSide * 2));
+    const bevelSegments = config.bevelType === 'chamfer'
+      ? 1
+      : Math.max(2, Math.min(config.bevelSegments, 8));
+    const beveled = new THREE_ACTUAL.ExtrudeGeometry(shape, {
+      depth: coreDepth,
+      bevelEnabled: true,
+      bevelThickness: bevelPerSide,
+      bevelSize: bevelPerSide,
+      bevelSegments,
+      curveSegments: 4,
+      steps: 1,
+    });
+    beveled.translate(0, 0, (-safeHeight * 0.5) + bevelPerSide);
+    return beveled;
+  };
+
+  const getSlotContactBounds = (
+    rotZDeg: number,
+    yOffset: number,
+    runStart: number,
+    runEnd: number,
+    mirrorY = false
+  ): { start: number; end: number } | null => {
+    if (!sourcePositions || sourcePositions.count === 0) return null;
+
+    const theta = (rotZDeg * Math.PI) / 180;
+    const cosTheta = Math.cos(theta);
+    const sinTheta = Math.sin(theta);
+    // Use a wider band around slot centerline so angled/beveled geometry
+    // contributes enough samples for stable contact detection.
+    const bandHalfWidth = Math.max(1.0, (slotThickness * 0.5) + 0.9);
+
+    let minContactX = Number.POSITIVE_INFINITY;
+    let maxContactX = Number.NEGATIVE_INFINITY;
+
+    for (let i = 0; i < sourcePositions.count; i++) {
+      const x = sourcePositions.getX(i);
+      const y = sourcePositions.getY(i);
+
+      // Convert world XY into slot-local frame (inverse rotZ).
+      const localX = (x * cosTheta) + (y * sinTheta);
+      const localY = (-x * sinTheta) + (y * cosTheta);
+
+      const yDelta = mirrorY
+        ? Math.abs(Math.abs(localY) - Math.abs(yOffset))
+        : Math.abs(localY - yOffset);
+      if (yDelta > bandHalfWidth) continue;
+      if (localX < runStart || localX > runEnd) continue;
+
+      if (localX < minContactX) minContactX = localX;
+      if (localX > maxContactX) maxContactX = localX;
+    }
+
+    if (!Number.isFinite(minContactX) || !Number.isFinite(maxContactX) || (maxContactX - minContactX) <= 0.01) {
+      return null;
+    }
+
+    return { start: minContactX, end: maxContactX };
+  };
+
+  /**
+   * Create a full-length bridge plane positioned at the same location as a slot cutter.
+   * Bridge is slightly thicker than the cutter to ensure it survives the cut and remains visible.
+   */
+  const addBridgePlane = (
+    nearX: number,
+    length: number,
+    bridgeThickness: number,
+    rotXDeg: number,
+    rotZDeg: number,
+    yOffset = 0,
+    strictContactClamp = false,
+    pairedCutThicknessBoost = 0,
+    autoWidthExtra = 1.0,
+    minSafetyMargin = 0.2,
+    mirrorYContact = false,
+    useContactClamp = true
+  ) => {
+    if (length <= 0.01 || bridgeThickness <= 0.01) return;
+
+    // Clamp to actual mesh-contact run so bridges do not extend past body edges.
+    const runStart = Math.min(nearX, nearX + length);
+    const runEnd = Math.max(nearX, nearX + length);
+    const clampedRunStart = Math.max(runStart, Math.min(meshMinX, meshMaxX));
+    const clampedRunEnd = Math.min(runEnd, Math.max(meshMinX, meshMaxX));
+    const contactBounds = useContactClamp
+      ? getSlotContactBounds(
+          rotZDeg,
+          yOffset,
+          clampedRunStart,
+          clampedRunEnd,
+          mirrorYContact
+        )
+      : null;
+    const nominalRunLength = Math.max(0, clampedRunEnd - clampedRunStart);
+    const contactLength = contactBounds ? Math.max(0, contactBounds.end - contactBounds.start) : 0;
+    // Vertex-sampled contact bounds can under-estimate runs on angled/short slots
+    // (notably tilt main and cross tip-in). If the sampled span is too small,
+    // fall back to the deterministic clamped run.
+    const contactLooksReliable = Boolean(contactBounds) && (
+      strictContactClamp
+        ? contactLength >= 0.15
+        : contactLength >= Math.max(1.0, nominalRunLength * 0.2)
+    );
+    const effectiveRunStart = contactLooksReliable && contactBounds
+      ? Math.max(clampedRunStart, contactBounds.start + (strictContactClamp ? 0.08 : 0))
+      : clampedRunStart;
+    const effectiveRunEnd = contactLooksReliable && contactBounds
+      ? Math.min(clampedRunEnd, contactBounds.end - (strictContactClamp ? 0.08 : 0))
+      : clampedRunEnd;
+    const clampedLength = effectiveRunEnd - effectiveRunStart;
+    if (clampedLength <= 0.01) return;
+
+    // Pull bridge ends slightly inside slot start/end so boolean cutting
+    // does not leave visible end caps at either side of the slot run.
+    const rawLength = Math.max(0.01, clampedLength);
+    const endpointInset = Math.min(BAKED_BRIDGE_END_INSET_MM, Math.max(0, (rawLength * 0.5) - 0.01));
+    const trimmedLength = Math.max(0.01, rawLength - (endpointInset * 2));
+    const trimmedNearX = effectiveRunStart + endpointInset;
+    
+    // Keep bridge Z slightly inside the plane thickness to avoid perfectly
+    // coplanar top/bottom faces, which are a common source of manifold-union failures.
+    // Use materialThickness (actual model thickness) not depthZ (bounding box span)
+    // to prevent bridge blocks from extending beyond model boundaries.
+    const zInset = Math.min(0.05, Math.max(0.01, materialThickness * 0.0025));
+    const bridgeHeightZ = Math.max(0.01, materialThickness - (zInset * 2));
+    const effectiveSlotWidth = Math.max(0.1, config.slotWidth + widthAdjustmentPerSide);
+    // Keep user baseline (slot width + 1mm), but never allow bridge to be thinner
+    // than the cutter thickness axis; otherwise subtraction can erase it entirely.
+    const minBridgeThicknessForCut = Math.max(
+      0.5,
+      effectiveSlotWidth + minSafetyMargin,
+      slotThickness + minSafetyMargin
+    );
+    const autoBridgeThickness = Math.max(
+      minBridgeThicknessForCut,
+      effectiveSlotWidth + autoWidthExtra,
+      slotThickness + autoWidthExtra
+    );
+    // Honor per-run requested thickness (used by tilt X-cut compensation).
+    // Previously this parameter was effectively ignored unless manual width was enabled.
+    const requestedBridgeThickness = Math.max(minBridgeThicknessForCut, bridgeThickness);
+    // In manual mode, honor the user-selected width directly (with only a tiny
+    // safety floor so subtraction cannot completely erase the bridge).
+    const baseBridgeThickness = layer.slotBridgeManualWidthEnabled
+      ? Math.max(minBridgeThicknessForCut, layer.slotBridgeManualWidth ?? autoBridgeThickness)
+      : Math.max(autoBridgeThickness, requestedBridgeThickness);
+    // Paired 240°/120° cutter regions remove more of the bridge silhouette than
+    // single-cutter regions. Add a small local thickness boost so visible bridge
+    // width remains consistent (cross main vs cross tip-in, tilt main consistency).
+    const bridgeThicknessMargin = Math.max(
+      minBridgeThicknessForCut,
+      baseBridgeThickness + pairedCutThicknessBoost
+    );
+    if (layerIndex === 2 && tiltBridgeDebugCount < 3) {
+      console.debug(
+        `TiltBridge thickness: requested=${bridgeThickness.toFixed(3)} auto=${autoBridgeThickness.toFixed(3)} final=${bridgeThicknessMargin.toFixed(3)} nearX=${trimmedNearX.toFixed(3)} len=${trimmedLength.toFixed(3)} y=${yOffset.toFixed(3)}`
+      );
+      tiltBridgeDebugCount += 1;
+    }
+    const bridgeKey = [
+      trimmedNearX.toFixed(3),
+      trimmedLength.toFixed(3),
+      bridgeThicknessMargin.toFixed(3),
+      bridgeHeightZ.toFixed(3),
+      rotZDeg.toFixed(3),
+      yOffset.toFixed(3),
+    ].join(':');
+    if (seenBridgePlanes.has(bridgeKey)) return;
+    seenBridgePlanes.add(bridgeKey);
+    // Keep bridge inside the source plane thickness (z-axis) for both sides of slot.
+    // Match model edge profile by applying the same bevel style used by base geometry.
+    const g = createBridgePlaneGeometry(trimmedLength, bridgeThicknessMargin, bridgeHeightZ);
+    g.translate(trimmedNearX + (trimmedLength / 2), yOffset, 0);
+    g.rotateZ((rotZDeg * Math.PI) / 180);
+    g.translate(0, 0, centerZ);
+    bridgeGeometries.push(g);
+  };
+
+  if (config.slotMode === '2-plane') {
+    if (layerIndex === 0) {
+      addBridgePlane(0, drawLength, slotThickness, 90, -armAngle, 0);
+    } else if (layerIndex === 1) {
+      addBridgePlane(0, drawLength, slotThickness, 270, -(armAngle + 180), 0);
+    }
+    return bridgeGeometries;
+  }
+
+  if (layerIndex === 0) {
+    addBridgePlane(-drawLength, drawLength, slotThickness, 240, -armAngle, 0);
+    if (config.slotMode === '3-plane' && armCount % 2 !== 0) {
+      addBridgePlane(-rearMateReach, rearMateReach, slotThickness, 120, -armAngle, 0);
+    }
+    return bridgeGeometries;
+  }
+
+  if (layerIndex === 1) {
+    addBridgePlane(0, drawLength, slotThickness, 240, -armAngle, 0);
+    const pairedTipInBoost = Math.max(0.45, slotThickness * 0.16);
+    addBridgePlane(-rearMateReach, crossTipInLength, slotThickness, 240, -armAngle, 0, true, pairedTipInBoost);
+    addBridgePlane(-rearMateReach, crossTipInLength, slotThickness, 120, -armAngle, 0, true, pairedTipInBoost);
+    return bridgeGeometries;
+  }
+
+  if (layerIndex === 2) {
+    // Tilt plane gets dual-angle main cutters (240 + 120), so it needs a
+    // stronger compensation than base/cross to keep visible bridge width.
+    const uniformTiltBoost = Math.max(1.25, slotThickness * 0.35);
+    const uniformTiltAutoWidthExtra = 2.0;
+    const uniformTiltSafetyMargin = 0.55;
+    // Tilt bridges face dual-angle X-cut (240° + 120°), so boost thickness to survive both cutters
+    const tiltBridgeThicknessBoost = Math.max(1.8, slotThickness * 0.55);
+    const tiltBridgeThickness = slotThickness + tiltBridgeThicknessBoost;
+    // Center run is where the 240/120 cutters overlap the most, so bias extra there.
+    const tiltCenterCutCompBoost = Math.max(1.4, slotThickness * 0.4);
+    // Preserve a guaranteed empty hub zone on tilt bridges so no bridge bars
+    // intrude into the center void.
+    const tiltHubKeepout = Math.max(2.8, slotThickness * 0.9);
+    const symmetricExtensionReach = Math.max(0.01, Math.min(rearExtensionReach, tiltExtensionLength));
+
+    // useContactClamp=true: sample actual mesh vertices projected onto the slot-local X axis
+    // so bridges stop at arm tips rather than extending to drawLength in empty space.
+    addBridgePlane(
+      tiltHubKeepout,
+      Math.max(0.01, drawLength - tiltHubKeepout),
+      tiltBridgeThickness,
+      240,
+      -armAngle,
+      0,
+      true,
+      tiltCenterCutCompBoost,
+      uniformTiltAutoWidthExtra,
+      uniformTiltSafetyMargin,
+      true,
+      true
+    );
+    addBridgePlane(
+      -symmetricExtensionReach,
+      Math.max(0.01, symmetricExtensionReach - tiltHubKeepout),
+      tiltBridgeThickness,
+      240,
+      -armAngle,
+      -((bridge / 2) + (halfChannel / 2)),
+      true,
+      uniformTiltBoost,
+      uniformTiltAutoWidthExtra,
+      uniformTiltSafetyMargin,
+      true,
+      true
+    );
+    addBridgePlane(
+      tiltHubKeepout,
+      Math.max(0.01, symmetricExtensionReach - tiltHubKeepout),
+      tiltBridgeThickness,
+      240,
+      -armAngle,
+      (bridge / 2) + (halfChannel / 2),
+      true,
+      uniformTiltBoost,
+      uniformTiltAutoWidthExtra,
+      uniformTiltSafetyMargin,
+      true,
+      true
+    );
+    return bridgeGeometries;
+  }
+
+  return bridgeGeometries;
+};
+
+const isManualSlotBridgeToggleOnlyChange = (prevConfig: SnowflakeConfig, nextConfig: SnowflakeConfig): boolean => {
+  if (prevConfig.layers.length !== nextConfig.layers.length) return false;
+
+  let sawToggleChange = false;
+
+  for (let i = 0; i < prevConfig.layers.length; i += 1) {
+    const prevLayer = prevConfig.layers[i];
+    const nextLayer = nextConfig.layers[i];
+
+    if ((prevLayer.slotBridgeManualWidthEnabled ?? false) !== (nextLayer.slotBridgeManualWidthEnabled ?? false)) {
+      sawToggleChange = true;
+    }
+
+    const prevComparable = {
+      ...prevLayer,
+      slotBridgeManualWidthEnabled: false,
+    };
+    const nextComparable = {
+      ...nextLayer,
+      slotBridgeManualWidthEnabled: false,
+    };
+
+    if (JSON.stringify(prevComparable) !== JSON.stringify(nextComparable)) {
+      return false;
+    }
+  }
+
+  return sawToggleChange;
+};
+
+const isManualSlotBridgeToggleOnlyLayerUpdate = (prevLayers: LayerConfig[], nextLayers: LayerConfig[]): boolean => {
+  if (prevLayers.length !== nextLayers.length) return false;
+
+  let sawToggleChange = false;
+
+  for (let i = 0; i < prevLayers.length; i += 1) {
+    const prevLayer = prevLayers[i];
+    const nextLayer = nextLayers[i];
+
+    if ((prevLayer.slotBridgeManualWidthEnabled ?? false) !== (nextLayer.slotBridgeManualWidthEnabled ?? false)) {
+      sawToggleChange = true;
+    }
+
+    const prevComparable = {
+      ...prevLayer,
+      slotBridgeManualWidthEnabled: false,
+    };
+    const nextComparable = {
+      ...nextLayer,
+      slotBridgeManualWidthEnabled: false,
+    };
+
+    if (JSON.stringify(prevComparable) !== JSON.stringify(nextComparable)) {
+      return false;
+    }
+  }
+
+  return sawToggleChange;
+};
+
 const applyWatertightSlotCuts = async (
   layerGeo: THREE_ACTUAL.BufferGeometry,
   layer: LayerConfig,
@@ -1059,7 +1770,7 @@ const applyWatertightSlotCuts = async (
   const profiles = createSlotProfilesForLayer(layer, layerIndex, enabledLayers, config, materialThickness);
   if (profiles.length === 0) return layerGeo;
 
-  const layerForCut = layerGeo.clone();
+  let layerForCut = layerGeo.clone();
   layerForCut.computeBoundingBox();
   const layerBounds = layerForCut.boundingBox;
   const layerCenterZ = layerBounds ? (layerBounds.min.z + layerBounds.max.z) * 0.5 : 0;
@@ -1096,6 +1807,71 @@ const applyWatertightSlotCuts = async (
     return layerGeo;
   }
 
+  // Merge bridge boxes directly into base geometry early.
+  // Bridges become part of the solid material, so slot cutting naturally preserves them
+  // by cutting around the extra solid rather than trying to survive dual-angle cutters.
+  if (config.slotEnabled && config.slotBridgesEnabled !== false && layer.slotBridgeEnabled) {
+    const bridgePlanes = createBakedBridgePlanesForLayer(
+      layer,
+      layerIndex,
+      enabledLayers,
+      config,
+      materialThickness,
+      layerCenterZ,
+      layerDepth,
+      layerBounds ? layerBounds.min.x : Number.NEGATIVE_INFINITY,
+      layerBounds ? layerBounds.max.x : Number.POSITIVE_INFINITY,
+      layerForCut
+    );
+
+    console.debug(
+      `SlotBridge: layer=${layerIndex} slotWidth=${config.slotWidth.toFixed(2)} widthOffset=${(layer.slotWidthOffset ?? 0).toFixed(2)} bridgePlanes=${bridgePlanes.length}`
+    );
+
+    if (bridgePlanes.length > 0) {
+      let geometriesToMerge: THREE_ACTUAL.BufferGeometry[] = [];
+      try {
+        // Normalize geometries to a common attribute/index layout before merge.
+        // Beveled bridge blocks can be non-indexed while layer geometry is indexed.
+        const makeMergeCompatible = (geometry: THREE_ACTUAL.BufferGeometry) => {
+          let clone = geometry.clone();
+          if (clone.index) {
+            const expanded = clone.toNonIndexed();
+            clone.dispose();
+            clone = expanded;
+          }
+          Object.keys(clone.attributes).forEach((name) => {
+            if (name !== 'position') {
+              clone.deleteAttribute(name);
+            }
+          });
+          return clone;
+        };
+
+        geometriesToMerge = [layerForCut, ...bridgePlanes].map(makeMergeCompatible);
+        const merged = BufferGeometryUtils.mergeGeometries(geometriesToMerge, false) as THREE_ACTUAL.BufferGeometry | null;
+        if (!merged) {
+          throw new Error(`Bridge merge returned null for layer ${layerIndex}`);
+        }
+        // Weld vertices at seams for cleaner geometry
+        const welded = BufferGeometryUtils.mergeVertices(merged, 0.0001) as THREE_ACTUAL.BufferGeometry;
+        if (welded !== merged) merged.dispose();
+        welded.computeVertexNormals();
+        welded.computeBoundingBox();
+
+        layerForCut.dispose();
+        layerForCut = welded;
+
+        console.debug(`Bridge merge successful for layer ${layerIndex}: bridges embedded in solid`);
+      } catch (mergeErr) {
+        console.warn(`Bridge merge failed for layer ${layerIndex}; continuing without bridges`, mergeErr);
+      } finally {
+        geometriesToMerge.forEach((geo) => geo.dispose());
+        bridgePlanes.forEach((geometry) => geometry.dispose());
+      }
+    }
+  }
+
   const runWorkerCut = async (): Promise<THREE_ACTUAL.BufferGeometry> => {
     const workerStart = performance.now();
     const previewQuality = config.quality;
@@ -1105,6 +1881,8 @@ const applyWatertightSlotCuts = async (
         ? 0.0003
         : 0.00036;
     const weldTolerance = options?.preferWorker ? previewWeldTolerance : 0.0002;
+      const largeWorkerBaseThreshold = 500000;
+      const largeWorkerMinReductionRatio = 0.996;
 
     const runSingleWorkerSubtract = async (
       source: THREE_ACTUAL.BufferGeometry,
@@ -1143,11 +1921,37 @@ const applyWatertightSlotCuts = async (
       return out;
     };
 
+    // Large export meshes benefit from an up-front weld before CSG.
+    let workerSourceGeo = layerForCut;
+    const sourceVertexCount = layerForCut.attributes.position?.count ?? 0;
+    if (sourceVertexCount > largeWorkerBaseThreshold) {
+      const preWeldTolerance = options?.preferWorker ? previewWeldTolerance : 0.00028;
+      const preWeld = BufferGeometryUtils.mergeVertices(layerForCut.clone(), preWeldTolerance) as THREE_ACTUAL.BufferGeometry;
+      if (preWeld !== layerForCut) {
+        const before = sourceVertexCount;
+        const after = preWeld.attributes.position?.count ?? before;
+        if (after <= Math.floor(before * largeWorkerMinReductionRatio)) {
+          preWeld.computeVertexNormals();
+          preWeld.computeBoundingBox();
+          workerSourceGeo = preWeld;
+          console.debug(`[slot-csg] ${layer.name} worker source pre-weld: ${before} -> ${after} verts`);
+        } else {
+          preWeld.dispose();
+        }
+      }
+    }
+
     let out: THREE_ACTUAL.BufferGeometry;
-    if (cutters.length <= 1) {
-      out = await runSingleWorkerSubtract(layerForCut, cutters);
+    // For dense export meshes with many cutters, prefer one-pass subtraction.
+    const useSinglePassForLargeMesh =
+      !options?.preferWorker
+      && (workerSourceGeo.attributes.position?.count ?? 0) > largeWorkerBaseThreshold
+      && cutters.length > 1;
+
+    if (cutters.length <= 1 || useSinglePassForLargeMesh) {
+      out = await runSingleWorkerSubtract(workerSourceGeo, cutters);
     } else {
-      let current = layerForCut.clone();
+      let current = workerSourceGeo.clone();
       for (const cutter of cutters) {
         const subtracted = await runSingleWorkerSubtract(current, [cutter]);
         current.dispose();
@@ -1162,6 +1966,10 @@ const applyWatertightSlotCuts = async (
         current = weldedStep;
       }
       out = current;
+    }
+
+    if (workerSourceGeo !== layerForCut) {
+      workerSourceGeo.dispose();
     }
 
     const workerMs = performance.now() - workerStart;
@@ -1185,7 +1993,9 @@ const applyWatertightSlotCuts = async (
     return out;
   };
 
-  if (options?.preferWorker) {
+  const forceWorkerForLargeMesh = (layerForCut.getAttribute('position')?.count ?? 0) > FORCE_WORKER_SLOT_CUT_VERTEX_THRESHOLD;
+
+  if (options?.preferWorker || forceWorkerForLargeMesh) {
     try {
       return await runWorkerCut();
     } catch (workerErr) {
@@ -1831,6 +2641,11 @@ const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isEnabled 
   slotWidthOffset: 0,
   slotCrossTipInLengthAdjustment: 0,
   slotTiltExtensionLengthAdjustment: 0,
+  slotBridgeEnabled: true,
+  slotBridgeManualWidthEnabled: false,
+  slotBridgeManualWidth: 6,
+  protectMatingClearance: true,
+  slotBridges: [],
   images: [],
 });
 
@@ -1851,6 +2666,7 @@ const createFactoryInitialState = (): SnowflakeConfig => ({
   bevelAmount: 0.4,
   bevelSegments: 5,
   slotEnabled: false,
+  slotBridgesEnabled: true,
   slotLength: 95,
   slotWidth: 0.2,
   slotMode: '3-plane',
@@ -1869,9 +2685,29 @@ const loadStartupState = (): SnowflakeConfig => {
     const parsed = JSON.parse(raw) as SnowflakeConfig;
     if (!parsed || !Array.isArray(parsed.layers) || parsed.layers.length === 0) return factory;
     if (typeof parsed.projectName !== 'string') return factory;
+    const mergedTop = { ...factory, ...parsed };
+    const slotMaterial = mergedTop.extrusionDepth + (mergedTop.bevelEnabled ? Math.min(mergedTop.bevelAmount, mergedTop.extrusionDepth / 2) * 2 : 0);
+    const slotThickness = Math.max(0.1, slotMaterial + (mergedTop.slotWidth || 0));
+
     return {
-      ...factory,
-      ...parsed,
+      ...mergedTop,
+      layers: (Array.isArray(parsed.layers) ? parsed.layers : factory.layers).map((layer, idx) => {
+        const normalizedLayer: LayerConfig = {
+          ...(factory.layers[idx] ?? createDefaultLayer(`layer-${idx + 1}`, `Plane ${idx + 1}`)),
+          ...layer,
+          slotBridgeEnabled: typeof layer?.slotBridgeEnabled === 'boolean' ? layer.slotBridgeEnabled : true,
+          slotBridgeManualWidthEnabled: typeof layer?.slotBridgeManualWidthEnabled === 'boolean' ? layer.slotBridgeManualWidthEnabled : false,
+          slotBridgeManualWidth: Number.isFinite(Number(layer?.slotBridgeManualWidth))
+            ? Math.max(0.5, Number(layer?.slotBridgeManualWidth))
+            : 6,
+          protectMatingClearance: typeof layer?.protectMatingClearance === 'boolean' ? layer.protectMatingClearance : true,
+          slotBridges: normalizeSlotBridgeList((layer ?? {}) as LayerConfig),
+        };
+        return {
+          ...normalizedLayer,
+          slotBridges: getClearanceProtectedBridges(normalizedLayer, slotThickness),
+        };
+      }),
       highlightActivePlaneOnly: typeof parsed.highlightActivePlaneOnly === 'boolean'
         ? parsed.highlightActivePlaneOnly
         : false,
@@ -2319,8 +3155,11 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!autoRegenerate3D) return;
-    setRendered3DIfChanged(config);
-  }, [autoRegenerate3D, config, setRendered3DIfChanged]);
+    // Drive passive regeneration from the committed 3D snapshot only.
+    // This prevents edit-only state changes (like manual bridge width toggle)
+    // from forcing a full mesh regeneration.
+    setRendered3DIfChanged(config3D);
+  }, [autoRegenerate3D, config3D, setRendered3DIfChanged]);
 
   // Memoized enabled layers with caching
   const getEnabledLayers = useCallback((config: SnowflakeConfig): LayerConfig[] => {
@@ -2382,6 +3221,19 @@ const App: React.FC = () => {
     ].join('|');
   }, []);
 
+  const makeModelCacheKey = useCallback((
+    cfg: SnowflakeConfig,
+    quality: DesignQuality,
+    targetLayerIds?: string[]
+  ): string => {
+    const normalizedTargets = (targetLayerIds ?? []).filter(Boolean);
+    return hashConfig(cfg)
+      + '|q:' + quality
+      + '|targets:' + (normalizedTargets.length > 0 ? [...normalizedTargets].sort().join(',') : 'all')
+      + '|slotBridge:' + SLOT_BRIDGE_RULE_VERSION
+      + '|algo:' + GEOMETRY_ALGO_VERSION;
+  }, []);
+
   const makeSlotCutCacheKey = useCallback((
     sourceGeo: THREE_ACTUAL.BufferGeometry,
     layer: LayerConfig,
@@ -2391,6 +3243,8 @@ const App: React.FC = () => {
     bevelPerSide: number,
     options: { baseIsManifold?: boolean; preferWorker?: boolean }
   ): string => {
+    const materialThickness = cfg.extrusionDepth + (cfg.bevelEnabled ? bevelPerSide * 2 : 0);
+
     const enabledLayerSummary = enabledLayers.map((l) => ({
       id: l.id,
       slotType: l.slotType,
@@ -2405,6 +3259,13 @@ const App: React.FC = () => {
       primaryRotationOffset: l.primary.rotationOffset ?? 0,
       secondaryEnabled: l.secondaryEnabled && l.secondary.enabled,
       secondaryThickness: l.secondary.thickness ?? 0,
+      // Baked bridges affect slot-cut output, so include in cache key
+      slotBridgeEnabled: l.slotBridgeEnabled ?? true,
+      slotBridgesEnabled: cfg.slotBridgesEnabled !== false,
+      slotBridgeManualWidthEnabled: l.slotBridgeManualWidthEnabled ?? false,
+      slotBridgeManualWidth: l.slotBridgeManualWidth ?? 6,
+      protectMatingClearance: l.protectMatingClearance ?? true,
+      slotBridgesHash: JSON.stringify(l.slotBridges ?? []),
     }));
 
     const layerSummary = {
@@ -2421,10 +3282,18 @@ const App: React.FC = () => {
       primaryRotationOffset: layer.primary.rotationOffset ?? 0,
       secondaryEnabled: layer.secondaryEnabled && layer.secondary.enabled,
       secondaryThickness: layer.secondary.thickness ?? 0,
+      // Baked bridges affect slot-cut output, so include in cache key
+      slotBridgeEnabled: layer.slotBridgeEnabled ?? true,
+      slotBridgesEnabled: cfg.slotBridgesEnabled !== false,
+      slotBridgeManualWidthEnabled: layer.slotBridgeManualWidthEnabled ?? false,
+      slotBridgeManualWidth: layer.slotBridgeManualWidth ?? 6,
+      protectMatingClearance: layer.protectMatingClearance ?? true,
+      slotBridgesHash: JSON.stringify(layer.slotBridges ?? []),
     };
 
     const slotRelevant = {
       layerIndex,
+      slotBridgeRuleVersion: SLOT_BRIDGE_RULE_VERSION,
       layerSummary,
       enabledLayerSummary,
       sourceSig: makeGeometryFingerprint(sourceGeo),
@@ -2570,10 +3439,9 @@ const App: React.FC = () => {
                             let currentX = 0;
                             let maxGlyphX = 0;
                             glyphs.forEach((glyph, i) => {
-                                const offset = group.charOffsets[i] || { x: 0, y: 0 };
-                                const bbox = glyph.getBoundingBox();
-                                const glyphRightEdge = currentX + offset.x + (bbox.x2 * scale);
-                                if (glyphRightEdge > maxGlyphX) maxGlyphX = glyphRightEdge;
+                              const adjustedCommands = getAdjustedGlyphPathCommands(glyph, group.text, group.charOffsets, i, currentX, group.fontSize);
+                              const bounds = getPathCommandBounds(adjustedCommands);
+                              if (bounds && bounds.maxX > maxGlyphX) maxGlyphX = bounds.maxX;
                                 currentX += (glyph.advanceWidth * scale) + group.letterSpacing;
                             });
 
@@ -2625,14 +3493,119 @@ const App: React.FC = () => {
     //   clearSlotCache(); slotCutCache.clear();
     // }
 
-    // Cancel in-flight slot cuts if config is about to change fundamentally
-    if ('layers' in updates || 'slotEnabled' in updates || 'slotLength' in updates || 
-        'slotWidth' in updates || 'slotMode' in updates || 'globalStrokeWeight' in updates) {
+    const isSlotMaterialUpdate = () => {
+      return ('slotEnabled' in updates) ||
+             ('slotLength' in updates) ||
+             ('slotWidth' in updates) ||
+             ('slotMode' in updates) ||
+             ('globalStrokeWeight' in updates);
+    };
+
+    const manualBridgeToggleOnlyLayerUpdate =
+      'layers' in updates &&
+      Array.isArray(updates.layers) &&
+      isManualSlotBridgeToggleOnlyLayerUpdate(config.layers, updates.layers as LayerConfig[]);
+
+    // Cancel in-flight slot cuts if core slot parameters or material geometry changes.
+    // Bridge changes are now handled through the cache key mechanism (baked-in bridges
+    // mean bridge settings affect the slot-cut cache key, so different bridges = different
+    // cache entries). Simple layer changes still cancel to ensure immediate UI feedback.
+    if (isSlotMaterialUpdate()) {
+      cancelAllSlotCuts();
+    } else if ('layers' in updates && !manualBridgeToggleOnlyLayerUpdate) {
+      // Any layer config change triggers cancellation for responsiveness.
+      // The cache key mechanism will prevent redundant work.
       cancelAllSlotCuts();
     }
 
+    let needsHardRefreshAfterUpdate = false;
+
     setConfig(prev => {
       let next = { ...prev, ...updates };
+
+      const hasExplicitGlobalBridgeToggle = Object.prototype.hasOwnProperty.call(updates, 'slotBridgesEnabled');
+      const slotWillBeEnabled = next.slotEnabled === true;
+
+      // Default behavior: when slot cutting is enabled, global slot bridging
+      // should come up enabled unless the current update explicitly toggles it.
+      if (slotWillBeEnabled && !hasExplicitGlobalBridgeToggle && next.slotBridgesEnabled === false) {
+        next = {
+          ...next,
+          slotBridgesEnabled: true,
+        };
+      }
+
+      const prevGlobalBridgesEnabled = prev.slotBridgesEnabled !== false;
+      const nextGlobalBridgesEnabled = next.slotBridgesEnabled !== false;
+      const toggledGlobalBridgesWhileSlotting =
+        prev.slotEnabled === true &&
+        next.slotEnabled === true &&
+        prevGlobalBridgesEnabled !== nextGlobalBridgesEnabled;
+
+      if (toggledGlobalBridgesWhileSlotting) {
+        const nextMeshKey = makeModelCacheKey(next, next.quality);
+        const hasCachedTargetMesh = modelCache3D.has(nextMeshKey);
+        needsHardRefreshAfterUpdate = !hasCachedTargetMesh;
+      }
+
+      // Detect manual toggle-only changes at layer level BEFORE normalization
+      // to completely avoid slot bridges array modifications that would trigger cache invalidation
+      const manualWidthToggleOnlyByLayer = new Set<number>();
+      if ('layers' in updates && Array.isArray(updates.layers)) {
+        (updates.layers as LayerConfig[]).forEach((updateLayer, idx) => {
+          const prevLayer = prev.layers[idx];
+          if (prevLayer && updateLayer) {
+            const widthToggleChanged = (prevLayer.slotBridgeManualWidthEnabled ?? false) !== (updateLayer.slotBridgeManualWidthEnabled ?? false);
+            
+            // For toggle-only detection, check if ONLY the toggle property differs
+            // Use shallow comparison of all keys except the toggle
+            const prevWithoutToggle = { ...prevLayer, slotBridgeManualWidthEnabled: false };
+            const updateWithoutToggle = { ...updateLayer, slotBridgeManualWidthEnabled: false };
+            
+            // Shallow comparison: if they have the same keys and values, it's toggle-only
+            const propsMatch = JSON.stringify(prevWithoutToggle) === JSON.stringify(updateWithoutToggle);
+            
+            if (widthToggleChanged && propsMatch) {
+              manualWidthToggleOnlyByLayer.add(idx);
+            }
+          }
+        });
+      }
+
+      // Normalize Phase 1 slot-bridge config so legacy and partially-populated
+      // states always use the same first-class mating-clearance semantics.
+      // EXCEPTION: skip on manual bridge toggle-only changes to preserve cache stability
+      const normalizedMaterialThickness = next.extrusionDepth + (next.bevelEnabled ? Math.min(next.bevelAmount, next.extrusionDepth / 2) * 2 : 0);
+      const normalizedSlotThickness = Math.max(0.1, normalizedMaterialThickness + (next.slotWidth || 0));
+      next = {
+        ...next,
+        layers: next.layers.map((layer, idx) => {
+          const prevLayer = prev.layers[idx];
+          const isManualWidthToggleOnly = manualWidthToggleOnlyByLayer.has(idx);
+          
+          if (isManualWidthToggleOnly) {
+            // For manual toggle-only changes, preserve layer exactly as-is without normalization
+            // to prevent cache key changes
+            return layer;
+          }
+          
+          const normalizedLayer = {
+            ...layer,
+            slotBridgeEnabled: typeof layer.slotBridgeEnabled === 'boolean' ? layer.slotBridgeEnabled : true,
+            slotBridgeManualWidthEnabled: typeof layer.slotBridgeManualWidthEnabled === 'boolean' ? layer.slotBridgeManualWidthEnabled : false,
+            slotBridgeManualWidth: Number.isFinite(Number(layer.slotBridgeManualWidth))
+              ? Math.max(0.5, Number(layer.slotBridgeManualWidth))
+              : 6,
+            protectMatingClearance: typeof layer.protectMatingClearance === 'boolean' ? layer.protectMatingClearance : true,
+            slotBridges: normalizeSlotBridgeList(layer),
+          };
+          
+          return {
+            ...normalizedLayer,
+            slotBridges: getClearanceProtectedBridges(normalizedLayer, normalizedSlotThickness),
+          };
+        }),
+      };
 
       // Single authoritative slot-mode enforcement:
       // - 2-plane => Base/Cross enabled, Tilt disabled, fixed mating orientation
@@ -2737,6 +3710,12 @@ const App: React.FC = () => {
           debounceTimer.current = null;
       }
 
+      const skipAutoRegenerateForManualBridgeToggle =
+        !commitTo3D &&
+        Object.keys(updates).length === 1 &&
+        'layers' in updates &&
+        (manualBridgeToggleOnlyLayerUpdate || isManualSlotBridgeToggleOnlyChange(prev, next));
+
       if (commitTo3D) {
         setConfig3D(next);
         setHistory(h => {
@@ -2754,7 +3733,16 @@ const App: React.FC = () => {
         // Debounce update for 3D view
         // If in 3D mode: fast debounce (150ms) for responsiveness
         // If in 2D mode: slower debounce (500ms) to avoid lagging the UI with background generation
-        if (autoRegenerate3D) {
+        if (skipAutoRegenerateForManualBridgeToggle) {
+          // Manual width toggle visibility change only: keep UI state, do not touch
+          // 3D snapshot/debounce pipelines to avoid unnecessary refreshes.
+        } else if (autoRegenerate3D) {
+          if (needsHardRefreshAfterUpdate) {
+            // Hard-refresh path: skip debounce so the 3D snapshot regenerates now.
+            setConfig3D(next);
+            setRendered3DIfChanged(next);
+            return next;
+          }
           const delay = viewMode === '3d' ? 150 : 500;
           if (delay === 150) {
             debouncedUpdate3D(next);
@@ -2767,7 +3755,13 @@ const App: React.FC = () => {
       }
       return next;
     });
-  }, [historyIndex, viewMode, autoRegenerate3D]);
+
+    if (needsHardRefreshAfterUpdate) {
+      // Only force an immediate regeneration when the toggled bridge state has
+      // no cached 3D model available.
+      cancelAllSlotCuts({ includePreview: true, terminateCSGWorker: true });
+    }
+  }, [historyIndex, viewMode, autoRegenerate3D, makeModelCacheKey]);
 
   useEffect(() => {
       return () => {
@@ -2884,10 +3878,7 @@ const App: React.FC = () => {
     // Full-config cache key — any property change invalidates the cache.
     // Previously used a partial key that missed hub/abstract parameters,
     // causing 3D to show stale mesh when those values changed.
-    const meshKey = hashConfig(config)
-      + '|q:' + (overrideQuality || config.quality)
-      + '|targets:' + (targetLayerIds.length > 0 ? [...targetLayerIds].sort().join(',') : 'all')
-      + '|algo:' + GEOMETRY_ALGO_VERSION;
+    const meshKey = makeModelCacheKey(config, (overrideQuality || config.quality), targetLayerIds);
 
     // Check cache first unless this is an explicit force-refresh run.
     if (generationMode !== 'refresh') {
@@ -2979,6 +3970,25 @@ const App: React.FC = () => {
         curveSeg = Math.max(minCurveByQuality, Math.round(curveSeg * (1 - reduction)));
         bevelSegCap = Math.max(minBevelByQuality, Math.round(bevelSegCap * (1 - reduction * 0.8)));
       }
+
+      // Slot-enabled exports can explode in triangle count compared with preview.
+      // Keep export detail above preview, but cap tessellation so medium quality
+      // remains practical for CSG and file generation.
+      if (config.slotEnabled) {
+        if (qualityToUse === 'low') {
+          qMult = Math.min(qMult, 0.45);
+          curveSeg = Math.min(curveSeg, 8);
+          bevelSegCap = Math.min(bevelSegCap, 4);
+        } else if (qualityToUse === 'med') {
+          qMult = Math.min(qMult, 0.55);
+          curveSeg = Math.min(curveSeg, 10);
+          bevelSegCap = Math.min(bevelSegCap, 5);
+        } else {
+          qMult = Math.min(qMult, 0.72);
+          curveSeg = Math.min(curveSeg, 14);
+          bevelSegCap = Math.min(bevelSegCap, 7);
+        }
+      }
     }
 
     // `extrusionDepth` represents the overall material thickness INCLUDING any bevel.
@@ -3031,6 +4041,12 @@ const App: React.FC = () => {
       slotWidthOffset: layer.slotWidthOffset,
       slotCrossTipInLengthAdjustment: layer.slotCrossTipInLengthAdjustment,
       slotTiltExtensionLengthAdjustment: layer.slotTiltExtensionLengthAdjustment,
+      // Baked bridges affect slot-cut output, so include in sync signature
+      slotBridgeEnabled: layer.slotBridgeEnabled,
+      slotBridgeManualWidthEnabled: layer.slotBridgeManualWidthEnabled,
+      slotBridgeManualWidth: layer.slotBridgeManualWidth,
+      protectMatingClearance: layer.protectMatingClearance,
+      slotBridges: layer.slotBridges,
     });
 
     const canReuseSyncedPlanes = config.syncAllLayers && !config.slotEnabled && layersToGenerate.length > 1;
@@ -3158,10 +4174,9 @@ const App: React.FC = () => {
 
       glyphs.forEach((glyph, i) => {
         try {
-          const offset = textGroup.charOffsets[i] || { x: 0, y: 0 };
-          const path = glyph.getPath(currentX + offset.x, offset.y, textGroup.fontSize);
+          const adjustedCommands = getAdjustedGlyphPathCommands(glyph, textGroup.text, textGroup.charOffsets, i, currentX, textGroup.fontSize);
           const threePath = new THREE_ACTUAL.ShapePath();
-          path.commands.forEach(cmd => {
+          adjustedCommands.forEach(cmd => {
             if (cmd.type === 'M') threePath.moveTo(cmd.x, cmd.y);
             else if (cmd.type === 'L') threePath.lineTo(cmd.x, cmd.y);
             else if (cmd.type === 'Q') threePath.quadraticCurveTo(cmd.x1, cmd.y1, cmd.x, cmd.y);
@@ -3972,6 +4987,8 @@ const App: React.FC = () => {
           continue;
         }
 
+        const forceWorkerSlotCut = mergedLayerGeo.attributes.position.count > FORCE_WORKER_SLOT_CUT_VERTEX_THRESHOLD;
+
         let cutSourceGeo = mergedLayerGeo;
         if (config.slotEnabled) {
           const cutWithSlotCache = async (
@@ -4063,16 +5080,22 @@ const App: React.FC = () => {
           const canUseFlat2DPreUnion = true;
           // For interactive slot preview, always prefer worker-first cutting.
           // Manifold on very dense text meshes can OOM and stall the UI.
-          const preferWorkerPreviewCut = interactiveSlotPreview;
+          const preferWorkerPreviewCut = interactiveSlotPreview || forceWorkerSlotCut;
           try {
             if (canUseFlat2DPreUnion && layerShapeInstances.length > 0) {
               const slotUnionCurveSegments = interactiveSlotPreview
                 ? 4
-                : qualityToUse === 'low'
-                  ? 14
-                  : qualityToUse === 'med'
-                    ? 20
-                    : 28;
+                : generationMode === 'export'
+                  ? (qualityToUse === 'low'
+                      ? 10
+                      : qualityToUse === 'med'
+                        ? 12
+                        : 16)
+                  : qualityToUse === 'low'
+                    ? 14
+                    : qualityToUse === 'med'
+                      ? 20
+                      : 28;
               unioned2DLayerGeo = await manifoldUnionAndExtrudeShapeInstances(
                 layerShapeInstances,
                 effectiveDepth,
@@ -4162,6 +5185,40 @@ const App: React.FC = () => {
           });
         }
 
+        const layerMaterialThickness = config.extrusionDepth + (config.bevelEnabled ? bevelPerSide * 2 : 0);
+        const sourceBounds = cutSourceGeo.boundingBox ?? (() => {
+          cutSourceGeo.computeBoundingBox();
+          return cutSourceGeo.boundingBox;
+        })();
+        const sourceCenterZ = sourceBounds ? (sourceBounds.min.z + sourceBounds.max.z) * 0.5 : 0;
+        // Bridge height should match model thickness, not cut geometry depth, to prevent
+        // bridge blocks from extending beyond model boundaries
+        const slotBridgeGeometries = (config.slotEnabled && config.slotBridgesEnabled !== false && layer.slotBridgeEnabled)
+          ? []
+          : createSlotBridgeGeometriesForLayer(
+              layer,
+              slotContextIndex,
+              slotContextLayers,
+              config,
+              layerMaterialThickness,
+              sourceCenterZ,
+              layerMaterialThickness
+            );
+
+        if (slotBridgeGeometries.length > 0) {
+          try {
+            const bridgedGeo = await unionSlotBridgeGeometry(cutSourceGeo, slotBridgeGeometries, layer.name, {
+              preferFastMerge: interactiveSlotPreview,
+            });
+            cutSourceGeo.dispose();
+            cutSourceGeo = bridgedGeo;
+          } catch (bridgeErr) {
+            console.warn(`Slot bridge generation failed for ${layer.name}; keeping base cut geometry`, bridgeErr);
+          } finally {
+            slotBridgeGeometries.forEach((geo) => geo.dispose());
+          }
+        }
+
         if (canReuseSyncedPlanes && lIdx === 0 && !syncedTemplateGeo) {
           syncedTemplateGeo = cutSourceGeo.clone();
         }
@@ -4245,7 +5302,7 @@ const App: React.FC = () => {
     // Cache the result before returning
     modelCache3D.set(meshKey, group);
     return group;
-  }, [config, rendered3DConfig, dynamicFonts, loadFont, viewMode]);
+  }, [config, rendered3DConfig, dynamicFonts, loadFont, viewMode, makeModelCacheKey]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -4485,6 +5542,40 @@ const App: React.FC = () => {
     if (latest <= 0) return null;
     return new Date(latest).toLocaleString();
   }, [estimateCalibrationReadout]);
+  const bridgeVariantPrecomputeSeqRef = useRef(0);
+  useEffect(() => {
+    if (viewMode !== '3d') return;
+    if (!rendered3DConfig.slotEnabled) return;
+    if (isProcessing3D || isComputingSlots) return;
+
+    const currentBridgeOn = rendered3DConfig.slotBridgesEnabled !== false;
+    const oppositeConfig: SnowflakeConfig = {
+      ...rendered3DConfig,
+      slotBridgesEnabled: !currentBridgeOn,
+    };
+
+    const oppositeKey = makeModelCacheKey(oppositeConfig, oppositeConfig.quality);
+    if (modelCache3D.has(oppositeKey)) return;
+
+    const seq = ++bridgeVariantPrecomputeSeqRef.current;
+    const timer = setTimeout(() => {
+      if (seq !== bridgeVariantPrecomputeSeqRef.current) return;
+      generateMesh(() => {}, oppositeConfig.quality, oppositeConfig, 'preview').catch((err) => {
+        console.debug('Bridge variant background precompute skipped/failed:', err);
+      });
+    }, 350);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [
+    viewMode,
+    rendered3DConfig,
+    isProcessing3D,
+    isComputingSlots,
+    makeModelCacheKey,
+    generateMesh,
+  ]);
 
   const estimateExportStats = useCallback(async (
     format: 'stl' | '3mf',
@@ -5104,12 +6195,12 @@ const App: React.FC = () => {
          const glyphs = font.stringToGlyphs(group.text);
          let currentX = 0;
          glyphs.forEach((glyph, i) => {
-            const offset = group.charOffsets[i] || { x:0, y:0 };
-            const path = glyph.getPath(currentX + offset.x, offset.y, group.fontSize);
-            d += path.toPathData(2) + ' ';
-            allCommands.push(...path.commands);
-            currentX += (glyph.advanceWidth * scale) + group.letterSpacing;
-         });
+          const adjustedCommands = getAdjustedGlyphPathCommands(glyph, group.text, group.charOffsets, i, currentX, group.fontSize);
+          const path = makePathFromCommands(adjustedCommands);
+          d += path.toPathData(2) + ' ';
+          allCommands.push(...path.commands);
+          currentX += (glyph.advanceWidth * scale) + group.letterSpacing;
+        });
          return { d, commands: allCommands };
       };
 
@@ -5254,11 +6345,31 @@ const App: React.FC = () => {
     reader.onload = (event) => {
       try {
         const loaded = JSON.parse(event.target?.result as string) as Partial<SnowflakeConfig>;
+        const factory = createFactoryInitialState();
+        const mergedTop = { ...factory, ...loaded } as SnowflakeConfig;
+        const slotMaterial = mergedTop.extrusionDepth + (mergedTop.bevelEnabled ? Math.min(mergedTop.bevelAmount, mergedTop.extrusionDepth / 2) * 2 : 0);
+        const slotThickness = Math.max(0.1, slotMaterial + (mergedTop.slotWidth || 0));
+
         const normalizedLoaded: SnowflakeConfig = {
-          ...createFactoryInitialState(),
-          ...loaded,
-          layers: Array.isArray(loaded.layers) ? loaded.layers : createFactoryInitialState().layers,
-          projectName: typeof loaded.projectName === 'string' ? loaded.projectName : createFactoryInitialState().projectName,
+          ...mergedTop,
+          layers: (Array.isArray(loaded.layers) ? loaded.layers : factory.layers).map((layer, idx) => {
+            const normalizedLayer: LayerConfig = {
+              ...(factory.layers[idx] ?? createDefaultLayer(`layer-${idx + 1}`, `Plane ${idx + 1}`)),
+              ...layer,
+              slotBridgeEnabled: typeof layer?.slotBridgeEnabled === 'boolean' ? layer.slotBridgeEnabled : true,
+              slotBridgeManualWidthEnabled: typeof layer?.slotBridgeManualWidthEnabled === 'boolean' ? layer.slotBridgeManualWidthEnabled : false,
+              slotBridgeManualWidth: Number.isFinite(Number(layer?.slotBridgeManualWidth))
+                ? Math.max(0.5, Number(layer?.slotBridgeManualWidth))
+                : 6,
+              protectMatingClearance: typeof layer?.protectMatingClearance === 'boolean' ? layer.protectMatingClearance : true,
+              slotBridges: normalizeSlotBridgeList((layer ?? {}) as LayerConfig),
+            };
+            return {
+              ...normalizedLayer,
+              slotBridges: getClearanceProtectedBridges(normalizedLayer, slotThickness),
+            };
+          }),
+          projectName: typeof loaded.projectName === 'string' ? loaded.projectName : factory.projectName,
           highlightActivePlaneOnly: typeof loaded.highlightActivePlaneOnly === 'boolean'
             ? loaded.highlightActivePlaneOnly
             : false,
