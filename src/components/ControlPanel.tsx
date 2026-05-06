@@ -154,9 +154,18 @@ const DESCRIPTIONS: Record<string, string> = {
   "Cap Length": "Length of the connecting cap shape.",
   "Slot Length Adj": "Fine-tune the slot cut length for this specific plane.",
   "Slot Width Offset": "Fine-tune the slot cut width (clearance) for this specific plane.",
+  "Manual Slot Width Adjustment": "Enables per-slot width controls for this plane so each slot segment can be tuned independently.",
+  "Cross Main Slot Width Offset": "Additional width offset applied only to the Cross plane main slot.",
+  "Cross Tip-In Slot Width Offset": "Additional width offset applied only to the Cross plane tip-in slot.",
+  "Tilt Main Slot Width Offset": "Additional width offset applied only to the Tilt plane main slot.",
+  "Tilt Extension Slot Width Offset": "Additional width offset applied only to the Tilt plane extension slot.",
   "Enable Slot Bridges": "Add connector segments along this plane's slot edge to reconnect free-floating islands.",
   "Manual Slot Bridge Width": "Overrides the automatic slot bridge width with a wider minimum width for added strength.",
   "Slot Bridge Width": "Minimum width of the baked slot bridge block used when manual bridge width is enabled.",
+  "Cross Main Bridge Width": "Manual bridge width override applied only to the Cross plane main slot bridge.",
+  "Cross Tip-In Bridge Width": "Manual bridge width override applied only to the Cross plane tip-in slot bridge.",
+  "Tilt Main Bridge Width": "Manual bridge width override applied only to the Tilt plane main slot bridge.",
+  "Tilt Extension Bridge Width": "Manual bridge width override applied only to the Tilt plane extension slot bridge.",
   "Protect Mating Clearance": "First-class fit rule. Keeps bridge geometry out of the mating slot envelope so assembly remains possible.",
   "Bridge Position": "Position of this connector along the slot path.",
   "Bridge Length": "Length of this connector segment measured along the slot path.",
@@ -969,10 +978,12 @@ const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, m
   const safeValue = typeof value === 'number' && !isNaN(value) ? value : (min || 0);
 
   const [localValue, setLocalValue] = useState<string>(safeValue.toFixed(decimals));
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentValueRef = useRef(safeValue);
   const isDirty = useRef(false);
+  const hasPendingCommit = useRef(false);
 
   useEffect(() => {
     const safe = typeof value === 'number' && !isNaN(value) ? value : (min || 0);
@@ -986,6 +997,7 @@ const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, m
     next = parseFloat(next.toFixed(decimals));
     currentValueRef.current = next;
     setLocalValue(next.toFixed(decimals));
+    hasPendingCommit.current = true;
     onChange(next, commit);
   };
 
@@ -1004,7 +1016,6 @@ const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, m
   const stopAdjust = () => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     if (intervalRef.current) clearInterval(intervalRef.current);
-    onChange(currentValueRef.current, true);
   };
 
   const commit = () => {
@@ -1017,9 +1028,11 @@ const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, m
           onChange(clamped, true);
       }
       isDirty.current = false;
+      hasPendingCommit.current = false;
       setLocalValue(clamped.toFixed(decimals));
     } else {
       isDirty.current = false;
+      hasPendingCommit.current = false;
       setLocalValue(value.toFixed(decimals));
     }
   };
@@ -1027,18 +1040,37 @@ const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, m
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setLocalValue(e.target.value);
     isDirty.current = true;
+    hasPendingCommit.current = true;
     // Don't call onChange during typing - wait for commit
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
+    const isSpace = e.key === ' ' || e.key === 'Spacebar';
+    if (e.key === 'Enter' || isSpace) {
+        if (isSpace) e.preventDefault();
         commit();
         (e.target as HTMLInputElement).blur();
     } else if (e.key === 'Escape') {
         setLocalValue(value.toFixed(decimals));
         isDirty.current = false;
+        hasPendingCommit.current = false;
+    } else if (e.key.length === 1 && !/[0-9eE+\-.]/.test(e.key)) {
+        commit();
     }
   };
+
+  useEffect(() => {
+      const handlePointerDown = (event: PointerEvent) => {
+          if (!hasPendingCommit.current) return;
+          if (!containerRef.current) return;
+          const target = event.target as Node | null;
+          if (target && containerRef.current.contains(target)) return;
+          commit();
+      };
+
+      document.addEventListener('pointerdown', handlePointerDown);
+      return () => document.removeEventListener('pointerdown', handlePointerDown);
+  });
 
   useEffect(() => {
       return () => {
@@ -1051,7 +1083,7 @@ const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, m
   const largeStep = step * 10;
 
   return (
-    <div className={`relative flex items-center bg-slate-900 border border-white/10 rounded-lg h-6 w-28 overflow-hidden select-none ${className} ${disabled ? 'opacity-50 pointer-events-none' : ''}`}
+    <div ref={containerRef} className={`relative flex items-center bg-slate-900 border border-white/10 rounded-lg h-6 w-28 overflow-hidden select-none ${className} ${disabled ? 'opacity-50 pointer-events-none' : ''}`}
          style={{
            position: 'relative',
            display: 'flex',
@@ -1347,6 +1379,8 @@ const ControlRow: React.FC<{ label: string; children: React.ReactNode; onReset?:
                     </svg>
                   </button>
                 )}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center' }}>
                 {onSaveDefault && (
                   <button
                     onClick={onSaveDefault}
@@ -1373,8 +1407,6 @@ const ControlRow: React.FC<{ label: string; children: React.ReactNode; onReset?:
                     </svg>
                   </button>
                 )}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center' }}>
                 {children}
             </div>
         </div>
@@ -1738,10 +1770,12 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                 </svg>
               </button>
             )}
+          </div>
+          <div className="flex items-center">
             {(onSaveDefault || onSaveAsDefault) && (
               <button
                 onClick={onSaveDefault || onSaveAsDefault}
-                className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center ml-1"
+                className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1"
                 title="Save as Default"
                 style={{
                   width: '16px',
@@ -1752,7 +1786,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  marginLeft: '4px',
+                  marginRight: '4px',
                   cursor: 'pointer',
                   transition: 'all 0.2s'
                 }}
@@ -1764,8 +1798,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                 </svg>
               </button>
             )}
+            <DeferredNumberInput value={safeValue} min={min} max={max} step={step} onChange={onChange} disabled={disabled} suffix={suffix} />
           </div>
-          <DeferredNumberInput value={safeValue} min={min} max={max} step={step} onChange={onChange} disabled={disabled} suffix={suffix} />
         </div>
         <input
             type="range"
@@ -1818,6 +1852,9 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   const btnBase = "h-8 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all border border-white/5 flex items-center justify-center";
   const btnActive = `${btnBase} bg-sky-500 text-white border-sky-400/50 shadow-md`;
   const btnInactive = `${btnBase} bg-slate-900/50 text-slate-500 hover:text-slate-300`;
+  const settingsHeaderClass = "flex items-center gap-2 border-b border-cyan-400/30 pb-1";
+  const settingsHeaderDotClass = "w-1.5 h-1.5 rounded-full bg-cyan-400";
+  const settingsHeaderLabelClass = "text-[10px] font-black uppercase tracking-widest text-cyan-300";
 
   const getLayerShortcut = (idx: number) => {
     if (idx === 0) return shortcuts?.exportBasePlaneSTL;
@@ -1955,13 +1992,20 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                      </div>
                   </ControlRow>
                   <div className="space-y-4 pt-4 border-t border-white/5">
-                     <div className="flex justify-between items-center">
-                         <div className="flex items-center">
-                             <InfoTooltip label={t('Edge Profile')} description={getDescription('Edge Profile', t)} />
-                             {!config.bevelEnabled && <button onClick={() => onUpdate({ bevelEnabled: true }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
-                             {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
-                         </div>
-                         <Toggle label={config.bevelEnabled ? t('ON') : t('OFF')} checked={config.bevelEnabled} onChange={(c) => onUpdate({ bevelEnabled: c }, true)} />
+                    <div className={settingsHeaderClass}>
+                      <div className={settingsHeaderDotClass}></div>
+                      <span className={settingsHeaderLabelClass}>{t('Edge Profile')}</span>
+                        <div className="ml-auto flex items-center">
+                          {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
+                          <Toggle
+                            label={config.bevelEnabled ? t('ON') : t('OFF')}
+                            checked={config.bevelEnabled}
+                            onChange={(c) => onUpdate({ bevelEnabled: c }, true)}
+                          />
+                        </div>
+                    </div>
+                     <div className="flex items-center justify-end">
+                       {!config.bevelEnabled && <button onClick={() => onUpdate({ bevelEnabled: true }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
                      </div>
                      {config.bevelEnabled && (
                         <div className="space-y-3">
@@ -2067,13 +2111,13 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                               </svg>
                             </button>
                           )}
+                       </div>
+                       <div className="flex items-center gap-2">
                           {onSaveAsDefault && (
                             <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}>
                               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg>
                             </button>
                           )}
-                       </div>
-                       <div className="flex items-center gap-2">
                           <span className="text-[10px] font-black text-slate-500">(D: <span className="text-white">{currentStats.activeGroupDiameter.toFixed(1)}mm</span>)</span>
                           <InfoTooltip label={t('Outer Radius Lock')} description={t('Lock toggled: when on, keep current outer radius constant while editing other parameters; when off, changes freely update size.')}
                                        className="flex items-center gap-2">
@@ -2119,26 +2163,40 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
               </div>
 
               <div className="space-y-4 pt-4 border-t border-white/5">
-                <div className="flex justify-between items-center">
-                    <div className="flex items-center">
-                        <InfoTooltip label={t('Mirror Effect')} description={getDescription('Mirror Effect', t)} />
-                        {!groupData.mirrorEnabled && <button onClick={() => updateGroup(activeGroup, { mirrorEnabled: true }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
-                        {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
-                    </div>
-                    <Toggle label={groupData.mirrorEnabled ? t('ON') : t('OFF')} checked={groupData.mirrorEnabled} onChange={(c) => updateGroup(activeGroup, { mirrorEnabled: c }, true)} />
+                <div className={settingsHeaderClass}>
+                  <div className={settingsHeaderDotClass}></div>
+                  <span className={settingsHeaderLabelClass}>{t('Mirror Effect')}</span>
+                  <div className="ml-auto flex items-center">
+                    {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
+                    <Toggle
+                      label={groupData.mirrorEnabled ? t('ON') : t('OFF')}
+                      checked={groupData.mirrorEnabled}
+                      onChange={(c) => updateGroup(activeGroup, { mirrorEnabled: c }, true)}
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center justify-end">
+                  {!groupData.mirrorEnabled && <button onClick={() => updateGroup(activeGroup, { mirrorEnabled: true }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
                 </div>
                 {groupData.mirrorEnabled && renderSlider(t('Mirror Offset'), groupData.mirrorOffset, -200, 200, 0.1, (v, c) => updateGroup(activeGroup, { mirrorOffset: v }, c), "mm", false, 0)}
               </div>
 
               {groupData.underline && (
-                  <div className="space-y-4 pt-4 border-t border-white/5">
-                      <div className="flex justify-between items-center">
-                          <div className="flex items-center">
-                              <InfoTooltip label={t('Underline')} description={getDescription('Underline', t)} />
-                                {groupData.underline.enabled && <button onClick={() => updateGroup(activeGroup, { underline: { ...groupData.underline, enabled: false } }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
-                                {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
+                    <div className="space-y-4 pt-4 border-t border-white/5">
+                      <div className={settingsHeaderClass}>
+                      <div className={settingsHeaderDotClass}></div>
+                      <span className={settingsHeaderLabelClass}>{t('Underline')}</span>
+                          <div className="ml-auto flex items-center">
+                            {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
+                            <Toggle
+                              label={groupData.underline.enabled ? t('ON') : t('OFF')}
+                              checked={groupData.underline.enabled}
+                              onChange={(c) => updateGroup(activeGroup, { underline: { ...groupData.underline, enabled: c } }, true)}
+                            />
                           </div>
-                          <Toggle label={groupData.underline.enabled ? t('ON') : t('OFF')} checked={groupData.underline.enabled} onChange={(c) => updateGroup(activeGroup, { underline: { ...groupData.underline, enabled: c } }, true)} />
+                      </div>
+                        <div className="flex items-center justify-end">
+                              {groupData.underline.enabled && <button onClick={() => updateGroup(activeGroup, { underline: { ...groupData.underline, enabled: false } }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
                       </div>
                       {groupData.underline.enabled && (
                           <div className="space-y-4 animate-in slide-in-from-top-2 duration-200">
@@ -2338,16 +2396,10 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                             borderBottom: '1px solid rgba(255,255,255,0.05)',
                             paddingBottom: '8px'
                           }}>
-                          <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest"
-                                style={{
-                                  fontSize: '10px',
-                                  fontWeight: '900',
-                                  color: '#64748b',
-                                  textTransform: 'uppercase',
-                                  letterSpacing: '0.1em'
-                                }}>
-                            {t('Hub Properties')}
-                          </span>
+                          <div className={settingsHeaderClass}>
+                            <div className={settingsHeaderDotClass}></div>
+                            <span className={settingsHeaderLabelClass}>{t('Hub Properties')}</span>
+                          </div>
                           <div className="flex items-center gap-3" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                                <ControlRow label={t('Visible')} onReset={() => updateHubConfig({ enabled: true }, true)} onSaveDefault={onSaveAsDefault} isModified={!activeLayer.hubs[selectedHubIndex].enabled} t={t}>
                                    <div className="flex justify-end">
@@ -2384,14 +2436,21 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                      {activeLayer.hubs[selectedHubIndex].shape === 'circle' ? (
                        <>
                           {renderSlider(t('Rotation'), activeLayer.hubs[selectedHubIndex].rotationOffset, -180, 180, 1, (v, c) => updateHubConfig({ rotationOffset: v }, c), "°", false, 0)}
-                          <div className="space-y-4 pt-4 border-t border-white/5">
-                              <div className="flex justify-between items-center">
-                                  <div className="flex items-center">
-                                      <InfoTooltip label={t('Oscillation Enable')} description={getDescription('Oscillation Enable', t)} />
-                                        {activeLayer.hubs[selectedHubIndex].oscillationEnabled && <button onClick={() => updateHubConfig({ oscillationEnabled: false }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
-                                        {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
+                            <div className="space-y-4 pt-4 border-t border-white/5">
+                              <div className={settingsHeaderClass}>
+                              <div className={settingsHeaderDotClass}></div>
+                              <span className={settingsHeaderLabelClass}>{t('Oscillation')}</span>
+                                  <div className="ml-auto flex items-center">
+                                    {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
+                                    <Toggle
+                                      label={activeLayer.hubs[selectedHubIndex].oscillationEnabled ? t('ON') : t('OFF')}
+                                      checked={activeLayer.hubs[selectedHubIndex].oscillationEnabled}
+                                      onChange={(c) => updateHubConfig({ oscillationEnabled: c }, true)}
+                                    />
                                   </div>
-                                  <Toggle label={activeLayer.hubs[selectedHubIndex].oscillationEnabled ? t('ON') : t('OFF')} checked={activeLayer.hubs[selectedHubIndex].oscillationEnabled} onChange={(c) => updateHubConfig({ oscillationEnabled: c }, true)} />
+                              </div>
+                                <div className="flex items-center justify-end">
+                                      {activeLayer.hubs[selectedHubIndex].oscillationEnabled && <button onClick={() => updateHubConfig({ oscillationEnabled: false }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
                               </div>
                               {activeLayer.hubs[selectedHubIndex].oscillationEnabled && (<>{renderSlider(t('Amplitude'), activeLayer.hubs[selectedHubIndex].oscillationAmplitude, 1, 100, 0.1, (v, c) => updateHubConfig({ oscillationAmplitude: v }, c), "mm", false, 5)}{renderSlider(t('Frequency'), activeLayer.hubs[selectedHubIndex].oscillationFrequency, 3, 24, 1, (v, c) => updateHubConfig({ oscillationFrequency: v }, c), "", false, 6)}</>)}
                           </div>
@@ -2478,8 +2537,9 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                {activeLayer.abstracts.length > 0 && activeLayer.abstracts[selectedAbstractIndex] && (
                  <div className="space-y-3 animate-in fade-in duration-200">
                     {/* Title row */}
-                    <div className="border-b border-white/5 pb-1">
-                        <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{activeLayer.abstracts[selectedAbstractIndex].type === 'fractal' ? t('Fractal Settings') : t('Shape Settings')}</span>
+                    <div className={settingsHeaderClass}>
+                      <div className={settingsHeaderDotClass}></div>
+                      <span className={settingsHeaderLabelClass}>{activeLayer.abstracts[selectedAbstractIndex].type === 'fractal' ? t('Fractal Settings') : t('Shape Settings')}</span>
                     </div>
                     {/* Toggle row */}
                     <div className="flex items-center gap-2 pb-2">
@@ -2537,9 +2597,9 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                         {activeLayer.abstracts[selectedAbstractIndex].type === 'fractal' && (
                             <div className="space-y-4 pt-2">
                                 <div className="space-y-2">
-                                    <div className="flex items-center gap-2 border-b border-emerald-500/30 pb-1">
-                                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
-                                        <span className="text-[10px] font-black uppercase text-emerald-400">{t('Branching Structure')}</span>
+                                    <div className={settingsHeaderClass}>
+                                      <div className={settingsHeaderDotClass}></div>
+                                      <span className={settingsHeaderLabelClass}>{t('Branching Structure')}</span>
                                     </div>
                                     {renderSlider(t('Trunk Length'), activeLayer.abstracts[selectedAbstractIndex].trunkLength ?? 0, 0, 100, 1, (v, c) => updateAbstractConfig({ trunkLength: v }, c), "mm", false, 0)}
                                     {renderSlider(t('Branches Per Node'), activeLayer.abstracts[selectedAbstractIndex].branchesPerNode ?? 2, 1, 12, 0.1, (v, c) => updateAbstractConfig({ branchesPerNode: v }, c), "", false, 2)}
@@ -2556,9 +2616,9 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                 </div>
 
                                 <div className="space-y-2">
-                                    <div className="flex items-center gap-2 border-b border-sky-500/30 pb-1 pt-2">
-                                        <div className="w-1.5 h-1.5 rounded-full bg-sky-500"></div>
-                                        <span className="text-[10px] font-black uppercase text-sky-400">{t('Branch Geometry')}</span>
+                                    <div className={settingsHeaderClass}>
+                                      <div className={settingsHeaderDotClass}></div>
+                                      <span className={settingsHeaderLabelClass}>{t('Branch Geometry')}</span>
                                     </div>
                                     {renderSlider(t('Branch Angle'), activeLayer.abstracts[selectedAbstractIndex].branchAngle ?? 45, 0, 180, 1, (v, c) => updateAbstractConfig({ branchAngle: v }, c), "°", false, 45)}
                                     {renderSlider(t('Initial Length'), activeLayer.abstracts[selectedAbstractIndex].initialLength ?? 30, 1, 100, 1, (v, c) => updateAbstractConfig({ initialLength: v }, c), "mm", false, 30)}
@@ -2794,9 +2854,11 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                         <div className="flex items-center">
                             <InfoTooltip label={t('Sync All Planes')} description={getDescription('Sync All Planes', t)} />
                             {!config.syncAllLayers && <button onClick={() => onUpdate({ syncAllLayers: true })} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
-                            {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
                         </div>
+                      <div className="flex items-center">
+                        {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
                         <Toggle label={config.syncAllLayers ? t('ON') : t('OFF')} checked={config.syncAllLayers} onChange={(c) => onUpdate({ syncAllLayers: c })} />
+                      </div>
                     </div>
                       <div className="flex justify-between items-center">
                         <div className="flex items-center">
@@ -2885,13 +2947,64 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                        <div className="w-full h-px bg-white/5 my-1"></div>
                                       {renderSlider(t('Slot Length Adj'), layer.slotLengthAdjustment || 0, -50, 50, 0.05, (v, c) => handleLayerUpdate(idx, { slotLengthAdjustment: v }, c), "mm", false, 0)}
                                        {renderSlider(t('Slot Width Offset'), layer.slotWidthOffset || 0, -2, 2, 0.05, (v, c) => handleLayerUpdate(idx, { slotWidthOffset: v }, c), "mm", false, 0)}
-                                      {config.slotMode === '3-plane' && idx === 1 &&
-                                        renderSlider(t('Cross Tip-In Adj'), layer.slotCrossTipInLengthAdjustment || 0, -50, 50, 0.05, (v, c) => handleLayerUpdate(idx, { slotCrossTipInLengthAdjustment: v }, c), "mm", false, 0)
-                                      }
-                                      {config.slotMode === '3-plane' && idx === 2 &&
-                                        renderSlider(t('Tilt Extension Adj'), layer.slotTiltExtensionLengthAdjustment || 0, -50, 50, 0.05, (v, c) => handleLayerUpdate(idx, { slotTiltExtensionLengthAdjustment: v }, c), "mm", false, 0)
-                                      }
+                                      {config.slotMode === '3-plane' && (idx === 1 || idx === 2) && (
+                                        <>
+                                          <div className="flex justify-between items-center">
+                                            <InfoTooltip label={t('Manual Slot Width Adjustment')} description={getDescription('Manual Slot Width Adjustment', t)} />
+                                            <Toggle
+                                              label={layer.slotManualWidthEnabled ? t('ON') : t('OFF')}
+                                              checked={Boolean(layer.slotManualWidthEnabled)}
+                                              onChange={(checked) => handleLayerUpdate(idx, { slotManualWidthEnabled: checked }, false)}
+                                            />
+                                          </div>
+                                          {layer.slotManualWidthEnabled && idx === 1 && (
+                                            <>
+                                              <div className="flex justify-between items-center">
+                                                <InfoTooltip label={t('Cross Main Slot Width Offset')} description={getDescription('Cross Main Slot Width Offset', t)} />
+                                                <Toggle
+                                                  label={layer.slotWidthCrossMainOffsetEnabled ? t('ON') : t('OFF')}
+                                                  checked={Boolean(layer.slotWidthCrossMainOffsetEnabled)}
+                                                  onChange={(checked) => handleLayerUpdate(idx, { slotWidthCrossMainOffsetEnabled: checked }, false)}
+                                                />
+                                              </div>
+                                              {layer.slotWidthCrossMainOffsetEnabled && renderSlider(t('Cross Main Slot Width Offset'), layer.slotWidthCrossMainOffset || 0, -2, 2, 0.05, (v, c) => handleLayerUpdate(idx, { slotWidthCrossMainOffset: v }, c), "mm", false, 0)}
 
+                                              <div className="flex justify-between items-center">
+                                                <InfoTooltip label={t('Cross Tip-In Slot Width Offset')} description={getDescription('Cross Tip-In Slot Width Offset', t)} />
+                                                <Toggle
+                                                  label={layer.slotWidthCrossTipInOffsetEnabled ? t('ON') : t('OFF')}
+                                                  checked={Boolean(layer.slotWidthCrossTipInOffsetEnabled)}
+                                                  onChange={(checked) => handleLayerUpdate(idx, { slotWidthCrossTipInOffsetEnabled: checked }, false)}
+                                                />
+                                              </div>
+                                              {layer.slotWidthCrossTipInOffsetEnabled && renderSlider(t('Cross Tip-In Slot Width Offset'), layer.slotWidthCrossTipInOffset || 0, -2, 2, 0.05, (v, c) => handleLayerUpdate(idx, { slotWidthCrossTipInOffset: v }, c), "mm", false, 0)}
+                                            </>
+                                          )}
+                                          {layer.slotManualWidthEnabled && idx === 2 && (
+                                            <>
+                                              <div className="flex justify-between items-center">
+                                                <InfoTooltip label={t('Tilt Main Slot Width Offset')} description={getDescription('Tilt Main Slot Width Offset', t)} />
+                                                <Toggle
+                                                  label={layer.slotWidthTiltMainOffsetEnabled ? t('ON') : t('OFF')}
+                                                  checked={Boolean(layer.slotWidthTiltMainOffsetEnabled)}
+                                                  onChange={(checked) => handleLayerUpdate(idx, { slotWidthTiltMainOffsetEnabled: checked }, false)}
+                                                />
+                                              </div>
+                                              {layer.slotWidthTiltMainOffsetEnabled && renderSlider(t('Tilt Main Slot Width Offset'), layer.slotWidthTiltMainOffset || 0, -2, 2, 0.05, (v, c) => handleLayerUpdate(idx, { slotWidthTiltMainOffset: v }, c), "mm", false, 0)}
+
+                                              <div className="flex justify-between items-center">
+                                                <InfoTooltip label={t('Tilt Extension Slot Width Offset')} description={getDescription('Tilt Extension Slot Width Offset', t)} />
+                                                <Toggle
+                                                  label={layer.slotWidthTiltExtensionOffsetEnabled ? t('ON') : t('OFF')}
+                                                  checked={Boolean(layer.slotWidthTiltExtensionOffsetEnabled)}
+                                                  onChange={(checked) => handleLayerUpdate(idx, { slotWidthTiltExtensionOffsetEnabled: checked }, false)}
+                                                />
+                                              </div>
+                                              {layer.slotWidthTiltExtensionOffsetEnabled && renderSlider(t('Tilt Extension Slot Width Offset'), layer.slotWidthTiltExtensionOffset || 0, -2, 2, 0.05, (v, c) => handleLayerUpdate(idx, { slotWidthTiltExtensionOffset: v }, c), "mm", false, 0)}
+                                            </>
+                                          )}
+                                        </>
+                                      )}
                                       {config.slotBridgesEnabled !== false && (
                                         <>
                                           <div className="w-full h-px bg-white/5 my-1"></div>
@@ -2916,31 +3029,71 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                               </div>
 
                                               {layer.slotBridgeManualWidthEnabled && (
-                                                renderSlider(
-                                                  t('Slot Bridge Width'),
-                                                  layer.slotBridgeManualWidth || 6,
-                                                  0.5,
-                                                  20,
-                                                  0.05,
-                                                  (v, c) => handleLayerUpdate(idx, { slotBridgeManualWidth: v }, c),
-                                                  "mm",
-                                                  false,
-                                                  6
-                                                )
+                                                <>
+                                                  {renderSlider(
+                                                    t('Slot Bridge Width'),
+                                                    layer.slotBridgeManualWidth || 6,
+                                                    0.5,
+                                                    20,
+                                                    0.05,
+                                                    (v, c) => handleLayerUpdate(idx, { slotBridgeManualWidth: v }, c),
+                                                    "mm",
+                                                    false,
+                                                    6
+                                                  )}
+                                                  {config.slotMode === '3-plane' && idx === 1 && (
+                                                    <>
+                                                      <div className="flex justify-between items-center">
+                                                        <InfoTooltip label={t('Cross Main Bridge Width')} description={getDescription('Cross Main Bridge Width', t)} />
+                                                        <Toggle
+                                                          label={layer.slotBridgeCrossMainManualWidthEnabled ? t('ON') : t('OFF')}
+                                                          checked={Boolean(layer.slotBridgeCrossMainManualWidthEnabled)}
+                                                          onChange={(checked) => handleLayerUpdate(idx, { slotBridgeCrossMainManualWidthEnabled: checked }, false)}
+                                                        />
+                                                      </div>
+                                                      {layer.slotBridgeCrossMainManualWidthEnabled && renderSlider(t('Cross Main Bridge Width'), layer.slotBridgeCrossMainManualWidth || 6, 0.5, 20, 0.05, (v, c) => handleLayerUpdate(idx, { slotBridgeCrossMainManualWidth: v }, c), "mm", false, 6)}
+
+                                                      <div className="flex justify-between items-center">
+                                                        <InfoTooltip label={t('Cross Tip-In Bridge Width')} description={getDescription('Cross Tip-In Bridge Width', t)} />
+                                                        <Toggle
+                                                          label={layer.slotBridgeCrossTipInManualWidthEnabled ? t('ON') : t('OFF')}
+                                                          checked={Boolean(layer.slotBridgeCrossTipInManualWidthEnabled)}
+                                                          onChange={(checked) => handleLayerUpdate(idx, { slotBridgeCrossTipInManualWidthEnabled: checked }, false)}
+                                                        />
+                                                      </div>
+                                                      {layer.slotBridgeCrossTipInManualWidthEnabled && renderSlider(t('Cross Tip-In Bridge Width'), layer.slotBridgeCrossTipInManualWidth || 6, 0.5, 20, 0.05, (v, c) => handleLayerUpdate(idx, { slotBridgeCrossTipInManualWidth: v }, c), "mm", false, 6)}
+                                                    </>
+                                                  )}
+                                                  {config.slotMode === '3-plane' && idx === 2 && (
+                                                    <>
+                                                      <div className="flex justify-between items-center">
+                                                        <InfoTooltip label={t('Tilt Main Bridge Width')} description={getDescription('Tilt Main Bridge Width', t)} />
+                                                        <Toggle
+                                                          label={layer.slotBridgeTiltMainManualWidthEnabled ? t('ON') : t('OFF')}
+                                                          checked={Boolean(layer.slotBridgeTiltMainManualWidthEnabled)}
+                                                          onChange={(checked) => handleLayerUpdate(idx, { slotBridgeTiltMainManualWidthEnabled: checked }, false)}
+                                                        />
+                                                      </div>
+                                                      {layer.slotBridgeTiltMainManualWidthEnabled && renderSlider(t('Tilt Main Bridge Width'), layer.slotBridgeTiltMainManualWidth || 6, 0.5, 20, 0.05, (v, c) => handleLayerUpdate(idx, { slotBridgeTiltMainManualWidth: v }, c), "mm", false, 6)}
+
+                                                      <div className="flex justify-between items-center">
+                                                        <InfoTooltip label={t('Tilt Extension Bridge Width')} description={getDescription('Tilt Extension Bridge Width', t)} />
+                                                        <Toggle
+                                                          label={layer.slotBridgeTiltExtensionManualWidthEnabled ? t('ON') : t('OFF')}
+                                                          checked={Boolean(layer.slotBridgeTiltExtensionManualWidthEnabled)}
+                                                          onChange={(checked) => handleLayerUpdate(idx, { slotBridgeTiltExtensionManualWidthEnabled: checked }, false)}
+                                                        />
+                                                      </div>
+                                                      {layer.slotBridgeTiltExtensionManualWidthEnabled && renderSlider(t('Tilt Extension Bridge Width'), layer.slotBridgeTiltExtensionManualWidth || 6, 0.5, 20, 0.05, (v, c) => handleLayerUpdate(idx, { slotBridgeTiltExtensionManualWidth: v }, c), "mm", false, 6)}
+                                                    </>
+                                                  )}
+                                                </>
                                               )}
                                             </>
                                           )}
                                         </>
                                       )}
 
-                                      <div className="flex justify-between items-center">
-                                        <InfoTooltip label={t('Protect Mating Clearance')} description={getDescription('Protect Mating Clearance', t)} />
-                                        <Toggle
-                                          label={(layer.protectMatingClearance !== false) ? t('ON') : t('OFF')}
-                                          checked={layer.protectMatingClearance !== false}
-                                          onChange={(checked) => handleLayerUpdate(idx, { protectMatingClearance: checked }, true)}
-                                        />
-                                      </div>
                                    </>
                                )}
                             </div>
@@ -2951,7 +3104,10 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                 </div>
                 {config.slotEnabled && (
                     <div className="p-3 bg-slate-800/30 rounded-xl border border-white/5 space-y-4 mt-4">
-                        <div className="text-[10px] font-black uppercase text-slate-500 border-b border-white/5 pb-2 mb-2">{t('All Planes')}</div>
+                        <div className={settingsHeaderClass}>
+                          <div className={settingsHeaderDotClass}></div>
+                          <span className={settingsHeaderLabelClass}>{t('All Planes')}</span>
+                        </div>
                         {renderSlider(t('Slot Length'), config.slotLength, 10, 200, 0.05, (v, c) => onUpdate({ slotLength: v }, c), "mm", false, 95)}
                         {renderSlider(t('Slot Width'), config.slotWidth, 0, 3, 0.05, (v, c) => onUpdate({ slotWidth: v }, c), "mm", false, 0.2)}
                     </div>

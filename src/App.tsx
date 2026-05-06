@@ -809,6 +809,48 @@ const getRearMateReach = (
   return Math.max(0.01, fullRearReach * Math.cos(halfGapRad));
 };
 
+const getEffectiveSlotWidthOffset = (
+  layer: LayerConfig,
+  section: 'crossMain' | 'crossTipIn' | 'tiltMain' | 'tiltExtension'
+): number => {
+  const base = layer.slotWidthOffset ?? 0;
+  if (!(layer.slotManualWidthEnabled ?? false)) {
+    return base;
+  }
+  if (section === 'crossMain') {
+    return base + ((layer.slotWidthCrossMainOffsetEnabled ?? false) ? (layer.slotWidthCrossMainOffset ?? 0) : 0);
+  }
+  if (section === 'crossTipIn') {
+    return base + ((layer.slotWidthCrossTipInOffsetEnabled ?? false) ? (layer.slotWidthCrossTipInOffset ?? 0) : 0);
+  }
+  if (section === 'tiltMain') {
+    return base + ((layer.slotWidthTiltMainOffsetEnabled ?? false) ? (layer.slotWidthTiltMainOffset ?? 0) : 0);
+  }
+  return base + ((layer.slotWidthTiltExtensionOffsetEnabled ?? false) ? (layer.slotWidthTiltExtensionOffset ?? 0) : 0);
+};
+
+const getEffectiveBridgeManualWidth = (
+  layer: LayerConfig,
+  section: 'crossMain' | 'crossTipIn' | 'tiltMain' | 'tiltExtension'
+): number | null => {
+  if (!(layer.slotBridgeManualWidthEnabled ?? false)) return null;
+
+  if (section === 'crossMain' && (layer.slotBridgeCrossMainManualWidthEnabled ?? false)) {
+    return layer.slotBridgeCrossMainManualWidth ?? layer.slotBridgeManualWidth ?? 6;
+  }
+  if (section === 'crossTipIn' && (layer.slotBridgeCrossTipInManualWidthEnabled ?? false)) {
+    return layer.slotBridgeCrossTipInManualWidth ?? layer.slotBridgeManualWidth ?? 6;
+  }
+  if (section === 'tiltMain' && (layer.slotBridgeTiltMainManualWidthEnabled ?? false)) {
+    return layer.slotBridgeTiltMainManualWidth ?? layer.slotBridgeManualWidth ?? 6;
+  }
+  if (section === 'tiltExtension' && (layer.slotBridgeTiltExtensionManualWidthEnabled ?? false)) {
+    return layer.slotBridgeTiltExtensionManualWidth ?? layer.slotBridgeManualWidth ?? 6;
+  }
+
+  return layer.slotBridgeManualWidth ?? 6;
+};
+
 const SLOT_BRIDGE_RULE_VERSION = 'slot-bridge-phase1-u';
 const BAKED_BRIDGE_END_INSET_MM = 0.1;
 const failedBridgeUnionAttemptKeys = new Set<string>();
@@ -828,12 +870,25 @@ const makeBridgeUnionAttemptKey = (
     config.slotMode,
     Number(config.slotWidth || 0).toFixed(3),
     Number(layer.slotWidthOffset || 0).toFixed(3),
+    Number(layer.slotWidthCrossMainOffset || 0).toFixed(3),
+    Number(layer.slotWidthCrossTipInOffset || 0).toFixed(3),
+    Number(layer.slotWidthTiltMainOffset || 0).toFixed(3),
+    Number(layer.slotWidthTiltExtensionOffset || 0).toFixed(3),
     Number(layer.slotLengthAdjustment || 0).toFixed(3),
     Number(layer.slotCrossTipInLengthAdjustment || 0).toFixed(3),
     Number(layer.slotTiltExtensionLengthAdjustment || 0).toFixed(3),
+    layer.slotManualWidthEnabled ? 1 : 0,
     layer.slotBridgeEnabled ? 1 : 0,
     layer.slotBridgeManualWidthEnabled ? 1 : 0,
     Number(layer.slotBridgeManualWidth || 0).toFixed(3),
+    layer.slotBridgeCrossMainManualWidthEnabled ? 1 : 0,
+    Number(layer.slotBridgeCrossMainManualWidth || 0).toFixed(3),
+    layer.slotBridgeCrossTipInManualWidthEnabled ? 1 : 0,
+    Number(layer.slotBridgeCrossTipInManualWidth || 0).toFixed(3),
+    layer.slotBridgeTiltMainManualWidthEnabled ? 1 : 0,
+    Number(layer.slotBridgeTiltMainManualWidth || 0).toFixed(3),
+    layer.slotBridgeTiltExtensionManualWidthEnabled ? 1 : 0,
+    Number(layer.slotBridgeTiltExtensionManualWidth || 0).toFixed(3),
     sourceVertexCount,
   ].join('|');
 };
@@ -1165,16 +1220,26 @@ const createSlotProfilesForLayer = (
   }
 
   if (layerIndex === 1) {
+    const crossMainWidthAdjustmentPerSide = getEffectiveSlotWidthOffset(layer, 'crossMain');
+    const crossTipInWidthAdjustmentPerSide = getEffectiveSlotWidthOffset(layer, 'crossTipIn');
+    const crossMainSlotThickness = Math.max(
+      0.1,
+      materialThickness + effectiveBoldnessForSlot + config.slotWidth + crossMainWidthAdjustmentPerSide
+    );
+    const crossTipInSlotThickness = Math.max(
+      0.1,
+      materialThickness + effectiveBoldnessForSlot + config.slotWidth + crossTipInWidthAdjustmentPerSide
+    );
     slots.push({
       length: drawLength,
-      width: slotThickness,
+      width: crossMainSlotThickness,
       yOffset: 0,
       rotationDeg: -armAngle,
     });
     // Tip-in: outer arm tip inward, stopping where tilt extension begins.
     slots.push({
       length: crossTipInLength,
-      width: slotThickness,
+      width: crossTipInSlotThickness,
       xOffset: -rearMateReach,
       yOffset: 0,
       rotationDeg: -armAngle,
@@ -1183,9 +1248,22 @@ const createSlotProfilesForLayer = (
   }
 
   if (layerIndex === 2) {
+    const tiltMainWidthAdjustmentPerSide = getEffectiveSlotWidthOffset(layer, 'tiltMain');
+    const tiltExtensionWidthAdjustmentPerSide = getEffectiveSlotWidthOffset(layer, 'tiltExtension');
+    const tiltMainSlotThickness = Math.max(
+      0.1,
+      materialThickness + effectiveBoldnessForSlot + config.slotWidth + tiltMainWidthAdjustmentPerSide
+    );
+    const tiltExtensionSlotThickness = Math.max(
+      0.1,
+      materialThickness + effectiveBoldnessForSlot + config.slotWidth + tiltExtensionWidthAdjustmentPerSide
+    );
+    const tiltExtensionBridge = Math.min(0.4, Math.max(0.15, tiltExtensionSlotThickness * 0.08));
+    const tiltExtensionHalfChannel = Math.max(0.12, (tiltExtensionSlotThickness - tiltExtensionBridge) / 2);
+
     slots.push({
       length: drawLength,
-      width: slotThickness,
+      width: tiltMainSlotThickness,
       yOffset: 0,
       rotationDeg: -armAngle,
     });
@@ -1193,17 +1271,17 @@ const createSlotProfilesForLayer = (
     // negative-X arm for 75% of slotLength.
     slots.push({
       length: rearExtensionReach + mateOverlap,
-      width: slotThickness,
+      width: tiltExtensionSlotThickness,
       xOffset: -(rearExtensionReach + mateOverlap),
-      yOffset: -((bridge / 2) + (halfChannel / 2)),
+      yOffset: -((tiltExtensionBridge / 2) + (tiltExtensionHalfChannel / 2)),
       rotationDeg: -armAngle,
     });
     // Cross-Tilt direct mate: complementary short channel in the opposite half.
     slots.push({
       length: tiltExtensionLength + mateOverlap,
-      width: slotThickness,
+      width: tiltExtensionSlotThickness,
       xOffset: -mateOverlap,
-      yOffset: (bridge / 2) + (halfChannel / 2),
+      yOffset: (tiltExtensionBridge / 2) + (tiltExtensionHalfChannel / 2),
       rotationDeg: -armAngle,
     });
     return slots;
@@ -1299,34 +1377,58 @@ const createAngledSlotCuttersForLayer = (
   }
 
   if (layerIndex === 1) {
-    addCutter(0, drawLength, slotThickness, 240, -armAngle, 0);
+    const crossMainWidthAdjustmentPerSide = getEffectiveSlotWidthOffset(layer, 'crossMain');
+    const crossTipInWidthAdjustmentPerSide = getEffectiveSlotWidthOffset(layer, 'crossTipIn');
+    const crossMainSlotThickness = Math.max(
+      0.1,
+      materialThickness + effectiveBoldnessForSlot + config.slotWidth + crossMainWidthAdjustmentPerSide
+    );
+    const crossTipInSlotThickness = Math.max(
+      0.1,
+      materialThickness + effectiveBoldnessForSlot + config.slotWidth + crossTipInWidthAdjustmentPerSide
+    );
+
+    addCutter(0, drawLength, crossMainSlotThickness, 240, -armAngle, 0);
     // Tip-in X-blade: from outer tip inward, stopping where tilt extension begins.
     // Use paired 240°/120° blades so the entry cut aligns with the crossing mate.
-    addCutter(-rearMateReach, crossTipInLength, slotThickness, 240, -armAngle, 0);
-    addCutter(-rearMateReach, crossTipInLength, slotThickness, 120, -armAngle, 0);
+    addCutter(-rearMateReach, crossTipInLength, crossTipInSlotThickness, 240, -armAngle, 0);
+    addCutter(-rearMateReach, crossTipInLength, crossTipInSlotThickness, 120, -armAngle, 0);
     return cutters;
   }
 
   if (layerIndex === 2) {
-    addCutter(0, drawLength, slotThickness, 240, -armAngle, 0);
-    addCutter(0, drawLength, slotThickness, 120, -armAngle, 0);
+    const tiltMainWidthAdjustmentPerSide = getEffectiveSlotWidthOffset(layer, 'tiltMain');
+    const tiltExtensionWidthAdjustmentPerSide = getEffectiveSlotWidthOffset(layer, 'tiltExtension');
+    const tiltMainSlotThickness = Math.max(
+      0.1,
+      materialThickness + effectiveBoldnessForSlot + config.slotWidth + tiltMainWidthAdjustmentPerSide
+    );
+    const tiltExtensionSlotThickness = Math.max(
+      0.1,
+      materialThickness + effectiveBoldnessForSlot + config.slotWidth + tiltExtensionWidthAdjustmentPerSide
+    );
+    const tiltExtensionBridge = Math.min(0.4, Math.max(0.15, tiltExtensionSlotThickness * 0.08));
+    const tiltExtensionHalfChannel = Math.max(0.12, (tiltExtensionSlotThickness - tiltExtensionBridge) / 2);
+
+    addCutter(0, drawLength, tiltMainSlotThickness, 240, -armAngle, 0);
+    addCutter(0, drawLength, tiltMainSlotThickness, 120, -armAngle, 0);
     // Opposite-arm extension from origin outward for 75% of slotLength.
     addCutter(
       -(rearExtensionReach + mateOverlap),
       rearExtensionReach + mateOverlap,
-      slotThickness,
+      tiltExtensionSlotThickness,
       240,
       -armAngle,
-      -((bridge / 2) + (halfChannel / 2))
+      -((tiltExtensionBridge / 2) + (tiltExtensionHalfChannel / 2))
     );
     // Cross-Tilt direct mate on Tilt plane.
     addCutter(
       -mateOverlap,
       tiltExtensionLength + mateOverlap,
-      slotThickness,
+      tiltExtensionSlotThickness,
       240,
       -armAngle,
-      (bridge / 2) + (halfChannel / 2)
+      (tiltExtensionBridge / 2) + (tiltExtensionHalfChannel / 2)
     );
     return cutters;
   }
@@ -1500,7 +1602,10 @@ const createBakedBridgePlanesForLayer = (
     autoWidthExtra = 1.0,
     minSafetyMargin = 0.2,
     mirrorYContact = false,
-    useContactClamp = true
+    useContactClamp = true,
+    localSlotThickness = slotThickness,
+    localWidthAdjustmentPerSide = widthAdjustmentPerSide,
+    manualBridgeWidthOverride?: number
   ) => {
     if (length <= 0.01 || bridgeThickness <= 0.01) return;
 
@@ -1550,34 +1655,45 @@ const createBakedBridgePlanesForLayer = (
     // to prevent bridge blocks from extending beyond model boundaries.
     const zInset = Math.min(0.05, Math.max(0.01, materialThickness * 0.0025));
     const bridgeHeightZ = Math.max(0.01, materialThickness - (zInset * 2));
-    const effectiveSlotWidth = Math.max(0.1, config.slotWidth + widthAdjustmentPerSide);
+    const effectiveSlotWidth = Math.max(0.1, config.slotWidth + localWidthAdjustmentPerSide);
     // Keep user baseline (slot width + 1mm), but never allow bridge to be thinner
     // than the cutter thickness axis; otherwise subtraction can erase it entirely.
     const minBridgeThicknessForCut = Math.max(
       0.5,
       effectiveSlotWidth + minSafetyMargin,
-      slotThickness + minSafetyMargin
+      localSlotThickness + minSafetyMargin
+    );
+    // In manual mode, keep only a tiny safety delta above cutter thickness so
+    // user-entered width visibly controls the bridge profile.
+    const minManualBridgeThicknessForCut = Math.max(
+      0.5,
+      localSlotThickness + 0.05
     );
     const autoBridgeThickness = Math.max(
       minBridgeThicknessForCut,
       effectiveSlotWidth + autoWidthExtra,
-      slotThickness + autoWidthExtra
+      localSlotThickness + autoWidthExtra
     );
     // Honor per-run requested thickness (used by tilt X-cut compensation).
     // Previously this parameter was effectively ignored unless manual width was enabled.
     const requestedBridgeThickness = Math.max(minBridgeThicknessForCut, bridgeThickness);
     // In manual mode, honor the user-selected width directly (with only a tiny
     // safety floor so subtraction cannot completely erase the bridge).
+    const selectedManualWidth = manualBridgeWidthOverride ?? layer.slotBridgeManualWidth;
     const baseBridgeThickness = layer.slotBridgeManualWidthEnabled
-      ? Math.max(minBridgeThicknessForCut, layer.slotBridgeManualWidth ?? autoBridgeThickness)
+      ? Math.max(minManualBridgeThicknessForCut, selectedManualWidth ?? autoBridgeThickness)
       : Math.max(autoBridgeThickness, requestedBridgeThickness);
     // Paired 240°/120° cutter regions remove more of the bridge silhouette than
     // single-cutter regions. Add a small local thickness boost so visible bridge
     // width remains consistent (cross main vs cross tip-in, tilt main consistency).
-    const bridgeThicknessMargin = Math.max(
-      minBridgeThicknessForCut,
-      baseBridgeThickness + pairedCutThicknessBoost
-    );
+    // Manual width should map directly to final bridge thickness instead of
+    // being masked by auto paired-cut compensation.
+    const bridgeThicknessMargin = layer.slotBridgeManualWidthEnabled
+      ? Math.max(minManualBridgeThicknessForCut, baseBridgeThickness)
+      : Math.max(
+          minBridgeThicknessForCut,
+          baseBridgeThickness + pairedCutThicknessBoost
+        );
     if (layerIndex === 2 && tiltBridgeDebugCount < 3) {
       console.debug(
         `TiltBridge thickness: requested=${bridgeThickness.toFixed(3)} auto=${autoBridgeThickness.toFixed(3)} final=${bridgeThicknessMargin.toFixed(3)} nearX=${trimmedNearX.toFixed(3)} len=${trimmedLength.toFixed(3)} y=${yOffset.toFixed(3)}`
@@ -1621,27 +1737,109 @@ const createBakedBridgePlanesForLayer = (
   }
 
   if (layerIndex === 1) {
-    addBridgePlane(0, drawLength, slotThickness, 240, -armAngle, 0);
-    const pairedTipInBoost = Math.max(0.45, slotThickness * 0.16);
-    addBridgePlane(-rearMateReach, crossTipInLength, slotThickness, 240, -armAngle, 0, true, pairedTipInBoost);
-    addBridgePlane(-rearMateReach, crossTipInLength, slotThickness, 120, -armAngle, 0, true, pairedTipInBoost);
+    const crossMainWidthAdjustmentPerSide = getEffectiveSlotWidthOffset(layer, 'crossMain');
+    const crossTipInWidthAdjustmentPerSide = getEffectiveSlotWidthOffset(layer, 'crossTipIn');
+    const crossMainSlotThickness = Math.max(
+      0.1,
+      materialThickness + effectiveBoldnessForSlot + config.slotWidth + crossMainWidthAdjustmentPerSide
+    );
+    const crossTipInSlotThickness = Math.max(
+      0.1,
+      materialThickness + effectiveBoldnessForSlot + config.slotWidth + crossTipInWidthAdjustmentPerSide
+    );
+    const crossMainManualBridgeWidth = getEffectiveBridgeManualWidth(layer, 'crossMain');
+    const crossTipInManualBridgeWidth = getEffectiveBridgeManualWidth(layer, 'crossTipIn');
+
+    addBridgePlane(
+      0,
+      drawLength,
+      crossMainSlotThickness,
+      240,
+      -armAngle,
+      0,
+      false,
+      0,
+      1.0,
+      0.2,
+      false,
+      true,
+      crossMainSlotThickness,
+      crossMainWidthAdjustmentPerSide,
+      crossMainManualBridgeWidth ?? undefined
+    );
+    // Match tilt's paired X-cut compensation so cross tip-in bridge width
+    // appears equally flush with slot edges after subtraction.
+    const crossTipInBaseThicknessBoost = Math.max(1.8, crossTipInSlotThickness * 0.55);
+    const crossTipInBridgeThickness = crossTipInSlotThickness + crossTipInBaseThicknessBoost;
+    const crossTipInCutCompBoost = Math.max(1.4, crossTipInSlotThickness * 0.4);
+    const crossTipInAutoWidthExtra = 2.0;
+    const crossTipInSafetyMargin = 0.55;
+    addBridgePlane(
+      -rearMateReach,
+      crossTipInLength,
+      crossTipInBridgeThickness,
+      240,
+      -armAngle,
+      0,
+      false,
+      crossTipInCutCompBoost,
+      crossTipInAutoWidthExtra,
+      crossTipInSafetyMargin,
+      true,
+      true,
+      crossTipInSlotThickness,
+      crossTipInWidthAdjustmentPerSide,
+      crossTipInManualBridgeWidth ?? undefined
+    );
+    addBridgePlane(
+      -rearMateReach,
+      crossTipInLength,
+      crossTipInBridgeThickness,
+      120,
+      -armAngle,
+      0,
+      false,
+      crossTipInCutCompBoost,
+      crossTipInAutoWidthExtra,
+      crossTipInSafetyMargin,
+      true,
+      true,
+      crossTipInSlotThickness,
+      crossTipInWidthAdjustmentPerSide,
+      crossTipInManualBridgeWidth ?? undefined
+    );
     return bridgeGeometries;
   }
 
   if (layerIndex === 2) {
+    const tiltMainWidthAdjustmentPerSide = getEffectiveSlotWidthOffset(layer, 'tiltMain');
+    const tiltExtensionWidthAdjustmentPerSide = getEffectiveSlotWidthOffset(layer, 'tiltExtension');
+    const tiltMainSlotThickness = Math.max(
+      0.1,
+      materialThickness + effectiveBoldnessForSlot + config.slotWidth + tiltMainWidthAdjustmentPerSide
+    );
+    const tiltExtensionSlotThickness = Math.max(
+      0.1,
+      materialThickness + effectiveBoldnessForSlot + config.slotWidth + tiltExtensionWidthAdjustmentPerSide
+    );
+    const tiltMainManualBridgeWidth = getEffectiveBridgeManualWidth(layer, 'tiltMain');
+    const tiltExtensionManualBridgeWidth = getEffectiveBridgeManualWidth(layer, 'tiltExtension');
+    const tiltExtensionBridge = Math.min(0.4, Math.max(0.15, tiltExtensionSlotThickness * 0.08));
+    const tiltExtensionHalfChannel = Math.max(0.12, (tiltExtensionSlotThickness - tiltExtensionBridge) / 2);
+
     // Tilt plane gets dual-angle main cutters (240 + 120), so it needs a
     // stronger compensation than base/cross to keep visible bridge width.
-    const uniformTiltBoost = Math.max(1.25, slotThickness * 0.35);
+    const uniformTiltBoost = Math.max(1.25, tiltMainSlotThickness * 0.35);
     const uniformTiltAutoWidthExtra = 2.0;
     const uniformTiltSafetyMargin = 0.55;
     // Tilt bridges face dual-angle X-cut (240° + 120°), so boost thickness to survive both cutters
-    const tiltBridgeThicknessBoost = Math.max(1.8, slotThickness * 0.55);
-    const tiltBridgeThickness = slotThickness + tiltBridgeThicknessBoost;
+    const tiltBridgeThicknessBoost = Math.max(1.8, tiltMainSlotThickness * 0.55);
+    const tiltBridgeThickness = tiltMainSlotThickness + tiltBridgeThicknessBoost;
     // Center run is where the 240/120 cutters overlap the most, so bias extra there.
-    const tiltCenterCutCompBoost = Math.max(1.4, slotThickness * 0.4);
+    const tiltCenterCutCompBoost = Math.max(1.4, tiltMainSlotThickness * 0.4);
     // Preserve a guaranteed empty hub zone on tilt bridges so no bridge bars
     // intrude into the center void.
-    const tiltHubKeepout = Math.max(2.8, slotThickness * 0.9);
+    const tiltHubKeepout = Math.max(2.8, tiltMainSlotThickness * 0.9);
     const symmetricExtensionReach = Math.max(0.01, Math.min(rearExtensionReach, tiltExtensionLength));
 
     // useContactClamp=true: sample actual mesh vertices projected onto the slot-local X axis
@@ -1658,35 +1856,44 @@ const createBakedBridgePlanesForLayer = (
       uniformTiltAutoWidthExtra,
       uniformTiltSafetyMargin,
       true,
-      true
+      true,
+      tiltMainSlotThickness,
+      tiltMainWidthAdjustmentPerSide,
+      tiltMainManualBridgeWidth ?? undefined
     );
     addBridgePlane(
       -symmetricExtensionReach,
       Math.max(0.01, symmetricExtensionReach - tiltHubKeepout),
-      tiltBridgeThickness,
+      tiltExtensionSlotThickness,
       240,
       -armAngle,
-      -((bridge / 2) + (halfChannel / 2)),
+      -((tiltExtensionBridge / 2) + (tiltExtensionHalfChannel / 2)),
       true,
       uniformTiltBoost,
       uniformTiltAutoWidthExtra,
       uniformTiltSafetyMargin,
       true,
-      true
+      true,
+      tiltExtensionSlotThickness,
+      tiltExtensionWidthAdjustmentPerSide,
+      tiltExtensionManualBridgeWidth ?? undefined
     );
     addBridgePlane(
       tiltHubKeepout,
       Math.max(0.01, symmetricExtensionReach - tiltHubKeepout),
-      tiltBridgeThickness,
+      tiltExtensionSlotThickness,
       240,
       -armAngle,
-      (bridge / 2) + (halfChannel / 2),
+      (tiltExtensionBridge / 2) + (tiltExtensionHalfChannel / 2),
       true,
       uniformTiltBoost,
       uniformTiltAutoWidthExtra,
       uniformTiltSafetyMargin,
       true,
-      true
+      true,
+      tiltExtensionSlotThickness,
+      tiltExtensionWidthAdjustmentPerSide,
+      tiltExtensionManualBridgeWidth ?? undefined
     );
     return bridgeGeometries;
   }
@@ -2644,6 +2851,23 @@ const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isEnabled 
   slotBridgeEnabled: true,
   slotBridgeManualWidthEnabled: false,
   slotBridgeManualWidth: 6,
+  slotManualWidthEnabled: false,
+  slotBridgeCrossMainManualWidthEnabled: false,
+  slotBridgeCrossMainManualWidth: 6,
+  slotBridgeCrossTipInManualWidthEnabled: false,
+  slotBridgeCrossTipInManualWidth: 6,
+  slotBridgeTiltMainManualWidthEnabled: false,
+  slotBridgeTiltMainManualWidth: 6,
+  slotBridgeTiltExtensionManualWidthEnabled: false,
+  slotBridgeTiltExtensionManualWidth: 6,
+  slotWidthCrossMainOffsetEnabled: false,
+  slotWidthCrossMainOffset: 0,
+  slotWidthCrossTipInOffsetEnabled: false,
+  slotWidthCrossTipInOffset: 0,
+  slotWidthTiltMainOffsetEnabled: false,
+  slotWidthTiltMainOffset: 0,
+  slotWidthTiltExtensionOffsetEnabled: false,
+  slotWidthTiltExtensionOffset: 0,
   protectMatingClearance: true,
   slotBridges: [],
   images: [],
@@ -2700,6 +2924,39 @@ const loadStartupState = (): SnowflakeConfig => {
           slotBridgeManualWidth: Number.isFinite(Number(layer?.slotBridgeManualWidth))
             ? Math.max(0.5, Number(layer?.slotBridgeManualWidth))
             : 6,
+          slotManualWidthEnabled: typeof layer?.slotManualWidthEnabled === 'boolean' ? layer.slotManualWidthEnabled : false,
+          slotBridgeCrossMainManualWidthEnabled: typeof layer?.slotBridgeCrossMainManualWidthEnabled === 'boolean' ? layer.slotBridgeCrossMainManualWidthEnabled : false,
+          slotBridgeCrossMainManualWidth: Number.isFinite(Number(layer?.slotBridgeCrossMainManualWidth))
+            ? Math.max(0.5, Number(layer?.slotBridgeCrossMainManualWidth))
+            : 6,
+          slotBridgeCrossTipInManualWidthEnabled: typeof layer?.slotBridgeCrossTipInManualWidthEnabled === 'boolean' ? layer.slotBridgeCrossTipInManualWidthEnabled : false,
+          slotBridgeCrossTipInManualWidth: Number.isFinite(Number(layer?.slotBridgeCrossTipInManualWidth))
+            ? Math.max(0.5, Number(layer?.slotBridgeCrossTipInManualWidth))
+            : 6,
+          slotBridgeTiltMainManualWidthEnabled: typeof layer?.slotBridgeTiltMainManualWidthEnabled === 'boolean' ? layer.slotBridgeTiltMainManualWidthEnabled : false,
+          slotBridgeTiltMainManualWidth: Number.isFinite(Number(layer?.slotBridgeTiltMainManualWidth))
+            ? Math.max(0.5, Number(layer?.slotBridgeTiltMainManualWidth))
+            : 6,
+          slotBridgeTiltExtensionManualWidthEnabled: typeof layer?.slotBridgeTiltExtensionManualWidthEnabled === 'boolean' ? layer.slotBridgeTiltExtensionManualWidthEnabled : false,
+          slotBridgeTiltExtensionManualWidth: Number.isFinite(Number(layer?.slotBridgeTiltExtensionManualWidth))
+            ? Math.max(0.5, Number(layer?.slotBridgeTiltExtensionManualWidth))
+            : 6,
+          slotWidthCrossMainOffsetEnabled: typeof layer?.slotWidthCrossMainOffsetEnabled === 'boolean' ? layer.slotWidthCrossMainOffsetEnabled : false,
+          slotWidthCrossMainOffset: Number.isFinite(Number(layer?.slotWidthCrossMainOffset))
+            ? Number(layer?.slotWidthCrossMainOffset)
+            : 0,
+          slotWidthCrossTipInOffsetEnabled: typeof layer?.slotWidthCrossTipInOffsetEnabled === 'boolean' ? layer.slotWidthCrossTipInOffsetEnabled : false,
+          slotWidthCrossTipInOffset: Number.isFinite(Number(layer?.slotWidthCrossTipInOffset))
+            ? Number(layer?.slotWidthCrossTipInOffset)
+            : 0,
+          slotWidthTiltMainOffsetEnabled: typeof layer?.slotWidthTiltMainOffsetEnabled === 'boolean' ? layer.slotWidthTiltMainOffsetEnabled : false,
+          slotWidthTiltMainOffset: Number.isFinite(Number(layer?.slotWidthTiltMainOffset))
+            ? Number(layer?.slotWidthTiltMainOffset)
+            : 0,
+          slotWidthTiltExtensionOffsetEnabled: typeof layer?.slotWidthTiltExtensionOffsetEnabled === 'boolean' ? layer.slotWidthTiltExtensionOffsetEnabled : false,
+          slotWidthTiltExtensionOffset: Number.isFinite(Number(layer?.slotWidthTiltExtensionOffset))
+            ? Number(layer?.slotWidthTiltExtensionOffset)
+            : 0,
           protectMatingClearance: typeof layer?.protectMatingClearance === 'boolean' ? layer.protectMatingClearance : true,
           slotBridges: normalizeSlotBridgeList((layer ?? {}) as LayerConfig),
         };
@@ -3252,6 +3509,15 @@ const App: React.FC = () => {
       rotY: l.rotation3D.y,
       slotLengthAdjustment: l.slotLengthAdjustment ?? 0,
       slotWidthOffset: l.slotWidthOffset ?? 0,
+      slotManualWidthEnabled: l.slotManualWidthEnabled ?? false,
+      slotWidthCrossMainOffsetEnabled: l.slotWidthCrossMainOffsetEnabled ?? false,
+      slotWidthCrossMainOffset: l.slotWidthCrossMainOffset ?? 0,
+      slotWidthCrossTipInOffsetEnabled: l.slotWidthCrossTipInOffsetEnabled ?? false,
+      slotWidthCrossTipInOffset: l.slotWidthCrossTipInOffset ?? 0,
+      slotWidthTiltMainOffsetEnabled: l.slotWidthTiltMainOffsetEnabled ?? false,
+      slotWidthTiltMainOffset: l.slotWidthTiltMainOffset ?? 0,
+      slotWidthTiltExtensionOffsetEnabled: l.slotWidthTiltExtensionOffsetEnabled ?? false,
+      slotWidthTiltExtensionOffset: l.slotWidthTiltExtensionOffset ?? 0,
       slotCrossTipInLengthAdjustment: l.slotCrossTipInLengthAdjustment ?? 0,
       slotTiltExtensionLengthAdjustment: l.slotTiltExtensionLengthAdjustment ?? 0,
       primaryEnabled: l.primary.enabled,
@@ -3264,6 +3530,14 @@ const App: React.FC = () => {
       slotBridgesEnabled: cfg.slotBridgesEnabled !== false,
       slotBridgeManualWidthEnabled: l.slotBridgeManualWidthEnabled ?? false,
       slotBridgeManualWidth: l.slotBridgeManualWidth ?? 6,
+      slotBridgeCrossMainManualWidthEnabled: l.slotBridgeCrossMainManualWidthEnabled ?? false,
+      slotBridgeCrossMainManualWidth: l.slotBridgeCrossMainManualWidth ?? 6,
+      slotBridgeCrossTipInManualWidthEnabled: l.slotBridgeCrossTipInManualWidthEnabled ?? false,
+      slotBridgeCrossTipInManualWidth: l.slotBridgeCrossTipInManualWidth ?? 6,
+      slotBridgeTiltMainManualWidthEnabled: l.slotBridgeTiltMainManualWidthEnabled ?? false,
+      slotBridgeTiltMainManualWidth: l.slotBridgeTiltMainManualWidth ?? 6,
+      slotBridgeTiltExtensionManualWidthEnabled: l.slotBridgeTiltExtensionManualWidthEnabled ?? false,
+      slotBridgeTiltExtensionManualWidth: l.slotBridgeTiltExtensionManualWidth ?? 6,
       protectMatingClearance: l.protectMatingClearance ?? true,
       slotBridgesHash: JSON.stringify(l.slotBridges ?? []),
     }));
@@ -3275,6 +3549,15 @@ const App: React.FC = () => {
       rotY: layer.rotation3D.y,
       slotLengthAdjustment: layer.slotLengthAdjustment ?? 0,
       slotWidthOffset: layer.slotWidthOffset ?? 0,
+      slotManualWidthEnabled: layer.slotManualWidthEnabled ?? false,
+      slotWidthCrossMainOffsetEnabled: layer.slotWidthCrossMainOffsetEnabled ?? false,
+      slotWidthCrossMainOffset: layer.slotWidthCrossMainOffset ?? 0,
+      slotWidthCrossTipInOffsetEnabled: layer.slotWidthCrossTipInOffsetEnabled ?? false,
+      slotWidthCrossTipInOffset: layer.slotWidthCrossTipInOffset ?? 0,
+      slotWidthTiltMainOffsetEnabled: layer.slotWidthTiltMainOffsetEnabled ?? false,
+      slotWidthTiltMainOffset: layer.slotWidthTiltMainOffset ?? 0,
+      slotWidthTiltExtensionOffsetEnabled: layer.slotWidthTiltExtensionOffsetEnabled ?? false,
+      slotWidthTiltExtensionOffset: layer.slotWidthTiltExtensionOffset ?? 0,
       slotCrossTipInLengthAdjustment: layer.slotCrossTipInLengthAdjustment ?? 0,
       slotTiltExtensionLengthAdjustment: layer.slotTiltExtensionLengthAdjustment ?? 0,
       primaryEnabled: layer.primary.enabled,
@@ -3287,6 +3570,14 @@ const App: React.FC = () => {
       slotBridgesEnabled: cfg.slotBridgesEnabled !== false,
       slotBridgeManualWidthEnabled: layer.slotBridgeManualWidthEnabled ?? false,
       slotBridgeManualWidth: layer.slotBridgeManualWidth ?? 6,
+      slotBridgeCrossMainManualWidthEnabled: layer.slotBridgeCrossMainManualWidthEnabled ?? false,
+      slotBridgeCrossMainManualWidth: layer.slotBridgeCrossMainManualWidth ?? 6,
+      slotBridgeCrossTipInManualWidthEnabled: layer.slotBridgeCrossTipInManualWidthEnabled ?? false,
+      slotBridgeCrossTipInManualWidth: layer.slotBridgeCrossTipInManualWidth ?? 6,
+      slotBridgeTiltMainManualWidthEnabled: layer.slotBridgeTiltMainManualWidthEnabled ?? false,
+      slotBridgeTiltMainManualWidth: layer.slotBridgeTiltMainManualWidth ?? 6,
+      slotBridgeTiltExtensionManualWidthEnabled: layer.slotBridgeTiltExtensionManualWidthEnabled ?? false,
+      slotBridgeTiltExtensionManualWidth: layer.slotBridgeTiltExtensionManualWidth ?? 6,
       protectMatingClearance: layer.protectMatingClearance ?? true,
       slotBridgesHash: JSON.stringify(layer.slotBridges ?? []),
     };
@@ -3596,6 +3887,39 @@ const App: React.FC = () => {
             slotBridgeManualWidth: Number.isFinite(Number(layer.slotBridgeManualWidth))
               ? Math.max(0.5, Number(layer.slotBridgeManualWidth))
               : 6,
+            slotManualWidthEnabled: typeof layer.slotManualWidthEnabled === 'boolean' ? layer.slotManualWidthEnabled : false,
+            slotBridgeCrossMainManualWidthEnabled: typeof layer.slotBridgeCrossMainManualWidthEnabled === 'boolean' ? layer.slotBridgeCrossMainManualWidthEnabled : false,
+            slotBridgeCrossMainManualWidth: Number.isFinite(Number(layer.slotBridgeCrossMainManualWidth))
+              ? Math.max(0.5, Number(layer.slotBridgeCrossMainManualWidth))
+              : 6,
+            slotBridgeCrossTipInManualWidthEnabled: typeof layer.slotBridgeCrossTipInManualWidthEnabled === 'boolean' ? layer.slotBridgeCrossTipInManualWidthEnabled : false,
+            slotBridgeCrossTipInManualWidth: Number.isFinite(Number(layer.slotBridgeCrossTipInManualWidth))
+              ? Math.max(0.5, Number(layer.slotBridgeCrossTipInManualWidth))
+              : 6,
+            slotBridgeTiltMainManualWidthEnabled: typeof layer.slotBridgeTiltMainManualWidthEnabled === 'boolean' ? layer.slotBridgeTiltMainManualWidthEnabled : false,
+            slotBridgeTiltMainManualWidth: Number.isFinite(Number(layer.slotBridgeTiltMainManualWidth))
+              ? Math.max(0.5, Number(layer.slotBridgeTiltMainManualWidth))
+              : 6,
+            slotBridgeTiltExtensionManualWidthEnabled: typeof layer.slotBridgeTiltExtensionManualWidthEnabled === 'boolean' ? layer.slotBridgeTiltExtensionManualWidthEnabled : false,
+            slotBridgeTiltExtensionManualWidth: Number.isFinite(Number(layer.slotBridgeTiltExtensionManualWidth))
+              ? Math.max(0.5, Number(layer.slotBridgeTiltExtensionManualWidth))
+              : 6,
+            slotWidthCrossMainOffsetEnabled: typeof layer.slotWidthCrossMainOffsetEnabled === 'boolean' ? layer.slotWidthCrossMainOffsetEnabled : false,
+            slotWidthCrossMainOffset: Number.isFinite(Number(layer.slotWidthCrossMainOffset))
+              ? Number(layer.slotWidthCrossMainOffset)
+              : 0,
+            slotWidthCrossTipInOffsetEnabled: typeof layer.slotWidthCrossTipInOffsetEnabled === 'boolean' ? layer.slotWidthCrossTipInOffsetEnabled : false,
+            slotWidthCrossTipInOffset: Number.isFinite(Number(layer.slotWidthCrossTipInOffset))
+              ? Number(layer.slotWidthCrossTipInOffset)
+              : 0,
+            slotWidthTiltMainOffsetEnabled: typeof layer.slotWidthTiltMainOffsetEnabled === 'boolean' ? layer.slotWidthTiltMainOffsetEnabled : false,
+            slotWidthTiltMainOffset: Number.isFinite(Number(layer.slotWidthTiltMainOffset))
+              ? Number(layer.slotWidthTiltMainOffset)
+              : 0,
+            slotWidthTiltExtensionOffsetEnabled: typeof layer.slotWidthTiltExtensionOffsetEnabled === 'boolean' ? layer.slotWidthTiltExtensionOffsetEnabled : false,
+            slotWidthTiltExtensionOffset: Number.isFinite(Number(layer.slotWidthTiltExtensionOffset))
+              ? Number(layer.slotWidthTiltExtensionOffset)
+              : 0,
             protectMatingClearance: typeof layer.protectMatingClearance === 'boolean' ? layer.protectMatingClearance : true,
             slotBridges: normalizeSlotBridgeList(layer),
           };
@@ -4039,12 +4363,29 @@ const App: React.FC = () => {
       images: layer.images,
       slotLengthAdjustment: layer.slotLengthAdjustment,
       slotWidthOffset: layer.slotWidthOffset,
+      slotManualWidthEnabled: layer.slotManualWidthEnabled,
+      slotWidthCrossMainOffsetEnabled: layer.slotWidthCrossMainOffsetEnabled,
+      slotWidthCrossMainOffset: layer.slotWidthCrossMainOffset,
+      slotWidthCrossTipInOffsetEnabled: layer.slotWidthCrossTipInOffsetEnabled,
+      slotWidthCrossTipInOffset: layer.slotWidthCrossTipInOffset,
+      slotWidthTiltMainOffsetEnabled: layer.slotWidthTiltMainOffsetEnabled,
+      slotWidthTiltMainOffset: layer.slotWidthTiltMainOffset,
+      slotWidthTiltExtensionOffsetEnabled: layer.slotWidthTiltExtensionOffsetEnabled,
+      slotWidthTiltExtensionOffset: layer.slotWidthTiltExtensionOffset,
       slotCrossTipInLengthAdjustment: layer.slotCrossTipInLengthAdjustment,
       slotTiltExtensionLengthAdjustment: layer.slotTiltExtensionLengthAdjustment,
       // Baked bridges affect slot-cut output, so include in sync signature
       slotBridgeEnabled: layer.slotBridgeEnabled,
       slotBridgeManualWidthEnabled: layer.slotBridgeManualWidthEnabled,
       slotBridgeManualWidth: layer.slotBridgeManualWidth,
+      slotBridgeCrossMainManualWidthEnabled: layer.slotBridgeCrossMainManualWidthEnabled,
+      slotBridgeCrossMainManualWidth: layer.slotBridgeCrossMainManualWidth,
+      slotBridgeCrossTipInManualWidthEnabled: layer.slotBridgeCrossTipInManualWidthEnabled,
+      slotBridgeCrossTipInManualWidth: layer.slotBridgeCrossTipInManualWidth,
+      slotBridgeTiltMainManualWidthEnabled: layer.slotBridgeTiltMainManualWidthEnabled,
+      slotBridgeTiltMainManualWidth: layer.slotBridgeTiltMainManualWidth,
+      slotBridgeTiltExtensionManualWidthEnabled: layer.slotBridgeTiltExtensionManualWidthEnabled,
+      slotBridgeTiltExtensionManualWidth: layer.slotBridgeTiltExtensionManualWidth,
       protectMatingClearance: layer.protectMatingClearance,
       slotBridges: layer.slotBridges,
     });
@@ -6361,6 +6702,39 @@ const App: React.FC = () => {
               slotBridgeManualWidth: Number.isFinite(Number(layer?.slotBridgeManualWidth))
                 ? Math.max(0.5, Number(layer?.slotBridgeManualWidth))
                 : 6,
+              slotManualWidthEnabled: typeof layer?.slotManualWidthEnabled === 'boolean' ? layer.slotManualWidthEnabled : false,
+              slotBridgeCrossMainManualWidthEnabled: typeof layer?.slotBridgeCrossMainManualWidthEnabled === 'boolean' ? layer.slotBridgeCrossMainManualWidthEnabled : false,
+              slotBridgeCrossMainManualWidth: Number.isFinite(Number(layer?.slotBridgeCrossMainManualWidth))
+                ? Math.max(0.5, Number(layer?.slotBridgeCrossMainManualWidth))
+                : 6,
+              slotBridgeCrossTipInManualWidthEnabled: typeof layer?.slotBridgeCrossTipInManualWidthEnabled === 'boolean' ? layer.slotBridgeCrossTipInManualWidthEnabled : false,
+              slotBridgeCrossTipInManualWidth: Number.isFinite(Number(layer?.slotBridgeCrossTipInManualWidth))
+                ? Math.max(0.5, Number(layer?.slotBridgeCrossTipInManualWidth))
+                : 6,
+              slotBridgeTiltMainManualWidthEnabled: typeof layer?.slotBridgeTiltMainManualWidthEnabled === 'boolean' ? layer.slotBridgeTiltMainManualWidthEnabled : false,
+              slotBridgeTiltMainManualWidth: Number.isFinite(Number(layer?.slotBridgeTiltMainManualWidth))
+                ? Math.max(0.5, Number(layer?.slotBridgeTiltMainManualWidth))
+                : 6,
+              slotBridgeTiltExtensionManualWidthEnabled: typeof layer?.slotBridgeTiltExtensionManualWidthEnabled === 'boolean' ? layer.slotBridgeTiltExtensionManualWidthEnabled : false,
+              slotBridgeTiltExtensionManualWidth: Number.isFinite(Number(layer?.slotBridgeTiltExtensionManualWidth))
+                ? Math.max(0.5, Number(layer?.slotBridgeTiltExtensionManualWidth))
+                : 6,
+              slotWidthCrossMainOffsetEnabled: typeof layer?.slotWidthCrossMainOffsetEnabled === 'boolean' ? layer.slotWidthCrossMainOffsetEnabled : false,
+              slotWidthCrossMainOffset: Number.isFinite(Number(layer?.slotWidthCrossMainOffset))
+                ? Number(layer?.slotWidthCrossMainOffset)
+                : 0,
+              slotWidthCrossTipInOffsetEnabled: typeof layer?.slotWidthCrossTipInOffsetEnabled === 'boolean' ? layer.slotWidthCrossTipInOffsetEnabled : false,
+              slotWidthCrossTipInOffset: Number.isFinite(Number(layer?.slotWidthCrossTipInOffset))
+                ? Number(layer?.slotWidthCrossTipInOffset)
+                : 0,
+              slotWidthTiltMainOffsetEnabled: typeof layer?.slotWidthTiltMainOffsetEnabled === 'boolean' ? layer.slotWidthTiltMainOffsetEnabled : false,
+              slotWidthTiltMainOffset: Number.isFinite(Number(layer?.slotWidthTiltMainOffset))
+                ? Number(layer?.slotWidthTiltMainOffset)
+                : 0,
+              slotWidthTiltExtensionOffsetEnabled: typeof layer?.slotWidthTiltExtensionOffsetEnabled === 'boolean' ? layer.slotWidthTiltExtensionOffsetEnabled : false,
+              slotWidthTiltExtensionOffset: Number.isFinite(Number(layer?.slotWidthTiltExtensionOffset))
+                ? Number(layer?.slotWidthTiltExtensionOffset)
+                : 0,
               protectMatingClearance: typeof layer?.protectMatingClearance === 'boolean' ? layer.protectMatingClearance : true,
               slotBridges: normalizeSlotBridgeList((layer ?? {}) as LayerConfig),
             };
@@ -7346,6 +7720,10 @@ const App: React.FC = () => {
                 config={shortcuts}
                 onSave={setShortcuts}
                 onReset={() => setShortcuts(DEFAULT_SHORTCUTS)}
+                language={language}
+                onLanguageChange={(lang) => setLanguage(lang)}
+                showTooltips={showTooltips}
+                onTooltipsChange={(show) => setShowTooltips(show)}
                 activeTab={shortcutsModalTab}
                 message={shortcutsModalMessage}
                 onSaveAsDefault={saveCurrentAsDefaults}
