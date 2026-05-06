@@ -15,7 +15,7 @@ Design complex 2D and 3D snowflakes from text, hubs, abstracts, and multi-plane 
 ## What You Can Do
 - Create your own unique snowflakes by customizing text, individual letter behavior, central hubs, abstract designs, fractals, and images (svg). 
 - Build across 1, 2 or 3 planes (Base, Cross, and Tilt planes) and have each plane interlock when assembled.
-- Use advanced slot controls, including 3-plane slot adjustments.
+- Use advanced slot controls, including 3-plane slot adjustments. Bridges for the slots are automatically added (but can be turned off) to help reduce free floating bodies. 
 - Customize text, letter behavior, hubs, abstracts, and global geometry.
 - Toggle 2D/3D preview in real time.
 - Export STL, 3MF, SVG, DXF, and save/load project JSON.
