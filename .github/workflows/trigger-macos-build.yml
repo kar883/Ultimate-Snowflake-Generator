@@ -4,82 +4,67 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version number (e.g., 1.0.3)'
+        description: 'Version number (e.g., 1.0.7)'
         required: true
-        default: '1.0.3'
+        default: '1.0.7'
       create_release:
         description: 'Create GitHub release with artifacts'
         required: false
         default: 'true'
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   build-macos:
     runs-on: macos-latest
-    
+
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
-      
+      uses: actions/checkout@v5
+
     - name: Setup Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v5
       with:
-        node-version: '20'
+        node-version: '22'
         cache: 'npm'
-        
+
     - name: Install dependencies
-      run: npm install
-      
+      run: npm ci
+
     - name: Build application
       run: npm run build
-      
+
     - name: Build Electron app for macOS
-      run: npm run electron:build -- --mac
+      run: npm run electron:build -- --mac --publish never
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        
+
     - name: Upload macOS artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: macos-build-${{ github.run_number }}
         path: dist-electron/
         retention-days: 30
-        
+
     - name: Create GitHub Release
       if: github.event.inputs.create_release == 'true'
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         name: Snowflake Generator v${{ github.event.inputs.version }}
         tag_name: v${{ github.event.inputs.version }}
         body: |
           ## Snowflake Generator v${{ github.event.inputs.version }}
-          
+
           A beautiful 3D snowflake design generator for art and 3D printing.
-          
-          ### 📦 Downloads:
-          
-          #### macOS:
-          - **Installer**: `Snowflake Generator-${{ github.event.inputs.version }}.dmg` (Recommended)
-          - **Portable**: `Snowflake Generator-${{ github.event.inputs.version }}-mac.zip` (No installation)
-          
-          #### Windows:
-          - **Installer**: `Snowflake Generator Setup ${{ github.event.inputs.version }}.exe` (Recommended)
-          - **Portable**: `Snowflake Generator-${{ github.event.inputs.version }}-win.zip` (No installation)
-          
-          ### 🚀 Installation:
-          1. Download the appropriate file for your operating system
-          2. **macOS**: Open the DMG or extract the ZIP file
-          3. **Windows**: Run the installer or extract the ZIP file
-          4. Launch the application and start creating!
-          
-          ### 🎯 Features:
-          - Text-based snowflake design with 17+ cursive fonts
-          - AI-powered randomization with Google Gemini API  
-          - Export to STL (3D printing), SVG, and DXF (laser cutting)
-          - Multi-language support (6 languages)
-          - Customizable keyboard shortcuts
-          - One-click reset to restore defaults
-          
-          Enjoy creating beautiful snowflake designs! ❄️
+
+          ### Downloads:
+          - macOS installer: Snowflake Generator-${{ github.event.inputs.version }}.dmg
+          - macOS portable: Snowflake Generator-${{ github.event.inputs.version }}-mac.zip
+          - Windows installer: Snowflake Generator Setup ${{ github.event.inputs.version }}.exe
+          - Windows portable: Snowflake Generator-${{ github.event.inputs.version }}-win.zip
+
+          Enjoy creating beautiful snowflake designs.
         files: |
           dist-electron/*.dmg
           dist-electron/*-mac.zip
