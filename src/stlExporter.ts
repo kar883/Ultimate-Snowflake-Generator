@@ -2,12 +2,15 @@ import * as THREE from 'three';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
 import JSZip from 'jszip';
 import { DesignQuality } from './types';
+import { getTopologyReport, surgicalSlotRepair } from './surgicalSlotRepair';
 
 type ExportCleanupOptions = {
   optimize?: boolean;
   weldTolerance?: number;
   quality?: DesignQuality;
   nearLosslessDecimation?: boolean;
+  enforceManifold?: boolean;
+  manifoldFaceLimit?: number;
 };
 
 type STLParseOptions = ExportCleanupOptions & {
@@ -16,6 +19,7 @@ type STLParseOptions = ExportCleanupOptions & {
 
 const DEFAULT_WELD_TOLERANCE = 0.000002;
 const DEFAULT_YIELD_INTERVAL = 4000;
+const DEFAULT_MANIFOLD_FACE_LIMIT = 450000;
 
 const yieldToBrowser = async (): Promise<void> => {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -87,15 +91,20 @@ const removeDegenerateAndDuplicateTriangles = (source: THREE.BufferGeometry): TH
     return geometry;
   }
 
-  const usedVertexMap = new Map<number, number>();
-  const remappedIndex: number[] = [];
-  for (const oldIndex of filteredTriangles) {
-    let newIndex = usedVertexMap.get(oldIndex);
-    if (newIndex === undefined) {
-      newIndex = usedVertexMap.size;
-      usedVertexMap.set(oldIndex, newIndex);
+  const vertexCount = position.count;
+  const oldToNew = new Int32Array(vertexCount);
+  oldToNew.fill(-1);
+
+  let nextVertexCount = 0;
+  const remappedIndex = new Uint32Array(filteredTriangles.length);
+  for (let i = 0; i < filteredTriangles.length; i++) {
+    const oldIndex = filteredTriangles[i];
+    let newIndex = oldToNew[oldIndex];
+    if (newIndex === -1) {
+      newIndex = nextVertexCount++;
+      oldToNew[oldIndex] = newIndex;
     }
-    remappedIndex.push(newIndex);
+    remappedIndex[i] = newIndex;
   }
 
   const compact = new THREE.BufferGeometry();
@@ -103,20 +112,24 @@ const removeDegenerateAndDuplicateTriangles = (source: THREE.BufferGeometry): TH
   for (const [name, attr] of Object.entries(geometry.attributes)) {
     const sourceAttr = attr as THREE.BufferAttribute;
     const ctor = (sourceAttr.array as any).constructor;
-    const nextArray = new ctor(usedVertexMap.size * sourceAttr.itemSize);
+    const nextArray = new ctor(nextVertexCount * sourceAttr.itemSize);
 
-    for (const [oldIndex, newIndex] of usedVertexMap.entries()) {
+    for (let oldIndex = 0; oldIndex < vertexCount; oldIndex++) {
+      const newIndex = oldToNew[oldIndex];
+      if (newIndex === -1) continue;
+      const srcBase = oldIndex * sourceAttr.itemSize;
+      const dstBase = newIndex * sourceAttr.itemSize;
       for (let c = 0; c < sourceAttr.itemSize; c++) {
-        nextArray[newIndex * sourceAttr.itemSize + c] = (sourceAttr.array as any)[oldIndex * sourceAttr.itemSize + c];
+        nextArray[dstBase + c] = (sourceAttr.array as any)[srcBase + c];
       }
     }
 
     compact.setAttribute(name, new THREE.BufferAttribute(nextArray, sourceAttr.itemSize, sourceAttr.normalized));
   }
 
-  const maxIndex = usedVertexMap.size - 1;
+  const maxIndex = nextVertexCount - 1;
   const remappedIndexArray = maxIndex > 65535
-    ? new Uint32Array(remappedIndex)
+    ? remappedIndex
     : new Uint16Array(remappedIndex);
 
   compact.setIndex(new THREE.BufferAttribute(remappedIndexArray, 1));
@@ -189,16 +202,20 @@ const removeDegenerateAndDuplicateTrianglesAsync = async (
     return geometry;
   }
 
-  const usedVertexMap = new Map<number, number>();
-  const remappedIndex: number[] = [];
+  const vertexCount = position.count;
+  const oldToNew = new Int32Array(vertexCount);
+  oldToNew.fill(-1);
+
+  let nextVertexCount = 0;
+  const remappedIndex = new Uint32Array(filteredTriangles.length);
   for (let i = 0; i < filteredTriangles.length; i++) {
     const oldIndex = filteredTriangles[i];
-    let newIndex = usedVertexMap.get(oldIndex);
-    if (newIndex === undefined) {
-      newIndex = usedVertexMap.size;
-      usedVertexMap.set(oldIndex, newIndex);
+    let newIndex = oldToNew[oldIndex];
+    if (newIndex === -1) {
+      newIndex = nextVertexCount++;
+      oldToNew[oldIndex] = newIndex;
     }
-    remappedIndex.push(newIndex);
+    remappedIndex[i] = newIndex;
 
     if (i > 0 && i % (yieldInterval * 3) === 0) {
       await yieldToBrowser();
@@ -210,15 +227,20 @@ const removeDegenerateAndDuplicateTrianglesAsync = async (
   for (const [name, attr] of Object.entries(geometry.attributes)) {
     const sourceAttr = attr as THREE.BufferAttribute;
     const ctor = (sourceAttr.array as any).constructor;
-    const nextArray = new ctor(usedVertexMap.size * sourceAttr.itemSize);
+    const nextArray = new ctor(nextVertexCount * sourceAttr.itemSize);
 
-    let writes = 0;
-    for (const [oldIndex, newIndex] of usedVertexMap.entries()) {
-      for (let c = 0; c < sourceAttr.itemSize; c++) {
-        nextArray[newIndex * sourceAttr.itemSize + c] = (sourceAttr.array as any)[oldIndex * sourceAttr.itemSize + c];
+    let scanned = 0;
+    for (let oldIndex = 0; oldIndex < vertexCount; oldIndex++) {
+      const newIndex = oldToNew[oldIndex];
+      if (newIndex !== -1) {
+        const srcBase = oldIndex * sourceAttr.itemSize;
+        const dstBase = newIndex * sourceAttr.itemSize;
+        for (let c = 0; c < sourceAttr.itemSize; c++) {
+          nextArray[dstBase + c] = (sourceAttr.array as any)[srcBase + c];
+        }
       }
-      writes++;
-      if (writes > 0 && writes % yieldInterval === 0) {
+      scanned++;
+      if (scanned > 0 && scanned % yieldInterval === 0) {
         await yieldToBrowser();
       }
     }
@@ -226,9 +248,9 @@ const removeDegenerateAndDuplicateTrianglesAsync = async (
     compact.setAttribute(name, new THREE.BufferAttribute(nextArray, sourceAttr.itemSize, sourceAttr.normalized));
   }
 
-  const maxIndex = usedVertexMap.size - 1;
+  const maxIndex = nextVertexCount - 1;
   const remappedIndexArray = maxIndex > 65535
-    ? new Uint32Array(remappedIndex)
+    ? remappedIndex
     : new Uint16Array(remappedIndex);
 
   compact.setIndex(new THREE.BufferAttribute(remappedIndexArray, 1));
@@ -247,6 +269,8 @@ const cleanupGeometryForExport = (
   const weldTolerance = options?.weldTolerance ?? DEFAULT_WELD_TOLERANCE;
   const quality = options?.quality ?? 'med';
   const nearLosslessDecimation = options?.nearLosslessDecimation !== false;
+  const enforceManifold = options?.enforceManifold === true;
+  const manifoldFaceLimit = options?.manifoldFaceLimit ?? DEFAULT_MANIFOLD_FACE_LIMIT;
 
   let geometry = source.clone();
 
@@ -291,6 +315,17 @@ const cleanupGeometryForExport = (
     }
   }
 
+  if (enforceManifold && geometry.getIndex()) {
+    const report = getTopologyReport(geometry);
+    if (!report.isManifold && report.faces <= manifoldFaceLimit) {
+      const repaired = surgicalSlotRepair(geometry);
+      if (repaired !== geometry) {
+        geometry.dispose();
+        geometry = repaired;
+      }
+    }
+  }
+
   geometry.computeVertexNormals();
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
@@ -305,6 +340,8 @@ const cleanupGeometryForExportAsync = async (
   const weldTolerance = options?.weldTolerance ?? DEFAULT_WELD_TOLERANCE;
   const quality = options?.quality ?? 'med';
   const nearLosslessDecimation = options?.nearLosslessDecimation !== false;
+  const enforceManifold = options?.enforceManifold === true;
+  const manifoldFaceLimit = options?.manifoldFaceLimit ?? DEFAULT_MANIFOLD_FACE_LIMIT;
 
   let geometry = source.clone();
 
@@ -349,6 +386,17 @@ const cleanupGeometryForExportAsync = async (
           geometry = cleanedDecimated;
         }
         await yieldToBrowser();
+      }
+    }
+  }
+
+  if (enforceManifold && geometry.getIndex()) {
+    const report = getTopologyReport(geometry);
+    if (!report.isManifold && report.faces <= manifoldFaceLimit) {
+      const repaired = surgicalSlotRepair(geometry);
+      if (repaired !== geometry) {
+        geometry.dispose();
+        geometry = repaired;
       }
     }
   }

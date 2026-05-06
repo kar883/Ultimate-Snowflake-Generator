@@ -5696,7 +5696,7 @@ const App: React.FC = () => {
       }
     });
 
-  const getExportCleanupOptions = (quality?: DesignQuality) => {
+  const getExportCleanupOptions = (quality?: DesignQuality, enforceManifold = false) => {
     const q = quality || config.quality;
     const weldTolerance = q === 'high'
       ? 0.0000012
@@ -5709,9 +5709,27 @@ const App: React.FC = () => {
       weldTolerance,
       quality: q,
       nearLosslessDecimation: true,
+      enforceManifold,
+      manifoldFaceLimit: 450000,
       binary: true,
     };
   };
+
+  const getCachedPreviewGroupForExport = useCallback((qualityToUse: DesignQuality) => {
+    const makePreviewKey = (cfg: SnowflakeConfig) => hashConfig(cfg)
+      + '|q:' + qualityToUse
+      + '|targets:all'
+      + '|algo:' + GEOMETRY_ALGO_VERSION;
+
+    // Prefer the currently rendered 3D snapshot cache key first.
+    const renderedKey = makePreviewKey(rendered3DConfig);
+    const renderedCached = modelCache3D.get(renderedKey);
+    if (renderedCached) return renderedCached;
+
+    // Fallback to editable config key to preserve compatibility while typing.
+    const configKey = makePreviewKey(config);
+    return modelCache3D.get(configKey) || null;
+  }, [config, rendered3DConfig]);
 
   const persistEstimateCalibration = useCallback(() => {
     try {
@@ -6092,16 +6110,11 @@ const App: React.FC = () => {
     setExportLoadingKey('combined-stl');
     try {
         const qualityToUse = quality || config.quality;
-        const canReusePreviewGroup = qualityToUse === config.quality;
-        const previewMeshKey = hashConfig(config)
-          + '|q:' + qualityToUse
-          + '|targets:all'
-          + '|algo:' + GEOMETRY_ALGO_VERSION;
+        const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
+      const fallbackMode: MeshGenerationMode = qualityToUse === rendered3DConfig.quality ? 'preview' : 'export';
 
         await yieldToMainThread();
-        const group = canReusePreviewGroup
-          ? (modelCache3D.get(previewMeshKey) || await generateMesh(() => {}, qualityToUse, undefined, 'export'))
-          : await generateMesh(() => {}, qualityToUse, undefined, 'export');
+      const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode);
 
         await yieldToMainThread();
         const exporter = new STLExporter();
@@ -6137,16 +6150,11 @@ const App: React.FC = () => {
     setExportLoadingKey('combined-3mf');
     try {
       const qualityToUse = quality || config.quality;
-      const canReusePreviewGroup = qualityToUse === config.quality;
-      const previewMeshKey = hashConfig(config)
-        + '|q:' + qualityToUse
-        + '|targets:all'
-        + '|algo:' + GEOMETRY_ALGO_VERSION;
+      const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
+      const fallbackMode: MeshGenerationMode = qualityToUse === rendered3DConfig.quality ? 'preview' : 'export';
 
       await yieldToMainThread();
-      const group = canReusePreviewGroup
-        ? (modelCache3D.get(previewMeshKey) || await generateMesh(() => {}, qualityToUse, undefined, 'export'))
-        : await generateMesh(() => {}, qualityToUse, undefined, 'export');
+      const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode);
 
       await yieldToMainThread();
       const exporter = new ThreeMFExporter();
@@ -6182,21 +6190,16 @@ const App: React.FC = () => {
     setExportLoadingKey(`layer-${layerIndex}`);
     try {
         const qualityToUse = quality || config.quality;
-        const canReusePreviewGroup = qualityToUse === config.quality;
-        const previewMeshKey = hashConfig(config)
-          + '|q:' + qualityToUse
-          + '|targets:all'
-          + '|algo:' + GEOMETRY_ALGO_VERSION;
+        const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
+      const fallbackMode: MeshGenerationMode = qualityToUse === rendered3DConfig.quality ? 'preview' : 'export';
 
         await yieldToMainThread();
-        const group = canReusePreviewGroup
-          ? (modelCache3D.get(previewMeshKey) || await generateMesh(() => {}, qualityToUse, undefined, 'export', { targetLayerIds: [layer.id] }))
-          : await generateMesh(() => {}, qualityToUse, undefined, 'export', { targetLayerIds: [layer.id] });
+      const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode, { targetLayerIds: [layer.id] });
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
         if (mesh) {
             await yieldToMainThread();
             const exporter = new STLExporter();
-            const result = await exporter.parseAsync(mesh, getExportCleanupOptions(quality));
+            const result = await exporter.parseAsync(mesh, getExportCleanupOptions(quality, true));
             const blob = new Blob([result], { type: 'application/octet-stream' });
             const actualTriangles = Math.max(0, Math.floor((blob.size - 84) / 50));
             const qLabel = quality ? `_${quality}` : '';
@@ -6229,21 +6232,16 @@ const App: React.FC = () => {
     setExportLoadingKey(`layer-${layerIndex}`);
     try {
       const qualityToUse = quality || config.quality;
-      const canReusePreviewGroup = qualityToUse === config.quality;
-      const previewMeshKey = hashConfig(config)
-        + '|q:' + qualityToUse
-        + '|targets:all'
-        + '|algo:' + GEOMETRY_ALGO_VERSION;
+      const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
+      const fallbackMode: MeshGenerationMode = qualityToUse === rendered3DConfig.quality ? 'preview' : 'export';
 
       await yieldToMainThread();
-      const group = canReusePreviewGroup
-        ? (modelCache3D.get(previewMeshKey) || await generateMesh(() => {}, qualityToUse, undefined, 'export', { targetLayerIds: [layer.id] }))
-        : await generateMesh(() => {}, qualityToUse, undefined, 'export', { targetLayerIds: [layer.id] });
+      const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode, { targetLayerIds: [layer.id] });
       const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
       if (mesh) {
         await yieldToMainThread();
         const exporter = new ThreeMFExporter();
-        const blob = await exporter.parse(mesh, getExportCleanupOptions(quality));
+        const blob = await exporter.parse(mesh, getExportCleanupOptions(quality, true));
         const actualTriangles = countTrianglesInObject(mesh);
         const qLabel = quality ? `_${quality}` : '';
         downloadBlob(blob, `${config.projectName}_${layer.name.replace(/\s+/g, '_')}${qLabel}.3mf`);
@@ -6263,8 +6261,11 @@ const App: React.FC = () => {
       setExportLoading(true);
       setExportLoadingKey('all-zip');
       try {
+        const qualityToUse = quality || config.quality;
+        const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
+        const fallbackMode: MeshGenerationMode = qualityToUse === rendered3DConfig.quality ? 'preview' : 'export';
           await yieldToMainThread();
-          const group = await generateMesh(() => {}, quality, undefined, 'export');
+        const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode);
           const zip = new JSZip();
 
             if (identifyBodiesMode) {
@@ -6293,7 +6294,7 @@ const App: React.FC = () => {
                 // Yield between per-layer serialization steps so the UI stays responsive.
                 await yieldToMainThread();
               }
-              const result = await exporter.parseAsync(child, getExportCleanupOptions(quality));
+              const result = await exporter.parseAsync(child, getExportCleanupOptions(quality, true));
               // STL ZIP remains binary STL files for slicer compatibility.
               const data = result as ArrayBuffer;
               const qLabel = quality ? `_${quality}` : '';
@@ -6331,17 +6332,12 @@ const App: React.FC = () => {
     setExportLoadingKey('layers-batch-stl');
     try {
       const qualityToUse = quality || config.quality;
-      const canReusePreviewGroup = qualityToUse === config.quality;
-      const previewMeshKey = hashConfig(config)
-        + '|q:' + qualityToUse
-        + '|targets:all'
-        + '|algo:' + GEOMETRY_ALGO_VERSION;
+      const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
+      const fallbackMode: MeshGenerationMode = qualityToUse === rendered3DConfig.quality ? 'preview' : 'export';
 
       await yieldToMainThread();
       const targetLayerIds = selectedLayers.map(({ layer }) => layer.id);
-      const group = canReusePreviewGroup
-        ? (modelCache3D.get(previewMeshKey) || await generateMesh(() => {}, qualityToUse, undefined, 'export', { targetLayerIds }))
-        : await generateMesh(() => {}, qualityToUse, undefined, 'export', { targetLayerIds });
+      const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode, { targetLayerIds });
       const exporter = new STLExporter();
       let totalTriangles = 0;
       let totalBytes = 0;
@@ -6352,7 +6348,7 @@ const App: React.FC = () => {
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
         if (!mesh) continue;
         if (i > 0) await yieldToMainThread();
-        const result = await exporter.parseAsync(mesh, getExportCleanupOptions(quality));
+        const result = await exporter.parseAsync(mesh, getExportCleanupOptions(quality, true));
         const blob = new Blob([result], { type: 'application/octet-stream' });
         const actualTriangles = Math.max(0, Math.floor((blob.size - 84) / 50));
         totalTriangles += actualTriangles;
@@ -6394,17 +6390,12 @@ const App: React.FC = () => {
     setExportLoadingKey('layers-batch-3mf');
     try {
       const qualityToUse = quality || config.quality;
-      const canReusePreviewGroup = qualityToUse === config.quality;
-      const previewMeshKey = hashConfig(config)
-        + '|q:' + qualityToUse
-        + '|targets:all'
-        + '|algo:' + GEOMETRY_ALGO_VERSION;
+      const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
+      const fallbackMode: MeshGenerationMode = qualityToUse === rendered3DConfig.quality ? 'preview' : 'export';
 
       await yieldToMainThread();
       const targetLayerIds = selectedLayers.map(({ layer }) => layer.id);
-      const group = canReusePreviewGroup
-        ? (modelCache3D.get(previewMeshKey) || await generateMesh(() => {}, qualityToUse, undefined, 'export', { targetLayerIds }))
-        : await generateMesh(() => {}, qualityToUse, undefined, 'export', { targetLayerIds });
+      const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode, { targetLayerIds });
       const exporter = new ThreeMFExporter();
       let totalTriangles = 0;
       let totalBytes = 0;
@@ -6415,7 +6406,7 @@ const App: React.FC = () => {
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
         if (!mesh) continue;
         if (i > 0) await yieldToMainThread();
-        const blob = await exporter.parse(mesh, getExportCleanupOptions(quality));
+        const blob = await exporter.parse(mesh, getExportCleanupOptions(quality, true));
         const actualTriangles = countTrianglesInObject(mesh);
         totalTriangles += actualTriangles;
         totalBytes += blob.size;

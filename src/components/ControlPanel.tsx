@@ -271,7 +271,7 @@ interface ExportMenuProps {
 const ExportMenu: React.FC<ExportMenuProps> = ({
   label, onExportSTL, onExport3MF, onExportSelectedPlanesSTL, onExportSelectedPlanes3MF, onExport2D, onEstimateExportStats, onPrecomputeExportStats, isLoading, disabled, className, baseColor = "bg-sky-600", direction = 'up', show2D = false, shortcut, t, compact = false, planeActions, defaultEstimateLayerIndices
 }) => {
-  const [quality, setQuality] = useState<DesignQuality>('med');
+  const [quality, setQuality] = useState<DesignQuality>('low');
   const [format, setFormat] = useState<'stl' | '3mf' | 'svg' | 'dxf'>('stl');
   const [isOpen, setIsOpen] = useState(false);
   const [selectedPlaneIndices, setSelectedPlaneIndices] = useState<number[]>([]);
