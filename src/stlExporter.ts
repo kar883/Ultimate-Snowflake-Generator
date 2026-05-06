@@ -2,15 +2,12 @@ import * as THREE from 'three';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
 import JSZip from 'jszip';
 import { DesignQuality } from './types';
-import { getTopologyReport, surgicalSlotRepair } from './surgicalSlotRepair';
 
 type ExportCleanupOptions = {
   optimize?: boolean;
   weldTolerance?: number;
   quality?: DesignQuality;
   nearLosslessDecimation?: boolean;
-  enforceManifold?: boolean;
-  manifoldFaceLimit?: number;
 };
 
 type STLParseOptions = ExportCleanupOptions & {
@@ -19,7 +16,6 @@ type STLParseOptions = ExportCleanupOptions & {
 
 const DEFAULT_WELD_TOLERANCE = 0.000002;
 const DEFAULT_YIELD_INTERVAL = 4000;
-const DEFAULT_MANIFOLD_FACE_LIMIT = 450000;
 
 const yieldToBrowser = async (): Promise<void> => {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -269,8 +265,6 @@ const cleanupGeometryForExport = (
   const weldTolerance = options?.weldTolerance ?? DEFAULT_WELD_TOLERANCE;
   const quality = options?.quality ?? 'med';
   const nearLosslessDecimation = options?.nearLosslessDecimation !== false;
-  const enforceManifold = options?.enforceManifold === true;
-  const manifoldFaceLimit = options?.manifoldFaceLimit ?? DEFAULT_MANIFOLD_FACE_LIMIT;
 
   let geometry = source.clone();
 
@@ -315,17 +309,6 @@ const cleanupGeometryForExport = (
     }
   }
 
-  if (enforceManifold && geometry.getIndex()) {
-    const report = getTopologyReport(geometry);
-    if (!report.isManifold && report.faces <= manifoldFaceLimit) {
-      const repaired = surgicalSlotRepair(geometry);
-      if (repaired !== geometry) {
-        geometry.dispose();
-        geometry = repaired;
-      }
-    }
-  }
-
   geometry.computeVertexNormals();
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
@@ -340,8 +323,6 @@ const cleanupGeometryForExportAsync = async (
   const weldTolerance = options?.weldTolerance ?? DEFAULT_WELD_TOLERANCE;
   const quality = options?.quality ?? 'med';
   const nearLosslessDecimation = options?.nearLosslessDecimation !== false;
-  const enforceManifold = options?.enforceManifold === true;
-  const manifoldFaceLimit = options?.manifoldFaceLimit ?? DEFAULT_MANIFOLD_FACE_LIMIT;
 
   let geometry = source.clone();
 
@@ -386,17 +367,6 @@ const cleanupGeometryForExportAsync = async (
           geometry = cleanedDecimated;
         }
         await yieldToBrowser();
-      }
-    }
-  }
-
-  if (enforceManifold && geometry.getIndex()) {
-    const report = getTopologyReport(geometry);
-    if (!report.isManifold && report.faces <= manifoldFaceLimit) {
-      const repaired = surgicalSlotRepair(geometry);
-      if (repaired !== geometry) {
-        geometry.dispose();
-        geometry = repaired;
       }
     }
   }

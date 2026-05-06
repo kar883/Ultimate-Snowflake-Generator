@@ -5696,7 +5696,7 @@ const App: React.FC = () => {
       }
     });
 
-  const getExportCleanupOptions = (quality?: DesignQuality, enforceManifold = false) => {
+  const getExportCleanupOptions = (quality?: DesignQuality) => {
     const q = quality || config.quality;
     const weldTolerance = q === 'high'
       ? 0.0000012
@@ -5709,8 +5709,6 @@ const App: React.FC = () => {
       weldTolerance,
       quality: q,
       nearLosslessDecimation: true,
-      enforceManifold,
-      manifoldFaceLimit: 450000,
       binary: true,
     };
   };
@@ -6199,7 +6197,7 @@ const App: React.FC = () => {
         if (mesh) {
             await yieldToMainThread();
             const exporter = new STLExporter();
-            const result = await exporter.parseAsync(mesh, getExportCleanupOptions(quality, true));
+            const result = await exporter.parseAsync(mesh, getExportCleanupOptions(quality));
             const blob = new Blob([result], { type: 'application/octet-stream' });
             const actualTriangles = Math.max(0, Math.floor((blob.size - 84) / 50));
             const qLabel = quality ? `_${quality}` : '';
@@ -6241,7 +6239,7 @@ const App: React.FC = () => {
       if (mesh) {
         await yieldToMainThread();
         const exporter = new ThreeMFExporter();
-        const blob = await exporter.parse(mesh, getExportCleanupOptions(quality, true));
+        const blob = await exporter.parse(mesh, getExportCleanupOptions(quality));
         const actualTriangles = countTrianglesInObject(mesh);
         const qLabel = quality ? `_${quality}` : '';
         downloadBlob(blob, `${config.projectName}_${layer.name.replace(/\s+/g, '_')}${qLabel}.3mf`);
@@ -6294,7 +6292,7 @@ const App: React.FC = () => {
                 // Yield between per-layer serialization steps so the UI stays responsive.
                 await yieldToMainThread();
               }
-              const result = await exporter.parseAsync(child, getExportCleanupOptions(quality, true));
+              const result = await exporter.parseAsync(child, getExportCleanupOptions(quality));
               // STL ZIP remains binary STL files for slicer compatibility.
               const data = result as ArrayBuffer;
               const qLabel = quality ? `_${quality}` : '';
@@ -6348,7 +6346,7 @@ const App: React.FC = () => {
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
         if (!mesh) continue;
         if (i > 0) await yieldToMainThread();
-        const result = await exporter.parseAsync(mesh, getExportCleanupOptions(quality, true));
+        const result = await exporter.parseAsync(mesh, getExportCleanupOptions(quality));
         const blob = new Blob([result], { type: 'application/octet-stream' });
         const actualTriangles = Math.max(0, Math.floor((blob.size - 84) / 50));
         totalTriangles += actualTriangles;
@@ -6406,7 +6404,7 @@ const App: React.FC = () => {
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
         if (!mesh) continue;
         if (i > 0) await yieldToMainThread();
-        const blob = await exporter.parse(mesh, getExportCleanupOptions(quality, true));
+        const blob = await exporter.parse(mesh, getExportCleanupOptions(quality));
         const actualTriangles = countTrianglesInObject(mesh);
         totalTriangles += actualTriangles;
         totalBytes += blob.size;
