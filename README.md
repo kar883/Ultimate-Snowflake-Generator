@@ -10,6 +10,7 @@
 - Linux AppImage: [Snowflake.Generator-1.0.7.AppImage](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.7/Snowflake.Generator-1.0.7.AppImage)
 - All release assets: [GitHub Releases](https://github.com/kar883/Ultimate-Snowflake-Generator/releases)
 
+Inspired by Jexom https://www.thingiverse.com/thing:2702278 I quickly found the limits of OpenSCAD and wanted to see if I could improve on that program.  
 Design complex 2D and 3D snowflakes from text, hubs, abstracts, and multi-plane controls, then export for 3D printing or vector workflows.
   Inspired by Jexom https://www.thingiverse.com/thing:2702278 I quickly found the limits of OpenSCAD and wanted to see if I could improve on that program.  
 

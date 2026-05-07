@@ -292,8 +292,8 @@ Create `CHANGELOG.md`:
 
 Users can refer to:
 - **README.md** - Quick start
-- **DISTRIBUTION.md** - Installation guide
-- **README-DISTRIBUTION.md** - Features and tips
+- **PACKAGING.md** - Packaging and distribution workflow
+- **e2e/README.md** - End-to-end testing guide
 - In-app tooltips and keyboard shortcuts
 
 ## Next Steps
