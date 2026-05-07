@@ -1,4 +1,4 @@
-# Ultimate Snowflake Generator - Created by Kyle Russell
+# Ultimate Snowflake Generator - Createdby Kyle Russell
 
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
 
@@ -11,6 +11,7 @@
 - All release assets: [GitHub Releases](https://github.com/kar883/Ultimate-Snowflake-Generator/releases)
 
 Design complex 2D and 3D snowflakes from text, hubs, abstracts, and multi-plane controls, then export for 3D printing or vector workflows.
+  Inspired by Jexom https://www.thingiverse.com/thing:2702278 I quickly found the limits of OpenSCAD and wanted to see if I could improve on that program.  
 
 ## What You Can Do
 - Create your own unique snowflakes by customizing text, individual letter behavior, central hubs, abstract designs, fractals, and images (svg). 
@@ -36,6 +37,7 @@ Design complex 2D and 3D snowflakes from text, hubs, abstracts, and multi-plane 
 
 ### Export Options
 ![Export options](assets/screenshots/export-options.png)
+- Exporting in low quality is usually sufficient and faster. Higher quality is available but takes longer to export and files are significantly larger.
 
 
 ## Tips
@@ -48,6 +50,9 @@ Design complex 2D and 3D snowflakes from text, hubs, abstracts, and multi-plane 
 - Sync All Planes OFF (asynchronous mode): each plane keeps its own independent text/pattern settings, and only the active plane is edited when you change controls.
 - In asynchronous mode, the active plane is visually emphasized in 2D and 3D previews so you can quickly see which plane you are editing.
 
+## Share Your Designs
+ - Please show me what you were able to with this app. Upload a picutre of your design or the .json file to 
+   
 ## License
 
 This project is licensed under
