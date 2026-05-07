@@ -51,7 +51,7 @@ Design complex 2D and 3D snowflakes from text, hubs, abstracts, and multi-plane 
 - In asynchronous mode, the active plane is visually emphasized in 2D and 3D previews so you can quickly see which plane you are editing.
 
 ## Share Your Designs
- - Please show me what you were able to with this app. Upload a picutre of your design or the .json file to 
+ - Please show me what you were able to with this app. Upload a picutre of your design or the .json file to https://github.com/kar883/Ultimate-Snowflake-Generator/tree/main/Examples
    
 ## License
 
