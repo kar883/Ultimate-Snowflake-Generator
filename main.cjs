@@ -4,6 +4,7 @@ const https = require('https');
 
 // Keep a global reference of the window object
 let mainWindow;
+let hasCheckedForUpdatesOnStartup = false;
 
 function createWindow() {
   // Create the browser window
@@ -35,6 +36,14 @@ function createWindow() {
   // Show window when ready to prevent visual flash
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
+  });
+
+  // Run one silent startup update check per app launch.
+  mainWindow.webContents.once('did-finish-load', () => {
+    if (!hasCheckedForUpdatesOnStartup) {
+      hasCheckedForUpdatesOnStartup = true;
+      checkAndPromptForUpdates(false);
+    }
   });
 
   // Handle window closed
@@ -135,7 +144,7 @@ function showAbout() {
     type: 'info',
     title: 'About Ultimate Snowflake Generator',
     message: 'Ultimate Snowflake Generator',
-    detail: 'Version 1.0.7\nCreated by Kyle Russell\n\nA beautiful 3D snowflake design generator for art and 3D printing.\n\nVisit the GitHub repository for more information and to report issues.',
+    detail: 'Version 1.0.8\nCreated by Kyle Russell\n\nA beautiful 3D snowflake design generator for art and 3D printing.\n\nVisit the GitHub repository for more information and to report issues.',
     buttons: ['GitHub Repository', 'OK'],
     defaultId: 1,
     cancelId: 1
@@ -173,13 +182,15 @@ function checkAndPromptForUpdates(isManual = false) {
       });
     }
   }).catch(error => {
-    dialog.showMessageBox(mainWindow, {
-      type: 'error',
-      title: 'Update Check Failed',
-      message: 'Could not check for updates',
-      detail: 'Failed to connect to GitHub. Please check your internet connection and try again.',
-      buttons: ['OK']
-    });
+    if (isManual) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'error',
+        title: 'Update Check Failed',
+        message: 'Could not check for updates',
+        detail: 'Failed to connect to GitHub. Please check your internet connection and try again.',
+        buttons: ['OK']
+      });
+    }
   });
 }
 

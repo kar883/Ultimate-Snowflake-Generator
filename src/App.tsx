@@ -34,7 +34,7 @@ import { getAdjustedGlyphPathCommands, getPathCommandBounds, makePathFromCommand
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, /*makeSlotKey,*/ getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, /*slotCutCache,*/ makeUnderlineKey } from './geometryCache';
 
 const MAX_HISTORY = 50;
-const APP_VERSION = '1.0.7';
+const APP_VERSION = '1.0.8';
 // Bump when mesh generation logic changes (slot geometry, CSG sequencing, etc.)
 // so cached groups from older algorithms are not reused.
 const GEOMETRY_ALGO_VERSION = 'slot-2026-04-15-k';
@@ -2818,6 +2818,7 @@ const applyWatertightSlotCuts = async (
 
 
 const createDefaultTextGroup = (text: string, rotation: number, fontSize: number, textX: number): TextGroupConfig => ({
+  id: `text-${Math.random().toString(36).slice(2, 10)}`,
   enabled: true,
   text,
   fontFamily: CURSIVE_FONTS[0].family,
@@ -2839,8 +2840,11 @@ const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isEnabled 
   enabled: isEnabled,
   rotation3D: { x: rx, y: ry, z: 0 },
   primary: createDefaultTextGroup("Snow", 0, 36.7, 20),
-  secondary: createDefaultTextGroup("", 30, 20, 10),
-  secondaryEnabled: true,
+  secondary: { ...createDefaultTextGroup("", 30, 20, 10), enabled: false },
+  secondaryEnabled: false,
+  textGroups: [
+    createDefaultTextGroup("Snow", 0, 36.7, 20),
+  ],
   abstracts: [],
   hubs: [],
   slotType: 'none',
@@ -2872,6 +2876,35 @@ const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isEnabled 
   slotBridges: [],
   images: [],
 });
+
+const ensureTextGroupId = (group: TextGroupConfig): TextGroupConfig => ({
+  ...group,
+  id: group.id || `text-${Math.random().toString(36).slice(2, 10)}`,
+});
+
+const getLayerTextGroups = (layer: LayerConfig): TextGroupConfig[] => {
+  if (Array.isArray(layer.textGroups) && layer.textGroups.length > 0) {
+    return layer.textGroups.map(ensureTextGroupId);
+  }
+  const derived: TextGroupConfig[] = [ensureTextGroupId(layer.primary)];
+  if (layer.secondaryEnabled !== false) {
+    derived.push(ensureTextGroupId(layer.secondary));
+  }
+  return derived;
+};
+
+const syncLayerLegacyTextFields = (layer: LayerConfig, groupsInput?: TextGroupConfig[]): LayerConfig => {
+  const groups = (groupsInput || getLayerTextGroups(layer)).map(ensureTextGroupId);
+  const first = groups[0] || { ...ensureTextGroupId(layer.primary), enabled: false };
+  const second = groups[1] || { ...ensureTextGroupId(layer.secondary), enabled: false };
+  return {
+    ...layer,
+    textGroups: groups,
+    primary: first,
+    secondary: second,
+    secondaryEnabled: groups.length > 1,
+  };
+};
 
 const USER_DEFAULTS_STORAGE_KEY = 'snowflake-user-defaults-v1';
 
@@ -2960,10 +2993,10 @@ const loadStartupState = (): SnowflakeConfig => {
           protectMatingClearance: typeof layer?.protectMatingClearance === 'boolean' ? layer.protectMatingClearance : true,
           slotBridges: normalizeSlotBridgeList((layer ?? {}) as LayerConfig),
         };
-        return {
+        return syncLayerLegacyTextFields({
           ...normalizedLayer,
           slotBridges: getClearanceProtectedBridges(normalizedLayer, slotThickness),
-        };
+        });
       }),
       highlightActivePlaneOnly: typeof parsed.highlightActivePlaneOnly === 'boolean'
         ? parsed.highlightActivePlaneOnly
@@ -3218,7 +3251,8 @@ const App: React.FC = () => {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiProgress, setAiProgress] = useState(0);
   const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d');
-  const [autoRegenerate3D, setAutoRegenerate3D] = useState(true);
+  const [autoRegenerate3D, setAutoRegenerate3D] = useState(false);
+  const [forceRefresh3DToken, setForceRefresh3DToken] = useState(0);
   const [identifyBodiesMode, setIdentifyBodiesMode] = useState(false);
   const [floatingBodiesByLayer, setFloatingBodiesByLayer] = useState<Record<string, boolean>>({});
   const [isProcessing3D, setIsProcessing3D] = useState(false);
@@ -3813,6 +3847,12 @@ const App: React.FC = () => {
 
     setConfig(prev => {
       let next = { ...prev, ...updates };
+      if (Array.isArray(next.layers)) {
+        next = {
+          ...next,
+          layers: next.layers.map((layer) => syncLayerLegacyTextFields(layer)),
+        };
+      }
 
       const hasExplicitGlobalBridgeToggle = Object.prototype.hasOwnProperty.call(updates, 'slotBridgesEnabled');
       const slotWillBeEnabled = next.slotEnabled === true;
@@ -4098,7 +4138,13 @@ const App: React.FC = () => {
     handleUpdateConfig({
       layers: config.layers.map((layer, idx) => {
         if (idx === config.activeLayerIndex || config.syncAllLayers) {
-            return { ...layer, [group]: { ...layer[group], ...updates } };
+            const groups = getLayerTextGroups(layer);
+            const groupIndex = group === 'primary' ? 0 : 1;
+            if (!groups[groupIndex]) {
+              return syncLayerLegacyTextFields({ ...layer, [group]: { ...layer[group], ...updates } });
+            }
+            const nextGroups = groups.map((g, i) => (i === groupIndex ? { ...g, ...updates } : g));
+            return syncLayerLegacyTextFields({ ...layer, [group]: { ...layer[group], ...updates } }, nextGroups);
         }
         return layer;
       })
@@ -4112,10 +4158,28 @@ const App: React.FC = () => {
             const newOffsets = [...layer[group].charOffsets];
             if (!newOffsets[charIndex]) newOffsets[charIndex] = { x: 0, y: 0 };
             newOffsets[charIndex] = { ...newOffsets[charIndex], ...offset };
-            return { ...layer, [group]: { ...layer[group], charOffsets: newOffsets } };
+            const groups = getLayerTextGroups(layer);
+            const groupIndex = group === 'primary' ? 0 : 1;
+            const nextGroups = groups.map((g, i) => (i === groupIndex ? { ...g, charOffsets: newOffsets } : g));
+            return syncLayerLegacyTextFields({ ...layer, [group]: { ...layer[group], charOffsets: newOffsets } }, nextGroups);
         }
         return layer;
       })
+    }, commitTo3D);
+  }, [config.layers, config.activeLayerIndex, config.syncAllLayers, handleUpdateConfig]);
+
+  const updateTextGroups = useCallback((newTextGroups: TextGroupConfig[], commitTo3D: boolean = false) => {
+    const normalizedGroups = newTextGroups.map(ensureTextGroupId);
+    handleUpdateConfig({
+      layers: config.layers.map((layer, idx) => {
+        if (idx === config.activeLayerIndex) {
+          return syncLayerLegacyTextFields(layer, normalizedGroups);
+        }
+        if (config.syncAllLayers) {
+          return syncLayerLegacyTextFields(layer, JSON.parse(JSON.stringify(normalizedGroups)));
+        }
+        return layer;
+      }),
     }, commitTo3D);
   }, [config.layers, config.activeLayerIndex, config.syncAllLayers, handleUpdateConfig]);
 
@@ -4203,6 +4267,13 @@ const App: React.FC = () => {
     // Previously used a partial key that missed hub/abstract parameters,
     // causing 3D to show stale mesh when those values changed.
     const meshKey = makeModelCacheKey(config, (overrideQuality || config.quality), targetLayerIds);
+
+    // Force refresh should rebuild from fresh geometry/slot intermediates.
+    if (generationMode === 'refresh') {
+      clearGeometryCache();
+      clearSlotCutResultCache();
+      modelCache3D.delete(meshKey);
+    }
 
     // Check cache first unless this is an explicit force-refresh run.
     if (generationMode !== 'refresh') {
@@ -5251,8 +5322,10 @@ const App: React.FC = () => {
       };
       */
 
-      await processTextGroup(layer.primary);
-      await processTextGroup(layer.secondary);
+      const textGroups = getLayerTextGroups(layer);
+      for (const textGroup of textGroups) {
+        await processTextGroup(textGroup);
+      }
       processHubs(layer.hubs);
       processAbstracts(layer.abstracts);
 
@@ -6390,8 +6463,10 @@ const App: React.FC = () => {
            });
         });
       };
-      if (layer.primary.enabled) await loadFont(layer.primary.fontFamily);
-      if (layer.secondary.enabled) await loadFont(layer.secondary.fontFamily);
+      const textGroups = getLayerTextGroups(layer);
+      for (const group of textGroups) {
+        if (group.enabled) await loadFont(group.fontFamily);
+      }
 
       let svgContent = '';
       let dxfEntities = '';
@@ -6498,8 +6573,7 @@ const App: React.FC = () => {
          }
       };
 
-      processGroup(layer.primary);
-      if (layer.secondaryEnabled) processGroup(layer.secondary);
+      textGroups.forEach(processGroup);
 
       if (format === 'svg') {
          const finalSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-250 -250 500 500" width="500mm" height="500mm"><g transform="scale(1, -1)">${svgContent}</g></svg>`;
@@ -7401,26 +7475,32 @@ const App: React.FC = () => {
   }
 };
 
+  const enter3DView = useCallback(() => {
+    // Only updates the 3D snapshot when the serialized config changed.
+    setRendered3DIfChanged(config);
+    setViewMode('3d');
+  }, [config, setRendered3DIfChanged]);
+
   useKeyboardShortcuts(shortcuts, {
     undo,
     redo,
     toggleView: () => {
       const newMode = viewMode === '2d' ? '3d' : '2d';
-      setViewMode(newMode);
-      // When switching to 3D view, immediately sync the current config to ensure changes are visible
-      if (newMode === '3d' && autoRegenerate3D) {
+      if (newMode === '3d') {
         // Clear any pending debounced updates to avoid conflicts
         if (debounceTimer.current) {
           clearTimeout(debounceTimer.current);
           debounceTimer.current = null;
         }
-        setRendered3DIfChanged(config);
+        enter3DView();
+        return;
       }
+      setViewMode(newMode);
     },
     forceRegenerate: () => {
         clearGeometryCache();
       clearSlotCutResultCache();
-        setRendered3DIfChanged(config);
+        setForceRefresh3DToken((prev) => prev + 1);
         showNotification("Models Regenerated", "info", 1000);
     },
     exportCombinedSTL: () => handleExportSTL(),
@@ -7481,6 +7561,7 @@ const App: React.FC = () => {
                         onUpdate={handleUpdateConfig}
                         updateGroup={updateGroup}
                         updateCharOffset={updateCharOffset}
+                        updateTextGroups={updateTextGroups}
                         updateHubs={updateHubs}
                         updateAbstracts={updateAbstracts}
                         updateImages={updateImages}
@@ -7564,6 +7645,7 @@ const App: React.FC = () => {
                             onFloatingBodiesChange={setFloatingBodiesByLayer}
                             onProcessingChange={setIsProcessing3D}
                             emergencyStopSeq={emergencyStopSeq}
+                            forceRefreshToken={forceRefresh3DToken}
                             activeLayerId={rendered3DConfig.layers[rendered3DConfig.activeLayerIndex]?.id}
                             syncAllLayers={rendered3DConfig.syncAllLayers}
                             highlightActivePlaneOnly={rendered3DConfig.highlightActivePlaneOnly}
@@ -7610,10 +7692,7 @@ const App: React.FC = () => {
                         </button>
                         <button
                             onClick={() => {
-                              if (autoRegenerate3D) {
-                                setRendered3DIfChanged(config);
-                              }
-                              setViewMode('3d');
+                              enter3DView();
                             }}
                             className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${viewMode === '3d' ? 'bg-sky-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
                         >

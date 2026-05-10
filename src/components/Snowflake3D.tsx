@@ -873,6 +873,7 @@ interface Snowflake3DProps {
   onFloatingBodiesChange?: (floatingByLayer: Record<string, boolean>) => void;
   onProcessingChange?: (isProcessing: boolean) => void;
   emergencyStopSeq?: number;
+  forceRefreshToken?: number;
   activeLayerId?: string;
   syncAllLayers?: boolean;
   highlightActivePlaneOnly?: boolean;
@@ -1175,6 +1176,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   onFloatingBodiesChange,
   onProcessingChange,
   emergencyStopSeq = 0,
+  forceRefreshToken = 0,
   activeLayerId,
   syncAllLayers = true,
   highlightActivePlaneOnly = false,
@@ -1226,6 +1228,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   const [isAnalyzingBodies, setIsAnalyzingBodies] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const prevRefreshKeyRef = useRef(0);
+  const prevForceRefreshTokenRef = useRef(forceRefreshToken);
   const hardStopTokenRef = useRef(0);
   const bodiesWorkersRef = useRef<Worker[]>([]);
   const bodiesAnalysisTokenRef = useRef(0);
@@ -2023,8 +2026,11 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     let cancelled = false;
     const load = async () => {
       const loadToken = hardStopTokenRef.current;
-      const isForcedRefresh = refreshKey !== prevRefreshKeyRef.current;
+      const isForcedByButton = refreshKey !== prevRefreshKeyRef.current;
+      const isForcedByExternalToken = forceRefreshToken !== prevForceRefreshTokenRef.current;
+      const isForcedRefresh = isForcedByButton || isForcedByExternalToken;
       prevRefreshKeyRef.current = refreshKey;
+      prevForceRefreshTokenRef.current = forceRefreshToken;
       setLoading(true);
       setConflictCount(0);
       try {
@@ -2193,7 +2199,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     };
     const t = setTimeout(load, 100);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [configKey, refreshKey]);
+  }, [configKey, refreshKey, forceRefreshToken]);
 
   // ── Render ───────────────────────────────────────────────────────────────
 

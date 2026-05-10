@@ -3,11 +3,11 @@
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
 
 ## Download
-- Windows Installer: [Snowflake.Generator.Setup.1.0.7.exe](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.7/Snowflake.Generator.Setup.1.0.7.exe)
-- Windows ZIP: [Snowflake.Generator-1.0.7-win.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.7/Snowflake.Generator-1.0.7-win.zip)
-- macOS DMG: [Snowflake.Generator-1.0.7-arm64.dmg](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.7/Snowflake.Generator-1.0.7-arm64.dmg)
-- macOS ZIP: [Snowflake.Generator-1.0.7-arm64-mac.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.7/Snowflake.Generator-1.0.7-arm64-mac.zip)
-- Linux AppImage: [Snowflake.Generator-1.0.7.AppImage](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.7/Snowflake.Generator-1.0.7.AppImage)
+- Windows Installer: [Snowflake.Generator.Setup.1.0.8.exe](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.8/Snowflake.Generator.Setup.1.0.8.exe)
+- Windows ZIP: [Snowflake.Generator-1.0.8-win.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.8/Snowflake.Generator-1.0.8-win.zip)
+- macOS DMG: [Snowflake.Generator-1.0.8-arm64.dmg](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.8/Snowflake.Generator-1.0.8-arm64.dmg)
+- macOS ZIP: [Snowflake.Generator-1.0.8-arm64-mac.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.8/Snowflake.Generator-1.0.8-arm64-mac.zip)
+- Linux AppImage: [Snowflake.Generator-1.0.8.AppImage](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.0.8/Snowflake.Generator-1.0.8.AppImage)
 - All release assets: [GitHub Releases](https://github.com/kar883/Ultimate-Snowflake-Generator/releases)
 
 Inspired by Jexom https://www.thingiverse.com/thing:2702278 I quickly found the limits of OpenSCAD and wanted to see if I could improve on that program.  

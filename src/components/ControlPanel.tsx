@@ -1418,6 +1418,7 @@ interface ControlPanelProps {
   onUpdate: (updates: Partial<SnowflakeConfig>, commitTo3D?: boolean) => void;
   updateGroup: (group: 'primary' | 'secondary', updates: Partial<TextGroupConfig>, commitTo3D?: boolean) => void;
   updateCharOffset: (group: 'primary' | 'secondary', charIndex: number, offset: Partial<CharOffset>, commitTo3D?: boolean) => void;
+  updateTextGroups?: (newTextGroups: TextGroupConfig[], commitTo3D?: boolean) => void;
   updateHubs: (newHubs: HubConfig[], commitTo3D?: boolean) => void;
   updateAbstracts: (newAbstracts: AbstractConfig[], commitTo3D?: boolean) => void;
   updateImages: (newImages: ImageConfig[], commitTo3D?: boolean) => void;
@@ -1455,7 +1456,7 @@ interface ControlPanelProps {
 }
 
 const ControlPanel: React.FC<ControlPanelProps> = ({
-  config, onUpdate, updateGroup, updateCharOffset, updateHubs, updateAbstracts, updateImages, onAiPolish, aiLoading, aiProgress, onExportSTL, onExport3MF, onExportLayerSTL, onExportLayer3MF, onExportSelectedLayersSTL, onExportSelectedLayers3MF, onEstimateExportStats, onPrecomputeExportStats, onExportAllLayersZip, onExport2D, exportLoading, exportLoadingKey, onFetchFont, onFontUpload, dynamicFonts, /* SLOT-DISABLED: onAutoConfigureSlots, calculateOptimalSlots, */ setViewMode, undo, redo, canUndo, canRedo, shortcuts, onUpdateShortcuts, onResetShortcuts, onOpenShortcutsModal, onSaveAsDefault, onRestoreFactoryDefaults, activeTab, onTabChange
+  config, onUpdate, updateGroup, updateCharOffset, updateTextGroups, updateHubs, updateAbstracts, updateImages, onAiPolish, aiLoading, aiProgress, onExportSTL, onExport3MF, onExportLayerSTL, onExportLayer3MF, onExportSelectedLayersSTL, onExportSelectedLayers3MF, onEstimateExportStats, onPrecomputeExportStats, onExportAllLayersZip, onExport2D, exportLoading, exportLoadingKey, onFetchFont, onFontUpload, dynamicFonts, /* SLOT-DISABLED: onAutoConfigureSlots, calculateOptimalSlots, */ setViewMode, undo, redo, canUndo, canRedo, shortcuts, onUpdateShortcuts, onResetShortcuts, onOpenShortcutsModal, onSaveAsDefault, onRestoreFactoryDefaults, activeTab, onTabChange
 }) => {
   const { t } = useTranslation(config.language || 'en');
   const tabContentRef = useRef<HTMLDivElement>(null);
@@ -1465,7 +1466,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
     isInitialLoad.current = false;
   }, []);
 
-  const [activeGroup, setActiveGroup] = useState<'primary' | 'secondary'>('primary');
+  const [selectedTextGroupIndex, setSelectedTextGroupIndex] = useState(0);
 
   const [selectedCharIndex, setSelectedCharIndex] = useState(0);
   const [selectedHubIndex, setSelectedHubIndex] = useState(0);
@@ -1473,7 +1474,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
   const [fontSearch, setFontSearch] = useState('');
   const [currentStats, setCurrentStats] = useState({ radius: 95, diameter: 190, activeGroupRadius: 95, activeGroupDiameter: 190 });
-  const [radiusLocks, setRadiusLocks] = useState({ primary: { locked: true, target: 95 }, secondary: { locked: false, target: 20 } });
+  const [radiusLocks, setRadiusLocks] = useState<Record<string, { locked: boolean; target: number }>>({ text0: { locked: true, target: 95 }, text1: { locked: false, target: 20 } });
   const [showTooltips, setShowTooltips] = useState(true);
 
   const fontCache = useRef<Record<string, opentype.Font>>({});
@@ -1483,11 +1484,74 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   // Safe Guard against invalid activeLayerIndex
   if (!activeLayer) return null;
 
-  const groupData = activeLayer[activeGroup];
+  const getLayerTextGroups = (layer: LayerConfig): TextGroupConfig[] => {
+    if (Array.isArray(layer.textGroups) && layer.textGroups.length > 0) {
+      return layer.textGroups;
+    }
+    const groups = [layer.primary];
+    if (layer.secondaryEnabled !== false) groups.push(layer.secondary);
+    return groups;
+  };
+
+  const textGroups = getLayerTextGroups(activeLayer);
+  const safeSelectedTextGroupIndex = Math.min(selectedTextGroupIndex, Math.max(0, textGroups.length - 1));
+  const groupData = textGroups[safeSelectedTextGroupIndex] || activeLayer.primary;
+  const activeGroupKey = `text${safeSelectedTextGroupIndex}`;
+  const currentLockState = radiusLocks[activeGroupKey] || { locked: false, target: 95 };
+
+  const updateTextGroupsInLayer = useCallback((groups: TextGroupConfig[], commitTo3D: boolean = false) => {
+    if (updateTextGroups) {
+      updateTextGroups(groups, commitTo3D);
+      return;
+    }
+
+    const nextPrimary = groups[0] || { ...activeLayer.primary, enabled: false };
+    const nextSecondary = groups[1] || { ...activeLayer.secondary, enabled: false };
+    const nextLayers = config.layers.map((layer, idx) => {
+      if (idx === config.activeLayerIndex || config.syncAllLayers) {
+        return {
+          ...layer,
+          textGroups: groups,
+          primary: nextPrimary,
+          secondary: nextSecondary,
+          secondaryEnabled: groups.length > 1,
+        };
+      }
+      return layer;
+    });
+    onUpdate({ layers: nextLayers }, commitTo3D);
+  }, [updateTextGroups, activeLayer.primary, activeLayer.secondary, config.layers, config.activeLayerIndex, config.syncAllLayers, onUpdate]);
+
+  const updateGroupByIndex = useCallback((index: number, updates: Partial<TextGroupConfig>, commitTo3D: boolean = false) => {
+    const groups = getLayerTextGroups(activeLayer);
+    if (!groups[index]) return;
+    const nextGroups = groups.map((group, i) => (i === index ? { ...group, ...updates } : group));
+    updateTextGroupsInLayer(nextGroups, commitTo3D);
+  }, [activeLayer, updateTextGroupsInLayer]);
+
+  const updateSelectedGroup = useCallback((updates: Partial<TextGroupConfig>, commitTo3D: boolean = false) => {
+    updateGroupByIndex(safeSelectedTextGroupIndex, updates, commitTo3D);
+  }, [updateGroupByIndex, safeSelectedTextGroupIndex]);
+
+  const updateCharOffsetByIndex = useCallback((groupIndex: number, charIndex: number, offset: Partial<CharOffset>, commitTo3D: boolean = false) => {
+    const groups = getLayerTextGroups(activeLayer);
+    const group = groups[groupIndex];
+    if (!group) return;
+    const newOffsets = [...group.charOffsets];
+    if (!newOffsets[charIndex]) newOffsets[charIndex] = { x: 0, y: 0 };
+    newOffsets[charIndex] = { ...newOffsets[charIndex], ...offset };
+    updateGroupByIndex(groupIndex, { charOffsets: newOffsets }, commitTo3D);
+  }, [activeLayer, updateGroupByIndex]);
+
   const charControlEntries = buildTextControlEntries(groupData.text);
   const safeSelectedCharIndex = Math.min(selectedCharIndex, Math.max(0, charControlEntries.length - 1));
   const selectedCharEntry = charControlEntries[safeSelectedCharIndex];
-  const currentLockState = radiusLocks[activeGroup];
+
+  useEffect(() => {
+    if (selectedTextGroupIndex !== safeSelectedTextGroupIndex) {
+      setSelectedTextGroupIndex(safeSelectedTextGroupIndex);
+    }
+  }, [safeSelectedTextGroupIndex, selectedTextGroupIndex]);
 
   useEffect(() => {
     if (selectedCharIndex !== safeSelectedCharIndex) {
@@ -1548,13 +1612,15 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
     return textExtent;
   }, [config.bevelEnabled, config.bevelAmount, dynamicFonts]);
 
-  const updateGroupWithLock = useCallback(async (group: 'primary' | 'secondary', updates: Partial<TextGroupConfig>, commitTo3D: boolean = false) => {
-    updateGroup(group, updates, commitTo3D);
+  const updateGroupWithLock = useCallback(async (groupIndex: number, updates: Partial<TextGroupConfig>, commitTo3D: boolean = false) => {
+    updateGroupByIndex(groupIndex, updates, commitTo3D);
 
     // Don't rescale when font family is changing — font hasn't loaded yet
-    if (radiusLocks[group]?.locked && !('fontSize' in updates) && !('fontFamily' in updates)) {
-      const targetRad = radiusLocks[group]?.target ?? 95;
-      const currentGroup = { ...activeLayer[group], ...updates };
+    const lockKey = `text${groupIndex}`;
+    if (radiusLocks[lockKey]?.locked && !('fontSize' in updates) && !('fontFamily' in updates)) {
+      const targetRad = radiusLocks[lockKey]?.target ?? 95;
+      const groups = getLayerTextGroups(activeLayer);
+      const currentGroup = { ...(groups[groupIndex] || activeLayer.primary), ...updates };
       const safeTextX = isNaN(currentGroup.textX) ? 0 : currentGroup.textX;
       const neededWidth = targetRad - safeTextX;
       if (neededWidth >= 1) {
@@ -1563,12 +1629,12 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
             const ratio = neededWidth / currentWidth;
             const newFontSize = currentGroup.fontSize * ratio;
             // Include the original updates to prevent reverting text changes
-            updateGroup(group, { ...updates, fontSize: newFontSize }, commitTo3D);
+            updateGroupByIndex(groupIndex, { ...updates, fontSize: newFontSize }, commitTo3D);
           }
         });
       }
     }
-  }, [updateGroup, radiusLocks, activeLayer, getTextExtent]);
+  }, [updateGroupByIndex, radiusLocks, activeLayer, getTextExtent]);
 
   useEffect(() => {
       const calcStats = async () => {
@@ -1576,20 +1642,18 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
       let maxRad = 0;
       activeLayer.hubs.forEach(h => { if (h.enabled) maxRad = Math.max(maxRad, h.outerRadius + ((h.shape === 'circle' && h.oscillationEnabled) ? h.oscillationAmplitude : 0)); });
       activeLayer.abstracts.forEach(a => { if (a.enabled) maxRad = Math.max(maxRad, a.outerRadius + a.thickness / 2); });
-      const pExtent = await getTextExtent(activeLayer.primary);
-      const sExtent = await getTextExtent(activeLayer.secondary);
-
-      // Safety checks for extent calculations
-      const safePExtent = isNaN(pExtent) || pExtent === null || pExtent === undefined ? 0 : pExtent;
-      const safeSExtent = isNaN(sExtent) || sExtent === null || sExtent === undefined ? 0 : sExtent;
-
-      maxRad = Math.max(maxRad, activeLayer.primary.enabled ? activeLayer.primary.textX + safePExtent : 0, (activeLayer.secondaryEnabled && activeLayer.secondary.enabled) ? activeLayer.secondary.textX + safeSExtent : 0);
-      const activeGroupExtent = await getTextExtent(activeLayer[activeGroup]);
+      const layerTextGroups = getLayerTextGroups(activeLayer);
+      for (const group of layerTextGroups) {
+        const extent = await getTextExtent(group);
+        const safeExtent = isNaN(extent) || extent === null || extent === undefined ? 0 : extent;
+        maxRad = Math.max(maxRad, group.enabled ? group.textX + safeExtent : 0);
+      }
+      const activeGroupExtent = await getTextExtent(groupData);
 
       // Safety check for active group extent
       const safeActiveGroupExtent = isNaN(activeGroupExtent) || activeGroupExtent === null || activeGroupExtent === undefined ? 0 : activeGroupExtent;
-      const safeTextX = isNaN(activeLayer[activeGroup].textX) || activeLayer[activeGroup].textX === null || activeLayer[activeGroup].textX === undefined ? 0 : activeLayer[activeGroup].textX;
-      const activeGroupRad = activeLayer[activeGroup].enabled ? safeTextX + safeActiveGroupExtent : 0;
+      const safeTextX = isNaN(groupData.textX) || groupData.textX === null || groupData.textX === undefined ? 0 : groupData.textX;
+      const activeGroupRad = groupData.enabled ? safeTextX + safeActiveGroupExtent : 0;
 
       // Safety check for final values
       const safeMaxRad = isNaN(maxRad) || maxRad === null || maxRad === undefined ? 0 : maxRad;
@@ -1598,7 +1662,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
       setCurrentStats({ radius: safeMaxRad, diameter: safeMaxRad * 2, activeGroupRadius: safeActiveGroupRad, activeGroupDiameter: safeActiveGroupRad * 2 });
     };
     calcStats();
-  }, [config.layers, config.activeLayerIndex, getTextExtent, activeGroup, activeLayer]);
+  }, [config.layers, config.activeLayerIndex, getTextExtent, activeLayer, groupData]);
 
   const handleArmRadiusChange = (targetRad: number, commitTo3D: boolean = false) => {
     // Safety check for NaN values
@@ -1609,8 +1673,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
 
     setRadiusLocks(prev => ({
       ...prev,
-      [activeGroup]: {
-        ...prev[activeGroup],
+      [activeGroupKey]: {
+        ...prev[activeGroupKey],
         target: targetRad,
       }
     }));
@@ -1624,9 +1688,9 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
        if (currentWidth > 0.1) {
           const ratio = neededWidth / currentWidth;
           const newFontSize = groupData.fontSize * ratio;
-          updateGroup(activeGroup, { fontSize: newFontSize }, commitTo3D);
+           updateSelectedGroup({ fontSize: newFontSize }, commitTo3D);
        } else {
-          updateGroup(activeGroup, { textX: targetRad }, commitTo3D);
+           updateSelectedGroup({ textX: targetRad }, commitTo3D);
        }
     });
   };
@@ -1646,13 +1710,13 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
            if (currentWidth > 0.1) {
               const ratio = neededWidth / currentWidth;
               const newFontSize = groupData.fontSize * ratio;
-              updateGroup(activeGroup, { textX: newTextX, fontSize: newFontSize }, commit);
+                updateSelectedGroup({ textX: newTextX, fontSize: newFontSize }, commit);
            } else {
-              updateGroup(activeGroup, { textX: newTextX }, commit);
+                updateSelectedGroup({ textX: newTextX }, commit);
            }
         });
      } else {
-        updateGroup(activeGroup, { textX: newTextX }, commit);
+            updateSelectedGroup({ textX: newTextX }, commit);
      }
   };
 
@@ -2023,37 +2087,64 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
           )}
 
           {(activeTab === 'text' || activeTab === 'Letter Ctrl') && (
-             <div className="grid grid-cols-2 gap-2 mb-2">
-                <InfoTooltip label={t('Primary Group')} description={getDescription('Primary Group', t)} className="w-full">
-                <div
-                  onClick={() => setActiveGroup('primary')}
-                  className={`p-2 rounded-xl border transition-all cursor-pointer w-full ${activeGroup === 'primary' ? 'bg-slate-800/80 border-sky-500/50 shadow-lg shadow-sky-500/10' : 'bg-slate-900/50 border-white/5 hover:bg-slate-800/50'}`}
-                >
-                   <div className="flex flex-col gap-2">
-                      <div className="flex justify-between items-center">
-                          <span className={`text-[9px] font-black uppercase tracking-widest ${activeGroup === 'primary' ? 'text-sky-400' : 'text-slate-500'}`}>{t('Primary')}</span>
-                          <div onClick={(e) => e.stopPropagation()}>
-                             <Toggle label={activeLayer.primary.enabled ? t('ON') : t('OFF')} checked={activeLayer.primary.enabled} onChange={(c) => updateGroup('primary', { enabled: c }, true)} activeColor={activeGroup === 'primary' ? 'text-sky-400' : 'text-slate-400'} />
-                          </div>
-                      </div>
-                   </div>
-                </div>
-                </InfoTooltip>
-                <InfoTooltip label={t('Secondary Group')} description={getDescription('Secondary Group', t)} className="w-full">
-                <div
-                  onClick={() => setActiveGroup('secondary')}
-                  className={`p-2 rounded-xl border transition-all cursor-pointer w-full ${activeGroup === 'secondary' ? 'bg-slate-800/80 border-sky-500/50 shadow-lg shadow-sky-500/10' : 'bg-slate-900/50 border-white/5 hover:bg-slate-800/50'}`}
-                >
-                   <div className="flex flex-col gap-2">
-                      <div className="flex justify-between items-center">
-                          <span className={`text-[9px] font-black uppercase tracking-widest ${activeGroup === 'secondary' ? 'text-sky-400' : 'text-slate-500'}`}>{t('Secondary')}</span>
-                          <div onClick={(e) => e.stopPropagation()}>
-                             <Toggle label={activeLayer.secondary.enabled ? t('ON') : t('OFF')} checked={activeLayer.secondary.enabled} onChange={(c) => updateGroup('secondary', { enabled: c }, true)} activeColor={activeGroup === 'secondary' ? 'text-sky-400' : 'text-slate-400'} />
-                          </div>
-                      </div>
-                   </div>
-                </div>
-                </InfoTooltip>
+             <div className="space-y-2 mb-2">
+               <div className="flex flex-wrap items-center gap-2">
+                 {textGroups.map((group, idx) => {
+                   const isActive = idx === safeSelectedTextGroupIndex;
+                   return (
+                     <div
+                       key={group.id || `text-group-${idx}`}
+                       onClick={() => {
+                         setSelectedTextGroupIndex(idx);
+                         updateGroupByIndex(idx, { enabled: !group.enabled }, true);
+                       }}
+                       className={`group relative h-7 flex items-center rounded-lg border transition-all cursor-pointer overflow-visible ${isActive ? 'bg-slate-800/80 border-sky-500/50 text-sky-300' : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-800/50'}`}
+                     >
+                       <div className="flex items-center gap-1 px-2 pr-1 whitespace-nowrap">
+                         <span className="text-[9px] font-black uppercase tracking-wide">{t('Text')}</span>
+                         <span className="text-[9px] font-black uppercase tracking-wide">{idx + 1}</span>
+                       </div>
+                       <span className={`px-2 text-[8px] font-bold uppercase rounded-r-lg whitespace-nowrap ${group.enabled ? 'text-emerald-400' : 'text-slate-500'}`} title={group.enabled ? t('Turn Off') : t('Turn On')}>
+                         {group.enabled ? t('ON') : t('OFF')}
+                       </span>
+                       {textGroups.length > 1 && (
+                         <button
+                           type="button"
+                           onClick={(e) => {
+                             e.preventDefault();
+                             e.stopPropagation();
+                             const nextGroups = textGroups.filter((_, gIdx) => gIdx !== idx);
+                             updateTextGroupsInLayer(nextGroups, true);
+                             setSelectedTextGroupIndex((current) => Math.max(0, current >= nextGroups.length ? nextGroups.length - 1 : current));
+                           }}
+                           className="absolute top-0 right-0 translate-x-1/2 -translate-y-1/2 z-20 opacity-0 group-hover:opacity-100 w-3.5 h-3.5 rounded-full bg-rose-500 text-white flex items-center justify-center text-[9px] leading-none transition-opacity"
+                           title={t('Remove Text Group')}
+                         >
+                           X
+                         </button>
+                       )}
+                     </div>
+                   );
+                 })}
+                 <button
+                   onClick={() => {
+                     const template = textGroups[safeSelectedTextGroupIndex] || activeLayer.primary;
+                     const nextGroup: TextGroupConfig = {
+                       ...template,
+                       id: `text-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                       text: '',
+                       enabled: true,
+                       rotationOffset: template.rotationOffset + 10,
+                     };
+                     const nextGroups = [...textGroups, nextGroup];
+                     updateTextGroupsInLayer(nextGroups, true);
+                     setSelectedTextGroupIndex(nextGroups.length - 1);
+                   }}
+                   className="h-7 px-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 text-[9px] font-black uppercase tracking-wide hover:bg-emerald-500/20"
+                 >
+                   + {t('Add Text')}
+                 </button>
+               </div>
              </div>
           )}
 
@@ -2062,10 +2153,10 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
               <DeferredTextInput
                 label={t('Phrase Content')}
                 value={groupData.text}
-                onChange={(v, c) => updateGroupWithLock(activeGroup, { text: v }, c)}
+                onChange={(v, c) => updateGroupWithLock(safeSelectedTextGroupIndex, { text: v }, c)}
                 placeholder={t('Leave blank for AI Randomizer to choose a word')}
                 t={t}
-                defaultValue={activeGroup === 'primary' ? 'Snow' : ''}
+                defaultValue={safeSelectedTextGroupIndex === 0 ? 'Snow' : ''}
                 onSaveDefault={onSaveAsDefault}
               />
 
@@ -2088,14 +2179,14 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                   </InfoTooltip>
                 </div>
                 <div className="grid grid-cols-2 gap-1 max-h-32 overflow-y-auto custom-scrollbar bg-slate-900 p-1 rounded-lg border border-white/5">
-                  {filteredFonts.map(font => (<button key={font.name} onClick={() => updateGroupWithLock(activeGroup, { fontFamily: font.family }, false)} className={`text-left px-2 py-1.5 rounded text-lg truncate transition-all ${groupData.fontFamily === font.family ? 'bg-sky-600 text-white' : 'text-slate-400 hover:bg-white/5'}`} style={{ fontFamily: font.family }}>{font.name}</button>))}
+                  {filteredFonts.map(font => (<button key={font.name} onClick={() => updateGroupWithLock(safeSelectedTextGroupIndex, { fontFamily: font.family }, false)} className={`text-left px-2 py-1.5 rounded text-lg truncate transition-all ${groupData.fontFamily === font.family ? 'bg-sky-600 text-white' : 'text-slate-400 hover:bg-white/5'}`} style={{ fontFamily: font.family }}>{font.name}</button>))}
                 </div>
               </div>
 
               {/* {renderSlider(t('Font Size'), groupData.fontSize, 10, 200, 1, (v, c) => updateGroupWithLock(activeGroup, { fontSize: v }, c), "px", false, 34)} */}
 
               <div className="space-y-4 pt-4 border-t border-white/5">
-                 {renderSlider(t('Arms / Symmetry'), groupData.arms, 2, 24, 1, (v, c) => updateGroup(activeGroup, { arms: v }, c), "", false, 6)}
+                 {renderSlider(t('Arms / Symmetry'), groupData.arms, 2, 24, 1, (v, c) => updateSelectedGroup({ arms: v }, c), "", false, 6)}
                  <div className="space-y-2">
                     <div className="flex justify-between items-center">
                        <div className="flex items-center">
@@ -2124,22 +2215,22 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                             <button
                               onClick={() => {
                                 setRadiusLocks(prev => {
-                                  const currentLocked = prev[activeGroup]?.locked || false;
-                                  const currentTarget = prev[activeGroup]?.target || currentStats.activeGroupRadius;
+                                  const currentLocked = prev[activeGroupKey]?.locked || false;
+                                  const currentTarget = prev[activeGroupKey]?.target || currentStats.activeGroupRadius;
                                   return {
                                     ...prev,
-                                    [activeGroup]: {
-                                      ...prev[activeGroup],
+                                    [activeGroupKey]: {
+                                      ...prev[activeGroupKey],
                                       locked: !currentLocked,
                                       target: currentTarget,
                                     },
                                   };
                                 });
                               }}
-                              className={`w-8 h-8 rounded-lg border border-white/20 flex items-center justify-center transition-all ${radiusLocks[activeGroup]?.locked ? 'bg-sky-500 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
-                              title={radiusLocks[activeGroup]?.locked ? t('Unlock outer radius') : t('Lock outer radius')}
+                              className={`w-8 h-8 rounded-lg border border-white/20 flex items-center justify-center transition-all ${radiusLocks[activeGroupKey]?.locked ? 'bg-sky-500 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                              title={radiusLocks[activeGroupKey]?.locked ? t('Unlock outer radius') : t('Lock outer radius')}
                             >
-                              {radiusLocks[activeGroup]?.locked ? '🔒' : '🔓'}
+                              {radiusLocks[activeGroupKey]?.locked ? '🔒' : '🔓'}
                             </button>
                           </InfoTooltip>
                           <DeferredNumberInput value={currentArmRadius} min={10} max={500} step={0.1} onChange={(v, c) => handleArmRadiusChange(v, c)} suffix="mm" />
@@ -2156,10 +2247,10 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                        className="w-full h-1 bg-slate-800 rounded-lg accent-sky-500 cursor-pointer"
                     />
                  </div>
-                 {renderSlider(t('Inner Radius'), groupData.textX, -100, 300, 0.1, (v, c) => handleGroupDistChange(v, c), "mm", false, activeGroup === 'primary' ? 20 : 10)}
-                 {renderSlider(t('Boldness'), groupData.thickness, 0, 10, 0.1, (v, c) => updateGroup(activeGroup, { thickness: v }, c), "mm", false, 0)}
-                 {renderSlider(t('Letter Spacing'), groupData.letterSpacing, -5, 20, 0.1, (v, c) => updateGroup(activeGroup, { letterSpacing: v }, c), "mm", false, 0)}
-                 {renderSlider(t('Manual Rotation'), groupData.rotationOffset, -180, 180, 1, (v, c) => updateGroup(activeGroup, { rotationOffset: v }, c), "°", false, activeGroup === 'primary' ? 0 : 30)}
+                 {renderSlider(t('Inner Radius'), groupData.textX, -100, 300, 0.1, (v, c) => handleGroupDistChange(v, c), "mm", false, safeSelectedTextGroupIndex === 0 ? 20 : 10)}
+                 {renderSlider(t('Boldness'), groupData.thickness, 0, 10, 0.1, (v, c) => updateSelectedGroup({ thickness: v }, c), "mm", false, 0)}
+                 {renderSlider(t('Letter Spacing'), groupData.letterSpacing, -5, 20, 0.1, (v, c) => updateSelectedGroup({ letterSpacing: v }, c), "mm", false, 0)}
+                 {renderSlider(t('Manual Rotation'), groupData.rotationOffset, -180, 180, 1, (v, c) => updateSelectedGroup({ rotationOffset: v }, c), "°", false, safeSelectedTextGroupIndex === 0 ? 0 : 30)}
               </div>
 
               <div className="space-y-4 pt-4 border-t border-white/5">
@@ -2171,14 +2262,14 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                     <Toggle
                       label={groupData.mirrorEnabled ? t('ON') : t('OFF')}
                       checked={groupData.mirrorEnabled}
-                      onChange={(c) => updateGroup(activeGroup, { mirrorEnabled: c }, true)}
+                      onChange={(c) => updateSelectedGroup({ mirrorEnabled: c }, true)}
                     />
                   </div>
                 </div>
                 <div className="flex items-center justify-end">
-                  {!groupData.mirrorEnabled && <button onClick={() => updateGroup(activeGroup, { mirrorEnabled: true }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
+                  {!groupData.mirrorEnabled && <button onClick={() => updateSelectedGroup({ mirrorEnabled: true }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
                 </div>
-                {groupData.mirrorEnabled && renderSlider(t('Mirror Offset'), groupData.mirrorOffset, -200, 200, 0.1, (v, c) => updateGroup(activeGroup, { mirrorOffset: v }, c), "mm", false, 0)}
+                {groupData.mirrorEnabled && renderSlider(t('Mirror Offset'), groupData.mirrorOffset, -200, 200, 0.1, (v, c) => updateSelectedGroup({ mirrorOffset: v }, c), "mm", false, 0)}
               </div>
 
               {groupData.underline && (
@@ -2191,21 +2282,21 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                             <Toggle
                               label={groupData.underline.enabled ? t('ON') : t('OFF')}
                               checked={groupData.underline.enabled}
-                              onChange={(c) => updateGroup(activeGroup, { underline: { ...groupData.underline, enabled: c } }, true)}
+                              onChange={(c) => updateSelectedGroup({ underline: { ...groupData.underline, enabled: c } }, true)}
                             />
                           </div>
                       </div>
                         <div className="flex items-center justify-end">
-                              {groupData.underline.enabled && <button onClick={() => updateGroup(activeGroup, { underline: { ...groupData.underline, enabled: false } }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
+                              {groupData.underline.enabled && <button onClick={() => updateSelectedGroup({ underline: { ...groupData.underline, enabled: false } }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
                       </div>
                       {groupData.underline.enabled && (
                           <div className="space-y-4 animate-in slide-in-from-top-2 duration-200">
-                             <ControlRow label={t('Cap Style')} onReset={() => updateGroup(activeGroup, { underline: { ...groupData.underline, capType: 'none' } }, true)} onSaveDefault={onSaveAsDefault} isModified={groupData.underline.capType !== 'none'} t={t}>
+                             <ControlRow label={t('Cap Style')} onReset={() => updateSelectedGroup({ underline: { ...groupData.underline, capType: 'none' } }, true)} onSaveDefault={onSaveAsDefault} isModified={groupData.underline.capType !== 'none'} t={t}>
                                  <div className="grid grid-cols-4 gap-1 bg-slate-900 p-1 rounded-lg">
                                      {(['none', 'square', 'round', 'chevron'] as const).map(cap => (
                                          <button
                                             key={cap}
-                                            onClick={() => updateGroup(activeGroup, { underline: { ...groupData.underline, capType: cap } }, true)}
+                                            onClick={() => updateSelectedGroup({ underline: { ...groupData.underline, capType: cap } }, true)}
                                             className={`py-1 text-[9px] font-black uppercase rounded transition-all ${groupData.underline.capType === cap ? 'bg-sky-600 text-white' : 'text-slate-500'}`}
                                          >
                                             {cap === 'none' ? t('None') : (cap === 'square' ? t('Square') : (cap === 'round' ? t('Round') : t('Chevron')))}
@@ -2213,11 +2304,11 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                      ))}
                                  </div>
                              </ControlRow>
-                             {groupData.underline.capType !== 'none' && renderSlider(t('Cap Length'), groupData.underline.capWidth, 2, 30, 0.1, (v, c) => updateGroup(activeGroup, { underline: { ...groupData.underline, capWidth: v } }, c), "mm", false, 10)}
-                             {renderSlider(t('Underline Thickness'), groupData.underline.thickness, 0.1, 5, 0.1, (v, c) => updateGroup(activeGroup, { underline: { ...groupData.underline, thickness: v } }, c), "mm", false, 1.5)}
-                             {renderSlider(t('Underline Start'), groupData.underline.startXOffset, -50, 200, 0.1, (v, c) => updateGroup(activeGroup, { underline: { ...groupData.underline, startXOffset: v } }, c), "mm", false, 0)}
-                             {renderSlider(t('Underline Length'), groupData.underline.length, 10, 200, 0.1, (v, c) => updateGroup(activeGroup, { underline: { ...groupData.underline, length: v } }, c), "mm", false, 50)}
-                             {renderSlider(t('Underline Mirror Offset'), groupData.underline.yOffset, -200, 200, 0.1, (v, c) => updateGroup(activeGroup, { underline: { ...groupData.underline, yOffset: v } }, c), "mm", false, -5)}
+                             {groupData.underline.capType !== 'none' && renderSlider(t('Cap Length'), groupData.underline.capWidth, 2, 30, 0.1, (v, c) => updateSelectedGroup({ underline: { ...groupData.underline, capWidth: v } }, c), "mm", false, 10)}
+                             {renderSlider(t('Underline Thickness'), groupData.underline.thickness, 0.1, 5, 0.1, (v, c) => updateSelectedGroup({ underline: { ...groupData.underline, thickness: v } }, c), "mm", false, 1.5)}
+                             {renderSlider(t('Underline Start'), groupData.underline.startXOffset, -50, 200, 0.1, (v, c) => updateSelectedGroup({ underline: { ...groupData.underline, startXOffset: v } }, c), "mm", false, 0)}
+                             {renderSlider(t('Underline Length'), groupData.underline.length, 10, 200, 0.1, (v, c) => updateSelectedGroup({ underline: { ...groupData.underline, length: v } }, c), "mm", false, 50)}
+                             {renderSlider(t('Underline Mirror Offset'), groupData.underline.yOffset, -200, 200, 0.1, (v, c) => updateSelectedGroup({ underline: { ...groupData.underline, yOffset: v } }, c), "mm", false, -5)}
                           </div>
                       )}
                   </div>
@@ -2282,68 +2373,63 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                      }}>
                     {t('Selected Character')}: <span className="text-white text-base ml-2" style={{ color: 'white', fontSize: '16px', marginLeft: '8px' }}>"{selectedCharEntry?.label ?? ''}"</span>
                   </p>
-                  {renderSlider(t('Offset X'), groupData.charOffsets[selectedCharEntry?.storageIndex ?? 0]?.x || 0, -50, 50, 0.1, (v, c) => updateCharOffset(activeGroup, selectedCharEntry?.storageIndex ?? 0, { x: v }, c), "mm", false, 0)}
-                  {renderSlider(t('Offset Y'), groupData.charOffsets[selectedCharEntry?.storageIndex ?? 0]?.y || 0, -50, 50, 0.1, (v, c) => updateCharOffset(activeGroup, selectedCharEntry?.storageIndex ?? 0, { y: v }, c), "mm", false, 0)}
+                  {renderSlider(t('Offset X'), groupData.charOffsets[selectedCharEntry?.storageIndex ?? 0]?.x || 0, -50, 50, 0.1, (v, c) => updateCharOffsetByIndex(safeSelectedTextGroupIndex, selectedCharEntry?.storageIndex ?? 0, { x: v }, c), "mm", false, 0)}
+                  {renderSlider(t('Offset Y'), groupData.charOffsets[selectedCharEntry?.storageIndex ?? 0]?.y || 0, -50, 50, 0.1, (v, c) => updateCharOffsetByIndex(safeSelectedTextGroupIndex, selectedCharEntry?.storageIndex ?? 0, { y: v }, c), "mm", false, 0)}
                 </div>
              </div>
           )}
 
           {activeTab === 'hubs' && (
              <div className="space-y-4 animate-in fade-in duration-200" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div className="grid grid-cols-4 gap-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
+                <div className="grid grid-cols-3 gap-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
                    {activeLayer.hubs.map((hub, i) => {
                      const isSelected = selectedHubIndex === i;
                      return (
                        <div key={hub.id} className="relative group">
+                           <div
+                               onClick={() => {
+                                 setSelectedHubIndex(i);
+                                 const newHubs = activeLayer.hubs.map((h, hIdx) => hIdx === i ? { ...h, enabled: !h.enabled } : h);
+                                 updateHubs(newHubs, true);
+                               }}
+                             className={`h-7 w-full rounded-lg text-xs font-bold uppercase border transition-all flex items-center ${isSelected ? 'bg-sky-600 border-sky-500 text-white' : 'bg-slate-800 border-white/5 text-slate-400'}`}
+                             style={{
+                               height: '28px',
+                               width: '100%',
+                               borderRadius: '8px',
+                               fontSize: '10px',
+                               fontWeight: 'bold',
+                               textTransform: 'uppercase',
+                               border: '1px solid',
+                               transition: 'all 0.2s',
+                               backgroundColor: isSelected ? '#0284c7' : '#1e293b',
+                               borderColor: isSelected ? '#0ea5e9' : 'rgba(255,255,255,0.05)',
+                               color: isSelected ? 'white' : '#94a3b8',
+                               paddingRight: '22px',
+                               cursor: 'pointer',
+                               overflow: 'visible'
+                             }}
+                           >
+                             <div className="flex-1 h-full text-left px-2 flex items-center gap-1 whitespace-nowrap">
+                               <span>{t('Hub')}</span>
+                               <span>{i + 1}</span>
+                             </div>
+                             <span className={`h-full px-1.5 text-[8px] font-black flex items-center whitespace-nowrap ${hub.enabled ? 'text-emerald-300' : 'text-slate-300'}`}>
+                               {hub.enabled ? 'ON' : 'OFF'}
+                             </span>
+                           </div>
                          <button
-                           onClick={() => setSelectedHubIndex(i)}
-                           className={`h-8 w-full rounded-lg text-xs font-bold uppercase border transition-all ${isSelected ? 'bg-sky-600 border-sky-500 text-white' : 'bg-slate-800 border-white/5 text-slate-400'}`}
-                           style={{
-                             height: '32px',
-                             width: '100%',
-                             borderRadius: '8px',
-                             fontSize: '12px',
-                             fontWeight: 'bold',
-                             textTransform: 'uppercase',
-                             border: '1px solid',
-                             transition: 'all 0.2s',
-                             backgroundColor: isSelected ? '#0284c7' : '#1e293b',
-                             borderColor: isSelected ? '#0ea5e9' : 'rgba(255,255,255,0.05)',
-                             color: isSelected ? 'white' : '#94a3b8',
-                             cursor: 'pointer',
-                             paddingRight: '22px'
+                           type="button"
+                           onClick={(e) => {
+                             e.stopPropagation();
+                             deleteHubAtIndex(i);
                            }}
+                           className="absolute top-0 right-0 translate-x-1/2 -translate-y-1/2 z-20 opacity-0 group-hover:opacity-100 w-3.5 h-3.5 rounded-full bg-rose-500 text-white flex items-center justify-center text-[9px] leading-none transition-opacity"
+                           aria-label={`${t('Delete Hub')} ${i + 1}`}
+                           title={t('Delete Hub')}
                          >
-                           {t('Hub')} {i + 1}
+                           X
                          </button>
-                         <div
-                           className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto focus-within:pointer-events-auto transition-opacity"
-                           style={{
-                             position: 'absolute',
-                             right: '0px',
-                             top: '0px',
-                             transform: 'translate(-12%, 12%)'
-                           }}
-                         >
-                           <InfoTooltip label={t('Delete Hub')}>
-                             <button
-                               type="button"
-                               onClick={(e) => {
-                                 e.stopPropagation();
-                                 deleteHubAtIndex(i);
-                               }}
-                               className="h-5 w-5 rounded text-rose-300 hover:text-rose-200 hover:bg-rose-500/20"
-                               style={{
-                                 height: '20px',
-                                 width: '20px',
-                                 borderRadius: '6px'
-                               }}
-                               aria-label={`${t('Delete Hub')} ${i + 1}`}
-                             >
-                               X
-                             </button>
-                           </InfoTooltip>
-                         </div>
                        </div>
                      );
                    })}
@@ -2401,12 +2487,6 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                             <span className={settingsHeaderLabelClass}>{t('Hub Properties')}</span>
                           </div>
                           <div className="flex items-center gap-3" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                               <ControlRow label={t('Visible')} onReset={() => updateHubConfig({ enabled: true }, true)} onSaveDefault={onSaveAsDefault} isModified={!activeLayer.hubs[selectedHubIndex].enabled} t={t}>
-                                   <div className="flex justify-end">
-                                      <Toggle label="" checked={activeLayer.hubs[selectedHubIndex].enabled} onChange={(c) => updateHubConfig({ enabled: c }, true)} />
-                                   </div>
-                               </ControlRow>
-                               <div className="w-px h-4 bg-white/10"></div>
                                <ControlRow label={t('Hollow')} onReset={() => updateHubConfig({ hollow: true }, true)} onSaveDefault={onSaveAsDefault} isModified={!activeLayer.hubs[selectedHubIndex].hollow} t={t}>
                                    <div className="flex justify-end">
                                       <Toggle label="" checked={activeLayer.hubs[selectedHubIndex].hollow} onChange={(c) => updateHubConfig({ hollow: c }, true)} />
@@ -2484,7 +2564,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                   </InfoTooltip>
                </div>
 
-               <div className="grid grid-cols-4 gap-2 mb-4">
+               <div className="grid grid-cols-3 gap-2 mb-4">
                  {activeLayer.abstracts.map((abs, i) => {
                     const isFractal = abs.type === 'fractal';
                     const isSelected = selectedAbstractIndex === i;
@@ -2494,41 +2574,35 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
 
                     return (
                         <div key={abs.id} className="relative group">
-                        <button
-                          onClick={() => setSelectedAbstractIndex(i)}
-                          className={`h-8 w-full rounded-lg text-xs font-bold uppercase border transition-all ${isSelected ? activeClass : 'bg-slate-800 border-white/5 text-slate-400 hover:bg-slate-700'}`}
-                          style={{ paddingRight: '22px' }}
-                        >
-                          {isFractal ? `${t('Fractal')} ${i + 1}` : `${t('Shape')} ${i + 1}`}
-                        </button>
-                            <div
-                              className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto focus-within:pointer-events-auto transition-opacity"
-                              style={{
-                                position: 'absolute',
-                                right: '0px',
-                                top: '0px',
-                                transform: 'translate(-12%, 12%)'
+                          <div
+                              onClick={() => {
+                                setSelectedAbstractIndex(i);
+                                const newAbstracts = activeLayer.abstracts.map((a, aIdx) => aIdx === i ? { ...a, enabled: !a.enabled } : a);
+                                updateAbstracts(newAbstracts, true);
                               }}
+                            className={`h-7 w-full rounded-lg text-xs font-bold uppercase border transition-all flex items-center ${isSelected ? activeClass : 'bg-slate-800 border-white/5 text-slate-400 hover:bg-slate-700'}`}
+                              style={{ paddingRight: '22px', cursor: 'pointer', overflow: 'visible' }}
+                          >
+                              <div className="flex-1 h-full text-left px-2 flex items-center gap-1 whitespace-nowrap">
+                                <span>{isFractal ? t('Fractal') : t('Shape')}</span>
+                                <span>{i + 1}</span>
+                              </div>
+                              <span className={`h-full px-1.5 text-[8px] font-black flex items-center whitespace-nowrap ${abs.enabled ? 'text-emerald-300' : 'text-slate-300'}`}>
+                              {abs.enabled ? 'ON' : 'OFF'}
+                              </span>
+                          </div>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteAbstractAtIndex(i);
+                              }}
+                              className="absolute top-0 right-0 translate-x-1/2 -translate-y-1/2 z-20 opacity-0 group-hover:opacity-100 w-3.5 h-3.5 rounded-full bg-rose-500 text-white flex items-center justify-center text-[9px] leading-none transition-opacity"
+                              aria-label={`${t('Delete Abstract')} ${i + 1}`}
+                              title={t('Delete Abstract')}
                             >
-                              <InfoTooltip label={t('Delete Abstract')}>
-                                  <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        deleteAbstractAtIndex(i);
-                                      }}
-                                      className="h-5 w-5 rounded text-rose-300 hover:text-rose-200 hover:bg-rose-500/20"
-                                      style={{
-                                        height: '20px',
-                                        width: '20px',
-                                        borderRadius: '6px'
-                                      }}
-                                      aria-label={`${t('Delete Abstract')} ${i + 1}`}
-                                  >
-                                      X
-                                  </button>
-                              </InfoTooltip>
-                            </div>
+                              X
+                            </button>
                       </div>
                     );
                  })}
@@ -2559,13 +2633,6 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                 </ControlRow>
                               </>
                           )}
-
-                          <div className="w-px h-4 bg-white/10 mx-1"></div>
-                          <ControlRow label={t('Visible')} onReset={() => updateAbstractConfig({ enabled: true }, true)} onSaveDefault={onSaveAsDefault} isModified={!activeLayer.abstracts[selectedAbstractIndex].enabled} t={t}>
-                              <div className="flex justify-end">
-                                  <Toggle label="" checked={activeLayer.abstracts[selectedAbstractIndex].enabled} onChange={(c) => updateAbstractConfig({ enabled: c }, true)} />
-                              </div>
-                          </ControlRow>
                     </div>
 
                     {activeLayer.abstracts[selectedAbstractIndex].enabled && (
@@ -2723,19 +2790,42 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
 
               {/* Image selector chips */}
               {(activeLayer.images || []).length > 0 && (
-                <div className="grid grid-cols-3 gap-1.5">
+                <div className="grid grid-cols-3 gap-2">
                   {(activeLayer.images || []).map((img, i) => (
-                    <button
+                    <div
                       key={img.id}
-                      onClick={() => setSelectedImageIndex(i)}
-                      className={`h-8 rounded-lg text-[10px] font-bold uppercase border transition-all truncate px-2 ${
+                      onClick={() => {
+                        setSelectedImageIndex(i);
+                        const newImages = (activeLayer.images || []).map((im, imIdx) => imIdx === i ? { ...im, enabled: !im.enabled } : im);
+                        updateImages(newImages, true);
+                      }}
+                      className={`group relative h-7 rounded-lg text-[10px] font-bold uppercase border transition-all flex items-center ${
                         selectedImageIndex === i
                           ? 'bg-sky-600 border-sky-500 text-white'
                           : 'bg-slate-800 border-white/5 text-slate-400 hover:bg-slate-700'
-                      }`}
+                      } cursor-pointer overflow-visible`}
                     >
-                      {img.name}
-                    </button>
+                      <div className="flex-1 h-full text-left px-2 truncate flex items-center whitespace-nowrap">
+                        {img.name}
+                      </div>
+                      <span className={`h-full px-1.5 text-[8px] font-black flex items-center whitespace-nowrap ${img.enabled ? 'text-emerald-300' : 'text-slate-300'}`}>
+                        {img.enabled ? 'ON' : 'OFF'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const newImages = (activeLayer.images || []).filter((_, idx) => idx !== i);
+                          updateImages(newImages, true);
+                          setSelectedImageIndex((prev) => Math.max(0, prev >= newImages.length ? newImages.length - 1 : prev));
+                        }}
+                        className="absolute top-0 right-0 translate-x-1/2 -translate-y-1/2 z-20 opacity-0 group-hover:opacity-100 w-3.5 h-3.5 rounded-full bg-rose-500 text-white flex items-center justify-center text-[9px] leading-none transition-opacity"
+                        title={t('Delete Image')}
+                      >
+                        X
+                      </button>
+                    </div>
                   ))}
                 </div>
               )}
@@ -2752,30 +2842,10 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
 
                 return (
                   <div className="space-y-3 animate-in fade-in duration-150">
-                    {/* Header row: name + visible + delete */}
+                    {/* Header row: name */}
                     <div className="flex items-center justify-between border-b border-white/5 pb-2">
                       <span className="text-[10px] font-black uppercase text-slate-400 truncate flex-1 mr-2">{img.name}</span>
-                      <div className="flex items-center gap-2">
-                        <InfoTooltip label={t('Image Visible')} description={getDescription('Image Visible', t)}>
-                          <Toggle
-                            label={img.enabled ? 'ON' : 'OFF'}
-                            checked={img.enabled}
-                            onChange={(c) => updateImg({ enabled: c }, true)}
-                          />
-                        </InfoTooltip>
-                        <InfoTooltip label={t('Delete Image')} description={getDescription('Delete Image', t)}>
-                          <button
-                            onClick={() => {
-                              const newImages = (activeLayer.images || []).filter((_, i) => i !== selectedImageIndex);
-                              updateImages(newImages, true);
-                              setSelectedImageIndex(prev => Math.max(0, prev - 1));
-                            }}
-                            className="text-[9px] font-black uppercase text-rose-400 hover:text-rose-300 ml-1"
-                          >
-                            Delete
-                          </button>
-                        </InfoTooltip>
-                      </div>
+                      <div className="flex items-center gap-2"></div>
                     </div>
 
                     {/* SVG thumbnail */}
@@ -2796,24 +2866,44 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                     </div>
 
                     {/* Sliders — all routed through renderSlider which adds InfoTooltip via ControlRow */}
-                    {renderSlider('Image Arms', img.arms, 1, 24, 1, (v, c) => updateImg({ arms: v }, c), '', false, 6)}
-                    {renderSlider('Scale', img.scale, 0.05, 10, 0.05, (v, c) => updateImg({ scale: v }, c), '×', false, 1.0)}
-                    {renderSlider('Image Inner Radius', img.innerRadius, 0, 200, 0.5, (v, c) => updateImg({ innerRadius: v }, c), 'mm', false, 10)}
-                    {renderSlider('Y Offset', img.yOffset, -100, 100, 0.5, (v, c) => updateImg({ yOffset: v }, c), 'mm', false, 0)}
-                    {renderSlider('Image Rotation', img.rotationOffset, -180, 180, 1, (v, c) => updateImg({ rotationOffset: v }, c), '°', false, 0)}
+                    <ControlRow label={t('Image Layout')} t={t}>
+                      <div className="grid grid-cols-2 gap-1 bg-slate-900 p-1 rounded-lg">
+                        <button
+                          onClick={() => updateImg({ layoutMode: 'radial' }, true)}
+                          className={`py-1 text-[9px] font-black uppercase rounded ${(img.layoutMode || 'radial') === 'radial' ? 'bg-sky-500 text-white' : 'text-slate-500'}`}
+                        >
+                          {t('Radial')}
+                        </button>
+                        <button
+                          onClick={() => updateImg({ layoutMode: 'centered', mirrorEnabled: false }, true)}
+                          className={`py-1 text-[9px] font-black uppercase rounded ${(img.layoutMode || 'radial') === 'centered' ? 'bg-sky-500 text-white' : 'text-slate-500'}`}
+                        >
+                          {t('Centered')}
+                        </button>
+                      </div>
+                    </ControlRow>
+                    {(img.layoutMode || 'radial') === 'radial' && renderSlider('Image Arms', img.arms, 1, 24, 1, (v, c) => updateImg({ arms: v }, c), '', false, 6)}
+                    {renderSlider('Scale', img.scale, 0.01, 40, 0.01, (v, c) => updateImg({ scale: v }, c), '×', false, 1.0)}
+                    {(img.layoutMode || 'radial') === 'radial' && renderSlider('Image Inner Radius', img.innerRadius, 0, 200, 0.5, (v, c) => updateImg({ innerRadius: v }, c), 'mm', false, 10)}
+                    {(img.layoutMode || 'radial') === 'radial' && renderSlider('Y Offset', img.yOffset, -100, 100, 0.5, (v, c) => updateImg({ yOffset: v }, c), 'mm', false, 0)}
+                    {(img.layoutMode || 'radial') === 'radial' && renderSlider('Image Rotation', img.rotationOffset, -180, 180, 1, (v, c) => updateImg({ rotationOffset: v }, c), '°', false, 0)}
 
                     {/* Mirror */}
-                    <div className="flex justify-between items-center">
-                      <InfoTooltip label={t('Image Mirror')} description={getDescription('Image Mirror', t)}>
-                        <span className="text-[9px] font-black uppercase text-slate-400 border-b border-dotted border-slate-600 cursor-help">Mirror</span>
-                      </InfoTooltip>
-                      <Toggle
-                        label={img.mirrorEnabled ? 'ON' : 'OFF'}
-                        checked={img.mirrorEnabled}
-                        onChange={(c) => updateImg({ mirrorEnabled: c }, true)}
-                      />
-                    </div>
-                    {img.mirrorEnabled && renderSlider('Image Mirror Offset', img.mirrorOffset, -200, 200, 0.5, (v, c) => updateImg({ mirrorOffset: v }, c), 'mm', false, 0)}
+                    {(img.layoutMode || 'radial') === 'radial' && (
+                      <>
+                        <div className="flex justify-between items-center">
+                          <InfoTooltip label={t('Image Mirror')} description={getDescription('Image Mirror', t)}>
+                            <span className="text-[9px] font-black uppercase text-slate-400 border-b border-dotted border-slate-600 cursor-help">Mirror</span>
+                          </InfoTooltip>
+                          <Toggle
+                            label={img.mirrorEnabled ? 'ON' : 'OFF'}
+                            checked={img.mirrorEnabled}
+                            onChange={(c) => updateImg({ mirrorEnabled: c }, true)}
+                          />
+                        </div>
+                        {img.mirrorEnabled && renderSlider('Image Mirror Offset', img.mirrorOffset, -200, 200, 0.5, (v, c) => updateImg({ mirrorOffset: v }, c), 'mm', false, 0)}
+                      </>
+                    )}
 
                     {/* Flip */}
                     <div className="flex justify-between items-center">

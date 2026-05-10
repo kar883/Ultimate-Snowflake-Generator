@@ -60,6 +60,7 @@ export interface UnderlineConfig {
 }
 
 export interface TextGroupConfig {
+  id?: string;
   enabled: boolean;
   text: string;
   fontFamily: string;
@@ -107,6 +108,8 @@ export interface ImageConfig {
   yOffset: number;
   /** Line thickness/boldness for the SVG paths (mm) */
   thickness: number;
+  /** Radial replicates around arms vs a single centered instance like a hub */
+  layoutMode?: 'radial' | 'centered';
 }
 
 export const createDefaultImage = (
@@ -132,6 +135,7 @@ export const createDefaultImage = (
   innerRadius: 10,
   yOffset: 0,
   thickness: 0,
+  layoutMode: 'radial',
 });
 
 export interface SlotBridgeConfig {
@@ -155,6 +159,7 @@ export interface LayerConfig {
   primary: TextGroupConfig;
   secondary: TextGroupConfig;
   secondaryEnabled: boolean;
+  textGroups?: TextGroupConfig[];
   abstracts: AbstractConfig[];
   hubs: HubConfig[];
   slotType: 'none' | 'half-back' | 'half-front' | 'third-back' | 'third-middle' | 'third-front' | 'custom';

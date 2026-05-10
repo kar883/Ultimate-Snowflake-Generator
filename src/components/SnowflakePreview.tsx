@@ -55,6 +55,15 @@ const seededRandom = (seed: number) => {
   };
 };
 
+const getLayerTextGroups = (layer: LayerConfig): TextGroupConfig[] => {
+  if (Array.isArray(layer.textGroups) && layer.textGroups.length > 0) {
+    return layer.textGroups;
+  }
+  const groups: TextGroupConfig[] = [layer.primary];
+  if (layer.secondaryEnabled !== false) groups.push(layer.secondary);
+  return groups;
+};
+
 const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   config, globalColor, globalBevel, globalBevelAmount, slotEnabled, slotLength, slotWidth, svgRef, dynamicFonts, undo, redo, canUndo, canRedo, calculatedDiameter, shortcuts, fontsPreloaded, activeLayerId, syncAllLayers = true, highlightActivePlaneOnly = false
 }) => {
@@ -108,9 +117,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
         const name = group.fontFamily.replace(/'/g, '').split(',')[0].trim();
         if (name) required.add(name);
       };
-
-      collectIfNeeded(layer.primary);
-      if (layer.secondaryEnabled) collectIfNeeded(layer.secondary);
+      getLayerTextGroups(layer).forEach(collectIfNeeded);
     });
     return Array.from(required);
   }, [enabledLayers]);
@@ -190,8 +197,9 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
           }
         });
       };
-      if (l.primary.enabled) loadFontIfNeeded(l.primary.fontFamily);
-      if (l.secondaryEnabled && l.secondary.enabled) loadFontIfNeeded(l.secondary.fontFamily);
+      getLayerTextGroups(l).forEach(group => {
+        if (group.enabled) loadFontIfNeeded(group.fontFamily);
+      });
     });
   // Intentionally excludes fontsRef (stable ref) and fontLoadCount to avoid the loop.
   // Re-runs only when the actual font names / URLs change.
@@ -217,8 +225,9 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
           }
         };
         
-        if (l.primary.enabled) checkFont(l.primary.fontFamily);
-        if (l.secondaryEnabled && l.secondary.enabled) checkFont(l.secondary.fontFamily);
+        getLayerTextGroups(l).forEach(group => {
+          if (group.enabled) checkFont(group.fontFamily);
+        });
       });
       
       if (foundPreloaded) {
@@ -492,6 +501,25 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
     const enabledImages = images.filter(img => img.enabled && img.svgPaths.length > 0);
 
     return enabledImages.map((img, idx) => {
+      if ((img.layoutMode || 'radial') === 'centered') {
+        const rawW = img.svgWidth || 100;
+        const rawH = img.svgHeight || 100;
+        const maxPaths = 100;
+        const pathsToRender = img.svgPaths.slice(0, maxPaths);
+        const strokeWidth = Math.max(0, img.thickness || 0);
+        const flipTransform = img.flipEnabled ? ` scale(-1,1) translate(${-rawW}, 0)` : '';
+        const svgTransform = `rotate(${img.svgRotation}, ${rawW / 2}, ${rawH / 2})${flipTransform}`;
+        return (
+          <g key={`img-${idx}-centered`} transform={`rotate(${img.rotationOffset}) translate(${-rawW * img.scale / 2}, ${rawH * img.scale / 2}) scale(${img.scale}, ${-img.scale})`}>
+            <g transform={svgTransform}>
+              {pathsToRender.map((d, di) => (
+                <path key={`${img.id}-${di}`} d={d} fill={color} strokeWidth={strokeWidth} stroke={strokeWidth > 0 ? color : undefined} />
+              ))}
+            </g>
+          </g>
+        );
+      }
+
       const angleStep = 360 / img.arms;
       const instances: React.ReactNode[] = [];
 
@@ -683,12 +711,10 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
 
   const renderSlotPreview = (layer: LayerConfig, layerIndex: number, enabledLayers: LayerConfig[], slotLength: number, slotWidth: number) => {
     if (!slotEnabled) return null;
-    const rotationOffset = (layer.primary.rotationOffset ?? 0) + (layer.rotation3D?.y ?? 0);
-    const armCount = (layer.primary.enabled && (layer.primary.arms || 0) > 0)
-      ? Math.max(1, layer.primary.arms || 0)
-      : ((layer.secondaryEnabled && layer.secondary.enabled && (layer.secondary.arms || 0) > 0)
-        ? Math.max(1, layer.secondary.arms || 0)
-        : 6);
+    const layerTextGroups = getLayerTextGroups(layer);
+    const firstEnabledTextGroup = layerTextGroups.find(g => g.enabled && (g.arms || 0) > 0);
+    const rotationOffset = ((firstEnabledTextGroup?.rotationOffset ?? 0)) + (layer.rotation3D?.y ?? 0);
+    const armCount = firstEnabledTextGroup ? Math.max(1, firstEnabledTextGroup.arms || 0) : 12;
     const numPlanes = enabledLayers.length;
     const lengthAdjustmentPerSide = layer.slotLengthAdjustment ?? 0;
     const widthAdjustmentPerSide = layer.slotWidthOffset ?? 0;
@@ -863,8 +889,11 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
                     {renderHubs(layer.hubs, layerColor)}
                     {renderImages(layer.images || [], layerColor)}
                     {renderAbstracts(layer.abstracts, layerColor)}
-                    {renderTextGroup(layer.primary, layerColor)}
-                    {layer.secondaryEnabled && renderTextGroup(layer.secondary, layerColor)}
+                    {getLayerTextGroups(layer).map((group, index) => (
+                      <React.Fragment key={`${layer.id}-text-${group.id || index}`}>
+                        {renderTextGroup(group, layerColor)}
+                      </React.Fragment>
+                    ))}
                     {renderSlotPreview(layer, index, enabledLayers, slotLength, slotWidth)}
                   </g>
                 </g>

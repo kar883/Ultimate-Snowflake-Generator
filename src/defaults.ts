@@ -3,6 +3,7 @@ import { CURSIVE_FONTS } from './constants';
 
 // Default Text Group Configuration
 export const createDefaultTextGroup = (text: string, rotation: number, fontSize: number, textX: number): TextGroupConfig => ({
+  id: `text-${Math.random().toString(36).slice(2, 10)}`,
   enabled: true,
   text,
   fontFamily: CURSIVE_FONTS[0].family,
@@ -70,8 +71,11 @@ export const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isE
   enabled: isEnabled,
   rotation3D: { x: rx, y: ry, z: 0 },
   primary: createDefaultTextGroup("Snow", 0, 36.7, 20),
-  secondary: createDefaultTextGroup("", 30, 20, 10),
-  secondaryEnabled: true,
+  secondary: { ...createDefaultTextGroup("", 30, 20, 10), enabled: false },
+  secondaryEnabled: false,
+  textGroups: [
+    createDefaultTextGroup("Snow", 0, 36.7, 20),
+  ],
   abstracts: [],
   hubs: [],
   slotType: 'none',
