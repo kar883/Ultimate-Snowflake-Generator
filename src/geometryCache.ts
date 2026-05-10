@@ -81,9 +81,16 @@ export function makeTextKey(
 }
 
 // Helper to generate cache key for underline geometries
-export function makeUnderlineKey(layerId: string, textGroup: any, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number): string {
+export function makeUnderlineKey(
+  layerId: string,
+  textGroup: any,
+  extrusionDepth: number,
+  bevelEnabled: boolean,
+  bevelAmount: number,
+  globalStrokeWeight: number = 0
+): string {
   const underline = textGroup.underline;
-  return `${layerId}::underline::${underline.thickness}_${underline.startXOffset}_${underline.length}_${underline.yOffset}_${underline.capType}_${underline.capWidth}::${extrusionDepth}::${bevelEnabled}::${bevelAmount}`;
+  return `${layerId}::underline::${underline.thickness}_${underline.startXOffset}_${underline.length}_${underline.yOffset}_${underline.capType}_${underline.capWidth}::${extrusionDepth}::${bevelEnabled}::${bevelAmount}::${globalStrokeWeight}`;
 }
 
 // Helper to generate cache key for hub geometries

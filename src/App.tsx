@@ -4586,40 +4586,41 @@ const App: React.FC = () => {
             let underlineGeo = null;
 
             if (uConf && uConf.enabled) {
-                // ... (Keep existing underline logic exactly as is) ...
-                const t = uConf.thickness;
+              const t = uConf.thickness + (rendered3DConfig.globalStrokeWeight || 0);
                 const halfT = t / 2;
                 const startX = textGroup.textX + uConf.startXOffset;
                 const endX = startX + uConf.length;
 
+              const makeCapsuleShape = (centerY: number) => {
+                const radius = Math.max(0.0001, halfT);
+                const shape = new THREE_ACTUAL.Shape();
+                if (Math.abs(endX - startX) < 0.0001) {
+                  shape.absarc(startX, centerY, radius, 0, Math.PI * 2, false);
+                  shape.closePath();
+                  return shape;
+                }
+                shape.moveTo(startX, centerY + radius);
+                shape.lineTo(endX, centerY + radius);
+                shape.absarc(endX, centerY, radius, Math.PI / 2, -Math.PI / 2, true);
+                shape.lineTo(startX, centerY - radius);
+                shape.absarc(startX, centerY, radius, -Math.PI / 2, Math.PI / 2, true);
+                shape.closePath();
+                return shape;
+              };
+
                 if (!textGroup.mirrorEnabled) {
                     const topY = (textGroup.mirrorOffset / 2) + uConf.yOffset;
-                    const shape = new THREE_ACTUAL.Shape();
-                    shape.moveTo(startX, topY + halfT);
-                    shape.lineTo(endX, topY + halfT);
-                    shape.lineTo(endX, topY - halfT);
-                    shape.lineTo(startX, topY - halfT);
-                    shape.closePath();
+                    const shape = makeCapsuleShape(topY);
                     underlineShapes.push(shape);
                 } else {
                     if (uConf.capType === 'none') {
                         const topY = (textGroup.mirrorOffset / 2) + uConf.yOffset;
                         const botY = -(textGroup.mirrorOffset / 2) - uConf.yOffset;
 
-                        const shape1 = new THREE_ACTUAL.Shape();
-                        shape1.moveTo(startX, topY + halfT);
-                        shape1.lineTo(endX, topY + halfT);
-                        shape1.lineTo(endX, topY - halfT);
-                        shape1.lineTo(startX, topY - halfT);
-                        shape1.closePath();
+                        const shape1 = makeCapsuleShape(topY);
                         underlineShapes.push(shape1);
 
-                        const shape2 = new THREE_ACTUAL.Shape();
-                        shape2.moveTo(startX, botY + halfT);
-                        shape2.lineTo(endX, botY + halfT);
-                        shape2.lineTo(endX, botY - halfT);
-                        shape2.lineTo(startX, botY - halfT);
-                        shape2.closePath();
+                        const shape2 = makeCapsuleShape(botY);
                         underlineShapes.push(shape2);
                     } else {
                         const y1 = (textGroup.mirrorOffset / 2) + uConf.yOffset;
@@ -4636,155 +4637,98 @@ const App: React.FC = () => {
                         const capOuterX = endX + uConf.capWidth;
                         const capInnerX = Math.max(endX, endX + uConf.capWidth - (t * 1.5));
 
-                        const shape = new THREE_ACTUAL.Shape();
-                        shape.moveTo(startX, outerTop);
-                        if (uConf.capType === 'square') {
-                             shape.lineTo(endX, outerTop);
-                             shape.lineTo(capOuterX, outerTop);
-                             shape.lineTo(capOuterX, outerBot);
-                             shape.lineTo(endX, outerBot);
-                        } else if (uConf.capType === 'round') {
-                             const ry = (outerTop - outerBot) / 2;
-                             const rx = uConf.capWidth;
-                             const cy = (outerTop + outerBot) / 2;
-                             shape.absellipse(endX, cy, rx, ry, Math.PI/2, -Math.PI/2, true);
-                        } else if (uConf.capType === 'chevron') {
-                             shape.lineTo(endX, outerTop);
-                             const cy = (outerTop + outerBot) / 2;
-                             shape.lineTo(capOuterX, cy);
-                             shape.lineTo(endX, outerBot);
+                        if (uConf.capType === 'round') {
+                          const cy = (outerTop + outerBot) / 2;
+                          const outerRy = Math.max(0.001, (outerTop - outerBot) / 2);
+                          const innerRy = Math.max(0, (innerTop - innerBot) / 2);
+                          const outerRx = Math.max(0.001, uConf.capWidth);
+                          const innerRx = Math.max(0.001, outerRx - halfT);
+
+                          const ring = new THREE_ACTUAL.Shape();
+                          ring.moveTo(startX, outerTop);
+                          ring.lineTo(endX, outerTop);
+                          ring.absellipse(endX, cy, outerRx, outerRy, Math.PI / 2, -Math.PI / 2, true);
+                          ring.lineTo(startX, outerBot);
+                          ring.closePath();
+
+                          const hole = new THREE_ACTUAL.Path();
+                          hole.moveTo(startX, innerTop);
+                          hole.lineTo(startX, innerBot);
+                          hole.lineTo(endX, innerBot);
+                          if (innerRy > 0.001) {
+                            hole.absellipse(endX, cy, innerRx, innerRy, -Math.PI / 2, Math.PI / 2, false);
+                          } else {
+                            hole.lineTo(endX, innerTop);
+                          }
+                          hole.lineTo(startX, innerTop);
+                          hole.closePath();
+                          ring.holes.push(hole);
+
+                          underlineShapes.push(ring);
                         } else {
-                             shape.lineTo(endX, outerTop);
-                             shape.lineTo(endX, outerBot);
-                        }
-                        shape.lineTo(startX, outerBot);
-                        shape.lineTo(startX, innerBot);
-                        if (uConf.capType === 'square') {
-                             shape.lineTo(endX, innerBot);
-                             if (capInnerX > endX + 0.001) {
-                                 shape.lineTo(capInnerX, innerBot);
-                                 shape.lineTo(capInnerX, innerTop);
-                             }
-                             shape.lineTo(endX, innerTop);
-                        } else if (uConf.capType === 'round') {
-                             const ry = (innerTop - innerBot) / 2;
-                             if (ry > 0.001) {
-                                 const rx = Math.max(0.001, uConf.capWidth - t);
-                                 const cy = (outerTop + outerBot) / 2;
-                                 shape.absellipse(endX, cy, rx, ry, -Math.PI/2, Math.PI/2, false);
+                             const shape = new THREE_ACTUAL.Shape();
+                             shape.moveTo(startX, outerTop);
+                             if (uConf.capType === 'square') {
+                               shape.lineTo(endX, outerTop);
+                               shape.lineTo(capOuterX, outerTop);
+                               shape.lineTo(capOuterX, outerBot);
+                               shape.lineTo(endX, outerBot);
+                             } else if (uConf.capType === 'chevron') {
+                               shape.lineTo(endX, outerTop);
+                               const cy = (outerTop + outerBot) / 2;
+                               shape.lineTo(capOuterX, cy);
+                               shape.lineTo(endX, outerBot);
                              } else {
-                                 shape.lineTo(endX, innerBot);
-                                 shape.lineTo(endX, innerTop);
+                               shape.lineTo(endX, outerTop);
+                               shape.lineTo(endX, outerBot);
                              }
-                        } else if (uConf.capType === 'chevron') {
-                             shape.lineTo(endX, innerBot);
-                             const innerTipX = Math.max(endX, endX + uConf.capWidth - (t * 1.5));
-                             const cy = (outerTop + outerBot) / 2;
-                             if (innerTipX > endX + 0.001 && (innerTop > innerBot)) {
-                                 shape.lineTo(innerTipX, cy);
+                             shape.lineTo(startX, outerBot);
+                             shape.lineTo(startX, innerBot);
+                             if (uConf.capType === 'square') {
+                               shape.lineTo(endX, innerBot);
+                               if (capInnerX > endX + 0.001) {
+                                shape.lineTo(capInnerX, innerBot);
+                                shape.lineTo(capInnerX, innerTop);
+                               }
+                               shape.lineTo(endX, innerTop);
+                             } else if (uConf.capType === 'chevron') {
+                               shape.lineTo(endX, innerBot);
+                               const innerTipX = Math.max(endX, endX + uConf.capWidth - (t * 1.5));
+                               const cy = (outerTop + outerBot) / 2;
+                               if (innerTipX > endX + 0.001 && (innerTop > innerBot)) {
+                                shape.lineTo(innerTipX, cy);
+                               }
+                               shape.lineTo(endX, innerTop);
+                             } else {
+                               shape.lineTo(endX, innerBot);
+                               shape.lineTo(endX, innerTop);
                              }
-                             shape.lineTo(endX, innerTop);
-                        } else {
-                             shape.lineTo(endX, innerBot);
-                             shape.lineTo(endX, innerTop);
+                             shape.lineTo(startX, innerTop);
+                             shape.closePath();
+                             underlineShapes.push(shape);
                         }
-                        shape.lineTo(startX, innerTop);
-                        shape.closePath();
-                        underlineShapes.push(shape);
                     }
                 }
-            }
-
-            // Apply boldness to underlines using the same stroke expansion as text
-            const underlineGlobalBoldness = rendered3DConfig.globalStrokeWeight || 0;
-            const underlineTextBoldness = uConf.thickness || 0;
-            const totalUnderlineBoldness = underlineGlobalBoldness + underlineTextBoldness;
-
-            if (totalUnderlineBoldness > 0.1) {
-              const expandedUnderlineShapes: THREE_ACTUAL.Shape[] = [];
-
-              for (const shape of underlineShapes) {
-                try {
-                  // Get points with higher resolution for smoother expansion
-                  const points = shape.getPoints(Math.max(32, Math.ceil(totalUnderlineBoldness * 4)));
-                  if (points.length < 3) {
-                    expandedUnderlineShapes.push(shape);
-                    continue;
-                  }
-
-                  // Expand the shape outward by strokeWidth/2 to match SVG stroke rendering
-                  const expandedPoints: THREE_ACTUAL.Vector2[] = [];
-                  const halfStroke = totalUnderlineBoldness / 2;
-
-                  for (let i = 0; i < points.length; i++) {
-                    const p = points[i];
-                    const prevP = points[(i - 1 + points.length) % points.length];
-                    const nextP = points[(i + 1) % points.length];
-
-                    // Calculate normals from adjacent segments
-                    const dx1 = p.x - prevP.x;
-                    const dy1 = p.y - prevP.y;
-                    const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
-
-                    const dx2 = nextP.x - p.x;
-                    const dy2 = nextP.y - p.y;
-                    const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
-
-                    if (len1 < 0.0001 || len2 < 0.0001) {
-                      expandedPoints.push(p);
-                      continue;
-                    }
-
-                    // Perpendicular normals (rotated 90 degrees)
-                    const nx1 = -dy1 / len1;
-                    const ny1 = dx1 / len1;
-                    const nx2 = -dy2 / len2;
-                    const ny2 = dx2 / len2;
-
-                    // Average normal for this vertex
-                    const nx = (nx1 + nx2) / 2;
-                    const ny = (ny1 + ny2) / 2;
-                    const nlen = Math.sqrt(nx * nx + ny * ny);
-
-                    if (nlen < 0.0001) {
-                      expandedPoints.push(p);
-                      continue;
-                    }
-
-                    // Normalize and scale by half stroke width
-                    const offsetX = (nx / nlen) * halfStroke;
-                    const offsetY = (ny / nlen) * halfStroke;
-
-                    expandedPoints.push(new THREE_ACTUAL.Vector2(p.x + offsetX, p.y + offsetY));
-                  }
-
-                  // Create new shape from expanded points
-                  if (expandedPoints.length >= 3) {
-                    const expandedShape = new THREE_ACTUAL.Shape();
-                    expandedShape.moveTo(expandedPoints[0].x, expandedPoints[0].y);
-                    for (let i = 1; i < expandedPoints.length; i++) {
-                      expandedShape.lineTo(expandedPoints[i].x, expandedPoints[i].y);
-                    }
-                    expandedShape.closePath();
-                    expandedUnderlineShapes.push(expandedShape);
-                  } else {
-                    expandedUnderlineShapes.push(shape);
-                  }
-                } catch (error) {
-                  console.warn('Failed to expand underline shape, using original:', error);
-                  expandedUnderlineShapes.push(shape);
-                }
-              }
-
-              if (expandedUnderlineShapes.length > 0) {
-                underlineShapes = expandedUnderlineShapes;
-                console.log(`✅ Applied ${totalUnderlineBoldness}px boldness to ${expandedUnderlineShapes.length} underline shapes`);
-              }
             }
 
             if (underlineShapes.length > 0) {
-                const underlineKey = makeUnderlineKey(layer.id, textGroup, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide);
-                underlineGeo = getOrCreateGeometry(geometryCache.text, underlineKey, () => new THREE_ACTUAL.ExtrudeGeometry(underlineShapes, extrudeSettings));
+                const underlineExtrudeSettings = {
+                  ...extrudeSettings,
+                  bevelEnabled: false,
+                  bevelThickness: 0,
+                  bevelSize: 0,
+                  bevelOffset: 0,
+                  bevelSegments: 0,
+                };
+                const underlineKey = makeUnderlineKey(
+                  layer.id,
+                  textGroup,
+                  effectiveDepth,
+                  false,
+                  0,
+                  rendered3DConfig.globalStrokeWeight || 0
+                );
+                underlineGeo = getOrCreateGeometry(geometryCache.text, underlineKey, () => new THREE_ACTUAL.ExtrudeGeometry(underlineShapes, underlineExtrudeSettings));
             }
 
             const angleStep = (Math.PI * 2) / textGroup.arms;
@@ -4813,14 +4757,14 @@ const App: React.FC = () => {
 
                 if (textGroup.mirrorEnabled) {
                   const mirrored = groupGeo.clone();
-                  mirrored.translate(textGroup.textX, -textGroup.mirrorOffset / 2, centerZOffset);
+                  mirrored.translate(textGroup.textX, textGroup.mirrorOffset / 2, centerZOffset);
                   mirrored.rotateZ(-angle);
                   layerGeometries.push(mirrored);
 
                   addShapeInstances(
                     unionTextShapes,
                     composeMatrix2D(
-                      makeTranslationMatrix2D(textGroup.textX, -textGroup.mirrorOffset / 2),
+                      makeTranslationMatrix2D(textGroup.textX, textGroup.mirrorOffset / 2),
                       makeRotationMatrix2D(-angle)
                     ),
                     totalStrokeWeight
