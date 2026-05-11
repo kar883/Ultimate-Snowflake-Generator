@@ -2096,7 +2096,6 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                        key={group.id || `text-group-${idx}`}
                        onClick={() => {
                          setSelectedTextGroupIndex(idx);
-                         updateGroupByIndex(idx, { enabled: !group.enabled }, true);
                        }}
                        className={`group relative h-7 flex items-center rounded-lg border transition-all cursor-pointer overflow-visible ${isActive ? 'bg-slate-800/80 border-sky-500/50 text-sky-300' : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-800/50'}`}
                      >
@@ -2104,9 +2103,18 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                          <span className="text-[9px] font-black uppercase tracking-wide">{t('Text')}</span>
                          <span className="text-[9px] font-black uppercase tracking-wide">{idx + 1}</span>
                        </div>
-                       <span className={`px-2 text-[8px] font-bold uppercase rounded-r-lg whitespace-nowrap ${group.enabled ? 'text-emerald-400' : 'text-slate-500'}`} title={group.enabled ? t('Turn Off') : t('Turn On')}>
+                       <button
+                         type="button"
+                         onClick={(e) => {
+                           e.preventDefault();
+                           e.stopPropagation();
+                           updateGroupByIndex(idx, { enabled: !group.enabled }, true);
+                         }}
+                         className={`px-2 text-[8px] font-bold uppercase rounded-r-lg whitespace-nowrap transition-colors ${group.enabled ? 'text-emerald-400 hover:text-emerald-300' : 'text-slate-500 hover:text-slate-300'}`}
+                         title={group.enabled ? t('Turn Off') : t('Turn On')}
+                       >
                          {group.enabled ? t('ON') : t('OFF')}
-                       </span>
+                       </button>
                        {textGroups.length > 1 && (
                          <button
                            type="button"
@@ -2389,8 +2397,6 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                            <div
                                onClick={() => {
                                  setSelectedHubIndex(i);
-                                 const newHubs = activeLayer.hubs.map((h, hIdx) => hIdx === i ? { ...h, enabled: !h.enabled } : h);
-                                 updateHubs(newHubs, true);
                                }}
                              className={`h-7 w-full rounded-lg text-xs font-bold uppercase border transition-all flex items-center ${isSelected ? 'bg-sky-600 border-sky-500 text-white' : 'bg-slate-800 border-white/5 text-slate-400'}`}
                              style={{
@@ -2414,9 +2420,19 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                <span>{t('Hub')}</span>
                                <span>{i + 1}</span>
                              </div>
-                             <span className={`h-full px-1.5 text-[8px] font-black flex items-center whitespace-nowrap ${hub.enabled ? 'text-emerald-300' : 'text-slate-300'}`}>
+                             <button
+                               type="button"
+                               onClick={(e) => {
+                                 e.preventDefault();
+                                 e.stopPropagation();
+                                 const newHubs = activeLayer.hubs.map((h, hIdx) => hIdx === i ? { ...h, enabled: !h.enabled } : h);
+                                 updateHubs(newHubs, true);
+                               }}
+                               className={`h-full px-1.5 text-[8px] font-black flex items-center whitespace-nowrap transition-colors ${hub.enabled ? 'text-emerald-300 hover:text-emerald-200' : 'text-slate-300 hover:text-slate-200'}`}
+                               title={hub.enabled ? t('Turn Off') : t('Turn On')}
+                             >
                                {hub.enabled ? 'ON' : 'OFF'}
-                             </span>
+                             </button>
                            </div>
                          <button
                            type="button"
@@ -2577,8 +2593,6 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                           <div
                               onClick={() => {
                                 setSelectedAbstractIndex(i);
-                                const newAbstracts = activeLayer.abstracts.map((a, aIdx) => aIdx === i ? { ...a, enabled: !a.enabled } : a);
-                                updateAbstracts(newAbstracts, true);
                               }}
                             className={`h-7 w-full rounded-lg text-xs font-bold uppercase border transition-all flex items-center ${isSelected ? activeClass : 'bg-slate-800 border-white/5 text-slate-400 hover:bg-slate-700'}`}
                               style={{ paddingRight: '22px', cursor: 'pointer', overflow: 'visible' }}
@@ -2587,9 +2601,19 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                 <span>{isFractal ? t('Fractal') : t('Shape')}</span>
                                 <span>{i + 1}</span>
                               </div>
-                              <span className={`h-full px-1.5 text-[8px] font-black flex items-center whitespace-nowrap ${abs.enabled ? 'text-emerald-300' : 'text-slate-300'}`}>
-                              {abs.enabled ? 'ON' : 'OFF'}
-                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  const newAbstracts = activeLayer.abstracts.map((a, aIdx) => aIdx === i ? { ...a, enabled: !a.enabled } : a);
+                                  updateAbstracts(newAbstracts, true);
+                                }}
+                                className={`h-full px-1.5 text-[8px] font-black flex items-center whitespace-nowrap transition-colors ${abs.enabled ? 'text-emerald-300 hover:text-emerald-200' : 'text-slate-300 hover:text-slate-200'}`}
+                                title={abs.enabled ? t('Turn Off') : t('Turn On')}
+                              >
+                                {abs.enabled ? 'ON' : 'OFF'}
+                              </button>
                           </div>
                             <button
                               type="button"
@@ -2796,8 +2820,6 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                       key={img.id}
                       onClick={() => {
                         setSelectedImageIndex(i);
-                        const newImages = (activeLayer.images || []).map((im, imIdx) => imIdx === i ? { ...im, enabled: !im.enabled } : im);
-                        updateImages(newImages, true);
                       }}
                       className={`group relative h-7 rounded-lg text-[10px] font-bold uppercase border transition-all flex items-center ${
                         selectedImageIndex === i
@@ -2808,9 +2830,19 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                       <div className="flex-1 h-full text-left px-2 truncate flex items-center whitespace-nowrap">
                         {img.name}
                       </div>
-                      <span className={`h-full px-1.5 text-[8px] font-black flex items-center whitespace-nowrap ${img.enabled ? 'text-emerald-300' : 'text-slate-300'}`}>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const newImages = (activeLayer.images || []).map((im, imIdx) => imIdx === i ? { ...im, enabled: !im.enabled } : im);
+                          updateImages(newImages, true);
+                        }}
+                        className={`h-full px-1.5 text-[8px] font-black flex items-center whitespace-nowrap transition-colors ${img.enabled ? 'text-emerald-300 hover:text-emerald-200' : 'text-slate-300 hover:text-slate-200'}`}
+                        title={img.enabled ? t('Turn Off') : t('Turn On')}
+                      >
                         {img.enabled ? 'ON' : 'OFF'}
-                      </span>
+                      </button>
                       <button
                         type="button"
                         onClick={(e) => {
