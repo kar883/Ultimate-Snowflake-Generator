@@ -4737,46 +4737,44 @@ const App: React.FC = () => {
 
                           underlineShapes.push(ring);
                         } else {
-                             const shape = new THREE_ACTUAL.Shape();
-                             shape.moveTo(startX, outerTop);
+                             // Keep rounded starts by using two separate bars, then add only the
+                             // mirrored cap connector at the far end.
+                             underlineShapes.push(makeCapsuleShape(actualTopY));
+                             underlineShapes.push(makeCapsuleShape(actualBotY));
+
+                             const capShape = new THREE_ACTUAL.Shape();
+                             capShape.moveTo(endX, outerTop);
                              if (uConf.capType === 'square') {
-                               shape.lineTo(endX, outerTop);
-                               shape.lineTo(capOuterX, outerTop);
-                               shape.lineTo(capOuterX, outerBot);
-                               shape.lineTo(endX, outerBot);
+                               capShape.lineTo(capOuterX, outerTop);
+                               capShape.lineTo(capOuterX, outerBot);
+                               capShape.lineTo(endX, outerBot);
                              } else if (uConf.capType === 'chevron') {
-                               shape.lineTo(endX, outerTop);
                                const cy = (outerTop + outerBot) / 2;
-                               shape.lineTo(capOuterX, cy);
-                               shape.lineTo(endX, outerBot);
+                               capShape.lineTo(capOuterX, cy);
+                               capShape.lineTo(endX, outerBot);
                              } else {
-                               shape.lineTo(endX, outerTop);
-                               shape.lineTo(endX, outerBot);
+                               capShape.lineTo(endX, outerBot);
                              }
-                             shape.lineTo(startX, outerBot);
-                             shape.lineTo(startX, innerBot);
+
+                             capShape.lineTo(endX, innerBot);
                              if (uConf.capType === 'square') {
-                               shape.lineTo(endX, innerBot);
                                if (capInnerX > endX + 0.001) {
-                                shape.lineTo(capInnerX, innerBot);
-                                shape.lineTo(capInnerX, innerTop);
+                                capShape.lineTo(capInnerX, innerBot);
+                                capShape.lineTo(capInnerX, innerTop);
                                }
-                               shape.lineTo(endX, innerTop);
+                               capShape.lineTo(endX, innerTop);
                              } else if (uConf.capType === 'chevron') {
-                               shape.lineTo(endX, innerBot);
                                const innerTipX = Math.max(endX, endX + uConf.capWidth - (t * 1.5));
                                const cy = (outerTop + outerBot) / 2;
                                if (innerTipX > endX + 0.001 && (innerTop > innerBot)) {
-                                shape.lineTo(innerTipX, cy);
+                                capShape.lineTo(innerTipX, cy);
                                }
-                               shape.lineTo(endX, innerTop);
+                               capShape.lineTo(endX, innerTop);
                              } else {
-                               shape.lineTo(endX, innerBot);
-                               shape.lineTo(endX, innerTop);
+                               capShape.lineTo(endX, innerTop);
                              }
-                             shape.lineTo(startX, innerTop);
-                             shape.closePath();
-                             underlineShapes.push(shape);
+                             capShape.closePath();
+                             underlineShapes.push(capShape);
                         }
                     }
                 }
@@ -4784,19 +4782,14 @@ const App: React.FC = () => {
 
             if (underlineShapes.length > 0) {
                 const underlineExtrudeSettings = {
-                  ...extrudeSettings,
-                  bevelEnabled: false,
-                  bevelThickness: 0,
-                  bevelSize: 0,
-                  bevelOffset: 0,
-                  bevelSegments: 0,
+                  ...textExtrudeSettings,
                 };
                 const underlineKey = makeUnderlineKey(
                   layer.id,
                   textGroup,
                   effectiveDepth,
-                  false,
-                  0,
+                  underlineExtrudeSettings.bevelEnabled,
+                  underlineExtrudeSettings.bevelSize,
                   rendered3DConfig.globalStrokeWeight || 0
                 );
                 underlineGeo = getOrCreateGeometry(geometryCache.text, underlineKey, () => new THREE_ACTUAL.ExtrudeGeometry(underlineShapes, underlineExtrudeSettings));

@@ -29,6 +29,7 @@ Reference Only
 # Playwright artifacts
 playwright-report/
 test-results/
+e2e/
 e2e/**/*.spec.ts-snapshots/
 
 # Local test run outputs
