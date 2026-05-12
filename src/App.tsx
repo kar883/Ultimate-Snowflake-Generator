@@ -34,7 +34,8 @@ import { getAdjustedGlyphPathCommands, getPathCommandBounds, makePathFromCommand
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, /*makeSlotKey,*/ getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, /*slotCutCache,*/ makeUnderlineKey } from './geometryCache';
 
 const MAX_HISTORY = 50;
-const APP_VERSION = '1.0.8';
+const APP_VERSION = '1.0.9';
+const APP_DEBUG = false;
 // Bump when mesh generation logic changes (slot geometry, CSG sequencing, etc.)
 // so cached groups from older algorithms are not reused.
 const GEOMETRY_ALGO_VERSION = 'slot-2026-04-15-k';
@@ -392,7 +393,28 @@ function composeMatrix2D(...operations: THREE_ACTUAL.Matrix3[]): THREE_ACTUAL.Ma
 }
 
 function describeTopologyFailure(label: string, geometry: THREE_ACTUAL.BufferGeometry): string | null {
-  const report = getTopologyReport(geometry);
+  const topologyGeometry = (() => {
+    const clone = geometry.clone();
+    const indexed = clone.index
+      ? clone
+      : (() => {
+          const count = clone.attributes.position?.count ?? 0;
+          const index = new Uint32Array(count);
+          for (let i = 0; i < count; i++) index[i] = i;
+          clone.setIndex(new THREE_ACTUAL.BufferAttribute(index, 1));
+          return clone;
+        })();
+
+    const welded = BufferGeometryUtils.mergeVertices(indexed, 1e-5) as THREE_ACTUAL.BufferGeometry;
+    if (welded !== indexed) {
+      indexed.dispose();
+      return welded;
+    }
+    return indexed;
+  })();
+
+  const report = getTopologyReport(topologyGeometry);
+  topologyGeometry.dispose();
   if (report.boundaryEdges === 0 && report.nonManifoldEdges === 0) {
     return null;
   }
@@ -408,17 +430,26 @@ function collectGroupTopology(group: THREE_ACTUAL.Group): MeshTopologyValidation
     const geometry = child.geometry as THREE_ACTUAL.BufferGeometry | undefined;
     if (!geometry?.attributes?.position) return;
 
-    const topologyGeometry = geometry.index
-      ? geometry
-      : (() => {
-          const indexed = geometry.clone();
-          const index = new Uint32Array(indexed.attributes.position.count);
-          for (let indexIdx = 0; indexIdx < index.length; indexIdx++) {
-            index[indexIdx] = indexIdx;
-          }
-          indexed.setIndex(new THREE_ACTUAL.BufferAttribute(index, 1));
-          return indexed;
-        })();
+    const topologyGeometry = (() => {
+      const clone = geometry.clone();
+      const indexed = clone.index
+        ? clone
+        : (() => {
+            const index = new Uint32Array(clone.attributes.position.count);
+            for (let indexIdx = 0; indexIdx < index.length; indexIdx++) {
+              index[indexIdx] = indexIdx;
+            }
+            clone.setIndex(new THREE_ACTUAL.BufferAttribute(index, 1));
+            return clone;
+          })();
+
+      const welded = BufferGeometryUtils.mergeVertices(indexed, 1e-5) as THREE_ACTUAL.BufferGeometry;
+      if (welded !== indexed) {
+        indexed.dispose();
+        return welded;
+      }
+      return indexed;
+    })();
 
     const report = getTopologyReport(topologyGeometry);
     reports.push({
@@ -431,9 +462,7 @@ function collectGroupTopology(group: THREE_ACTUAL.Group): MeshTopologyValidation
       isClosedManifold: report.boundaryEdges === 0 && report.nonManifoldEdges === 0,
     });
 
-    if (topologyGeometry !== geometry) {
-      topologyGeometry.dispose();
-    }
+    topologyGeometry.dispose();
   });
 
   return reports;
@@ -1968,14 +1997,52 @@ const applyWatertightSlotCuts = async (
   enabledLayers: LayerConfig[],
   config: SnowflakeConfig,
   bevelPerSide: number,
-  options?: { baseIsManifold?: boolean; preferWorker?: boolean },
+  options?: { baseIsManifold?: boolean; preferWorker?: boolean; allowRepair?: boolean; logTopologyWarnings?: boolean },
   signal?: AbortSignal
 ): Promise<THREE_ACTUAL.BufferGeometry> => {
   if (signal?.aborted) throw new DOMException('Slot cut aborted', 'AbortError');
+
+  const allowRepair = options?.allowRepair ?? true;
+  const logTopologyWarnings = options?.logTopologyWarnings ?? true;
+
+  const ensureClosedPassthrough = async (
+    source: THREE_ACTUAL.BufferGeometry,
+    label: string
+  ): Promise<THREE_ACTUAL.BufferGeometry> => {
+    if (!allowRepair) {
+      return source;
+    }
+
+    const sourceFailure = describeTopologyFailure(label, source);
+    if (!sourceFailure) {
+      return source;
+    }
+
+    if (logTopologyWarnings) {
+      console.warn(`[slot-csg] ${sourceFailure}; rebuilding closed manifold base`);
+    }
+    const repaired = await manifoldSubtract(source, [], {
+      baseIsManifold: false,
+      filletRadius: 0,
+      filletSegments: 1,
+      filletStyle: config.bevelType,
+      maxFilletBaseVertices: 200000,
+    });
+
+    const repairedFailure = describeTopologyFailure(`${label} repaired`, repaired);
+    if (repairedFailure) {
+      repaired.dispose();
+      throw new Error(repairedFailure);
+    }
+
+    return repaired;
+  };
   
   const materialThickness = config.extrusionDepth + (config.bevelEnabled ? bevelPerSide * 2 : 0);
   const profiles = createSlotProfilesForLayer(layer, layerIndex, enabledLayers, config, materialThickness);
-  if (profiles.length === 0) return layerGeo;
+  if (profiles.length === 0) {
+    return ensureClosedPassthrough(layerGeo, `${layer.name} slot bypass base`);
+  }
 
   let layerForCut = layerGeo.clone();
   layerForCut.computeBoundingBox();
@@ -2011,7 +2078,7 @@ const applyWatertightSlotCuts = async (
 
   if (cutters.length === 0) {
     layerForCut.dispose();
-    return layerGeo;
+    return ensureClosedPassthrough(layerGeo, `${layer.name} empty-cutter base`);
   }
 
   // Merge bridge boxes directly into base geometry early.
@@ -2200,16 +2267,76 @@ const applyWatertightSlotCuts = async (
     return out;
   };
 
+  const ensureClosedManifold = (
+    candidate: THREE_ACTUAL.BufferGeometry,
+    label: string
+  ): THREE_ACTUAL.BufferGeometry | null => {
+    if (!allowRepair) {
+      return candidate;
+    }
+
+    const topologyFailure = describeTopologyFailure(label, candidate);
+    if (topologyFailure) {
+      if (logTopologyWarnings) {
+        console.warn(`[slot-csg] ${topologyFailure}`);
+      }
+      const repaired = surgicalSlotRepair(candidate);
+      const repairedFailure = describeTopologyFailure(`${label} repaired`, repaired);
+      if (!repairedFailure) {
+        candidate.dispose();
+        return repaired;
+      }
+
+      if (logTopologyWarnings) {
+        console.warn(`[slot-csg] ${repairedFailure}`);
+      }
+      repaired.dispose();
+      candidate.dispose();
+      return null;
+    }
+
+    candidate.computeVertexNormals();
+    candidate.computeBoundingBox();
+    return candidate;
+  };
+
+  const buildManifoldBaseFallback = async (): Promise<THREE_ACTUAL.BufferGeometry> => {
+    if (options?.baseIsManifold) {
+      const fallback = layerForCut.clone();
+      fallback.computeVertexNormals();
+      fallback.computeBoundingBox();
+      return fallback;
+    }
+
+    const validated = ensureClosedManifold(surgicalSlotRepair(layerForCut.clone()), `${layer.name} fallback base`);
+    if (!validated) {
+      throw new Error(`${layer.name} fallback base is not a closed manifold`);
+    }
+    return validated;
+  };
+
   const forceWorkerForLargeMesh = (layerForCut.getAttribute('position')?.count ?? 0) > FORCE_WORKER_SLOT_CUT_VERTEX_THRESHOLD;
 
   if (options?.preferWorker || forceWorkerForLargeMesh) {
     try {
-      return await runWorkerCut();
+      const workerOut = await runWorkerCut();
+      const validatedWorker = ensureClosedManifold(workerOut, `${layer.name} worker slot result`);
+      if (validatedWorker) {
+        return validatedWorker;
+      }
+      if (allowRepair && logTopologyWarnings) {
+        console.warn(`[slot-csg] Worker-first slot cut returned open geometry for ${layer.name}; retrying manifold`);
+      }
     } catch (workerErr) {
       if (workerErr instanceof DOMException && workerErr.name === 'AbortError') {
         throw workerErr;
       }
-      console.warn(`Worker-first slot cutting failed for ${layer.name}; retrying manifold`, workerErr);
+      if (!allowRepair) {
+        return layerGeo;
+      }
+      if (allowRepair && logTopologyWarnings) {
+        console.warn(`Worker-first slot cutting failed for ${layer.name}; retrying manifold`, workerErr);
+      }
     }
   }
 
@@ -2228,25 +2355,45 @@ const applyWatertightSlotCuts = async (
       maxFilletBaseVertices: 200000,
     });
 
-    const manifoldFailure = describeTopologyFailure(`${layer.name} slot result`, manifoldOut);
-    if (manifoldFailure) {
-      manifoldOut.dispose();
-      throw new Error(manifoldFailure);
+    const validatedManifold = ensureClosedManifold(manifoldOut, `${layer.name} slot result`);
+    if (!validatedManifold) {
+      throw new Error(`${layer.name} manifold subtraction produced open geometry`);
     }
 
-    manifoldOut.computeVertexNormals();
-    manifoldOut.computeBoundingBox();
     const manifoldMs = performance.now() - manifoldStart;
     if (manifoldMs > 120) {
       console.debug(`[slot-csg] Manifold cut for ${layer.name} took ${manifoldMs.toFixed(1)}ms`);
     }
-    return manifoldOut;
+    return validatedManifold;
   } catch (manifoldErr) {
-    console.warn(`Manifold slot cutting failed for ${layer.name}`, manifoldErr);
+    if (allowRepair && logTopologyWarnings) {
+      console.warn(`Manifold slot cutting failed for ${layer.name}`, manifoldErr);
+    }
     try {
-      return await runWorkerCut();
+      const workerOut = await runWorkerCut();
+      const validatedWorker = ensureClosedManifold(workerOut, `${layer.name} worker fallback slot result`);
+      if (validatedWorker) {
+        return validatedWorker;
+      }
+      if (allowRepair && logTopologyWarnings) {
+        console.warn(`[slot-csg] Worker fallback slot cut returned open geometry for ${layer.name}; preserving manifold base`);
+      }
     } catch (workerErr) {
-      console.warn(`Worker slot cutting failed for ${layer.name}`, workerErr);
+      if (allowRepair && logTopologyWarnings) {
+        console.warn(`Worker slot cutting failed for ${layer.name}`, workerErr);
+      }
+    }
+
+    try {
+      const fallbackBase = await buildManifoldBaseFallback();
+      if (allowRepair && logTopologyWarnings) {
+        console.warn(`[slot-csg] Preserving manifold base for ${layer.name}; slot subtraction skipped`);
+      }
+      return fallbackBase;
+    } catch (fallbackErr) {
+      if (allowRepair && logTopologyWarnings) {
+        console.warn(`Failed to build manifold fallback base for ${layer.name}`, fallbackErr);
+      }
       throw manifoldErr;
     }
   } finally {
@@ -3013,7 +3160,7 @@ const App: React.FC = () => {
   // Debug: Track app initialization only once
   useEffect(() => {
     const appStartTime = performance.now();
-    console.log(`🚀 App Debug: App component starting initialization at ${appStartTime.toFixed(2)}ms`);
+    if (APP_DEBUG) console.log(`🚀 App Debug: App component starting initialization at ${appStartTime.toFixed(2)}ms`);
 
     // Auto-update functionality - Temporarily commented out due to rendering issues
     // const checkForUpdates = async () => {
@@ -3118,7 +3265,7 @@ const App: React.FC = () => {
     // setTimeout(checkForUpdates, 3000); // Check after 3 seconds
 
     return () => {
-      console.log(`🚀 App Debug: App component unmounted after ${(performance.now() - appStartTime).toFixed(2)}ms`);
+      if (APP_DEBUG) console.log(`🚀 App Debug: App component unmounted after ${(performance.now() - appStartTime).toFixed(2)}ms`);
     };
   }, []);
 
@@ -4477,6 +4624,15 @@ const App: React.FC = () => {
       finalGeo.rotateX((rotationXDeg * Math.PI) / 180);
       finalGeo.rotateY((rotationYDeg * Math.PI) / 180);
 
+      if (config.slotEnabled) {
+        // Preserve watertight slot topology: creased-normal conversion can
+        // split seam vertices and reintroduce open edges on dense CSG results.
+        finalGeo.deleteAttribute('normal');
+        finalGeo.computeVertexNormals();
+        finalGeo.computeBoundingBox();
+        return finalGeo;
+      }
+
       // Display-only cleanup: lightly weld seam vertices and rebuild normals
       // so flat/beveled surfaces render without superficial diagonal shading.
       const displayWelded = BufferGeometryUtils.mergeVertices(finalGeo, 0.00005) as THREE_ACTUAL.BufferGeometry;
@@ -5365,7 +5521,11 @@ const App: React.FC = () => {
                 slotContextLayers,
                 config,
                 bevelPerSide,
-                opts,
+                {
+                  ...opts,
+                  allowRepair: generationMode !== 'preview',
+                  logTopologyWarnings: generationMode !== 'preview',
+                },
                 signal
               );
               // Cache owns this geometry instance; clone if cut path returns source directly.
@@ -5489,8 +5649,9 @@ const App: React.FC = () => {
 
           if (unioned2DLayerGeo) {
             try {
+              const unioned2DBaseIsManifold = !config.bevelEnabled;
               cutLayerGeo = await cutWithSlotCache(unioned2DLayerGeo, false, {
-                baseIsManifold: true,
+                baseIsManifold: unioned2DBaseIsManifold,
                 preferWorker: preferWorkerPreviewCut,
               });
             } catch (shapeCutErr) {
@@ -5570,11 +5731,56 @@ const App: React.FC = () => {
           }
         }
 
+        const repairSlotOutputs = generationMode !== 'preview';
+        const layerTopologyFailure = repairSlotOutputs
+          ? describeTopologyFailure(`${layer.name} composed slot geometry`, cutSourceGeo)
+          : null;
+        if (layerTopologyFailure) {
+          console.warn(`[slot-csg] ${layerTopologyFailure}; rebuilding manifold layer geometry`);
+          try {
+            const repairedLayerGeo = surgicalSlotRepair(cutSourceGeo.clone());
+            const repairedFailure = describeTopologyFailure(`${layer.name} repaired slot geometry`, repairedLayerGeo);
+            if (repairedFailure) {
+              repairedLayerGeo.dispose();
+              throw new Error(repairedFailure);
+            }
+
+            cutSourceGeo.dispose();
+            cutSourceGeo = repairedLayerGeo;
+          } catch (repairErr) {
+            if (generationMode !== 'preview') {
+              console.warn(`Failed to rebuild manifold layer geometry for ${layer.name}`, repairErr);
+            }
+          }
+        }
+
         if (canReuseSyncedPlanes && lIdx === 0 && !syncedTemplateGeo) {
           syncedTemplateGeo = cutSourceGeo.clone();
         }
 
         let finalGeo = applyLayerDisplayTransform(cutSourceGeo, effectiveRotationX, effectiveRotationY);
+
+        const transformedTopologyFailure = repairSlotOutputs
+          ? describeTopologyFailure(`${layer.name} transformed display geometry`, finalGeo)
+          : null;
+        if (transformedTopologyFailure) {
+          console.warn(`[slot-csg] ${transformedTopologyFailure}; rebuilding manifold transformed geometry`);
+          try {
+            const repairedFinalGeo = surgicalSlotRepair(finalGeo.clone());
+            const repairedFinalFailure = describeTopologyFailure(`${layer.name} repaired transformed geometry`, repairedFinalGeo);
+            if (repairedFinalFailure) {
+              repairedFinalGeo.dispose();
+              throw new Error(repairedFinalFailure);
+            }
+
+            finalGeo.dispose();
+            finalGeo = repairedFinalGeo;
+          } catch (repairFinalErr) {
+            if (generationMode !== 'preview') {
+              console.warn(`Failed to rebuild manifold transformed geometry for ${layer.name}`, repairFinalErr);
+            }
+          }
+        }
 
         cutSourceGeo.dispose();
 
@@ -6824,7 +7030,7 @@ const App: React.FC = () => {
 
   // Load AI scope preferences
   const aiScope = loadAiScope();
-  console.log('🔧 AI Scope loaded:', aiScope);
+  if (APP_DEBUG) console.log('🔧 AI Scope loaded:', aiScope);
 
   // Feature switch guard: do not start fractal mode when fractals are disabled.
   if (mode === 'fractal' && !aiScope.abstractFractalsTabEnabled) {
@@ -6982,8 +7188,10 @@ const App: React.FC = () => {
     const scopeConstraints = scopeLines.length > 0
       ? `\n      **USER SCOPE RESTRICTIONS — YOU MUST FOLLOW THESE EXACTLY:**\n${scopeLines.map(l => `      ${l}`).join('\n')}\n`
       : '';
-    console.log('🔧 AI Scope constraints built:', scopeLines);
-    console.log('🔧 Feature toggles: enableShape=', aiScope.abstractShapesTabEnabled, 'enableFractals=', aiScope.abstractFractalsTabEnabled);
+    if (APP_DEBUG) {
+      console.log('🔧 AI Scope constraints built:', scopeLines);
+      console.log('🔧 Feature toggles: enableShape=', aiScope.abstractShapesTabEnabled, 'enableFractals=', aiScope.abstractFractalsTabEnabled);
+    }
 
     const prompt = `
       Generate a randomized Snowflake Generator Configuration (JSON).
@@ -7066,7 +7274,7 @@ const App: React.FC = () => {
 
       Return **ONLY** valid JSON matching the 'SnowflakeConfig' schema.
     `;
-    console.log('🤖 AI Prompt (first 500 chars):', prompt.substring(0, 500) + '...');
+    if (APP_DEBUG) console.log('🤖 AI Prompt (first 500 chars):', prompt.substring(0, 500) + '...');
 
     const response = await ai.models.generateContent({
       model,
@@ -7331,8 +7539,10 @@ const App: React.FC = () => {
           if (!safeEqual(originalLayer.abstracts, finalLayer.abstracts)) changedFields.push('abstracts');
         }
 
-        console.log('🔍 AI scope debug: allowed fields', allowedFields);
-        console.log('🔍 AI scope debug: changed fields', changedFields);
+        if (APP_DEBUG) {
+          console.log('🔍 AI scope debug: allowed fields', allowedFields);
+          console.log('🔍 AI scope debug: changed fields', changedFields);
+        }
 
         // Handle Fractal specific: Force disable text/hubs if mode is fractal
         if (mode === 'fractal') {

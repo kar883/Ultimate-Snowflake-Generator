@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import './src/index.css';
 import App from './src/App.tsx';
 
-console.log('Ultimate Snowflake Generator v1.0.8 - Restored');
+console.log('Ultimate Snowflake Generator v1.0.9 - Restored');
 
 // Prevent stale app code from lingering via old service workers/caches.
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {

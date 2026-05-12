@@ -26,8 +26,12 @@
   Goto done
 
 found:
-  MessageBox MB_ICONQUESTION|MB_YESNO "An older Snowflake Generator installation was found.$\n$\nWould you like to uninstall it before continuing?" IDNO done
+  MessageBox MB_ICONQUESTION|MB_YESNO "A previous Snowflake Generator installation was found.$\n$\nIt must be uninstalled before this update can continue.$\n$\nWould you like to uninstall it now?" IDNO abortInstall
   ExecWait '$0'
+  Goto done
+
+abortInstall:
+  Abort
 
 done:
 !macroend

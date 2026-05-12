@@ -15,6 +15,7 @@ import * as THREE from 'three';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
 
 let wasmInstance: any = null;
+const MANIFOLD_DEBUG = false;
 
 export interface SlotProfile2D {
   length: number;
@@ -32,10 +33,10 @@ export interface ShapeInstance2D {
 
 export async function initManifold() {
   if (!wasmInstance) {
-    console.log('🔧 Initializing Manifold WASM...');
+    if (MANIFOLD_DEBUG) console.log('🔧 Initializing Manifold WASM...');
     wasmInstance = await Module();
     wasmInstance.setup();
-    console.log('✅ Manifold ready');
+    if (MANIFOLD_DEBUG) console.log('✅ Manifold ready');
   }
   return wasmInstance;
 }
@@ -71,12 +72,12 @@ export async function manifoldSubtract(
     triVerts: baseIdx,
   });
   const mergeResult = baseIsManifold ? false : baseMeshObj.merge();
-  console.log(`  Mesh.merge() result: ${mergeResult} (true = mesh was modified)`);
+  if (MANIFOLD_DEBUG) console.log(`  Mesh.merge() result: ${mergeResult} (true = mesh was modified)`);
 
   let result: any;
   try {
     result = createManifoldFromMesh(Manifold, baseMeshObj);
-    console.log('✅ Base Manifold created');
+    if (MANIFOLD_DEBUG) console.log('✅ Base Manifold created');
   } catch (err: any) {
     baseMeshObj.delete?.();
     cleanBase.dispose();
@@ -100,11 +101,11 @@ export async function manifoldSubtract(
 
     try {
       const slotManifold = createManifoldFromMesh(Manifold, slotMeshObj);
-      console.log(`  Subtracting slot ${i + 1}/${slotGeometries.length}...`);
+      if (MANIFOLD_DEBUG) console.log(`  Subtracting slot ${i + 1}/${slotGeometries.length}...`);
       result = result.subtract(slotManifold);
       slotManifold.delete?.();
     } catch (err: any) {
-      console.warn(`  Slot ${i + 1} failed: ${err.message ?? err}`);
+      if (MANIFOLD_DEBUG) console.warn(`  Slot ${i + 1} failed: ${err.message ?? err}`);
     }
     slotMeshObj.delete?.();
     cleanSlot.dispose();
@@ -127,9 +128,11 @@ export async function manifoldSubtract(
     result = smoothed.refineToLength(targetEdgeLength);
     smoothed.delete?.();
   } else if (filletRadius > 1e-6) {
-    console.debug(
-      `[slot-csg] Skipping post-cut fillet: base has ${baseVertexCount} verts (limit ${maxFilletBaseVertices})`
-    );
+    if (MANIFOLD_DEBUG) {
+      console.debug(
+        `[slot-csg] Skipping post-cut fillet: base has ${baseVertexCount} verts (limit ${maxFilletBaseVertices})`
+      );
+    }
   }
 
   const finalMesh = result.getMesh();
@@ -139,7 +142,7 @@ export async function manifoldSubtract(
   const posCount = out.attributes.position?.count ?? 0;
   const faceCount = out.index ? out.index.count / 3 : 0;
 
-  console.log(`✅ Manifold CSG: ${posCount} verts, ${faceCount} faces (watertight)`);
+  if (MANIFOLD_DEBUG) console.log(`✅ Manifold CSG: ${posCount} verts, ${faceCount} faces (watertight)`);
   return out;
 }
 
@@ -214,7 +217,7 @@ export async function manifoldUnionGeometries(
   const out = meshToBufferGeometry(finalMesh);
   const posCount = out.attributes.position?.count ?? 0;
   const faceCount = out.index ? out.index.count / 3 : 0;
-  console.log(`✅ Manifold union: ${posCount} verts, ${faceCount} faces (watertight)`);
+  if (MANIFOLD_DEBUG) console.log(`✅ Manifold union: ${posCount} verts, ${faceCount} faces (watertight)`);
   return out;
 }
 

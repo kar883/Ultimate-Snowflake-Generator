@@ -144,7 +144,7 @@ function showAbout() {
     type: 'info',
     title: 'About Ultimate Snowflake Generator',
     message: 'Ultimate Snowflake Generator',
-    detail: 'Version 1.0.8\nCreated by Kyle Russell\n\nA beautiful 3D snowflake design generator for art and 3D printing.\n\nVisit the GitHub repository for more information and to report issues.',
+    detail: 'Version 1.0.9\nCreated by Kyle Russell\n\nA beautiful 3D snowflake design generator for art and 3D printing.\n\nVisit the GitHub repository for more information and to report issues.',
     buttons: ['GitHub Repository', 'OK'],
     defaultId: 1,
     cancelId: 1
@@ -163,7 +163,7 @@ function checkAndPromptForUpdates(isManual = false) {
         type: 'info',
         title: 'Update Available',
         message: 'A new version is available!',
-        detail: `Version ${versionInfo.latestVersion} is now available.\nYou are currently using version ${versionInfo.currentVersion}.\n\nWould you like to download the new version?`,
+        detail: `Version ${versionInfo.latestVersion} is now available.\nYou are currently using version ${versionInfo.currentVersion}.\n\nThe Windows installer will prompt you to uninstall any previous version before it continues.`,
         buttons: ['Download', 'Later'],
         defaultId: 0,
         cancelId: 1
