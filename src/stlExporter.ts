@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
 import JSZip from 'jszip';
 import { DesignQuality } from './types';
+import { surgicalSlotRepair, getTopologyReport } from './surgicalSlotRepair';
+import { manifoldSubtract } from './manifoldCSG';
 
 type ExportCleanupOptions = {
   optimize?: boolean;
@@ -12,13 +14,209 @@ type ExportCleanupOptions = {
 
 type STLParseOptions = ExportCleanupOptions & {
   binary?: boolean;
+  ensureManifold?: boolean; // Optional final manifold repair before export
 };
 
 const DEFAULT_WELD_TOLERANCE = 0.000002;
 const DEFAULT_YIELD_INTERVAL = 4000;
+const MANIFOLD_REPAIR_DEBUG = true;
 
 const yieldToBrowser = async (): Promise<void> => {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
+};
+
+const normalizeGeometryForTopology = (geometry: THREE.BufferGeometry): THREE.BufferGeometry => {
+  const clone = geometry.clone();
+  if (!clone.index) {
+    const count = clone.attributes.position?.count ?? 0;
+    const index = new Uint32Array(count);
+    for (let i = 0; i < count; i++) index[i] = i;
+    clone.setIndex(new THREE.BufferAttribute(index, 1));
+  }
+  const welded = BufferGeometryUtils.mergeVertices(clone, 1e-5) as THREE.BufferGeometry;
+  if (welded !== clone) clone.dispose();
+  return welded;
+};
+
+const getNormalizedTopologyReport = (geometry: THREE.BufferGeometry) => {
+  const topologyGeometry = normalizeGeometryForTopology(geometry);
+  const report = getTopologyReport(topologyGeometry);
+  topologyGeometry.dispose();
+  return report;
+};
+
+const getRawTopologyReport = (geometry: THREE.BufferGeometry) => {
+  const clone = geometry.clone();
+  if (!clone.index) {
+    const count = clone.attributes.position?.count ?? 0;
+    const index = new Uint32Array(count);
+    for (let i = 0; i < count; i++) index[i] = i;
+    clone.setIndex(new THREE.BufferAttribute(index, 1));
+  }
+  const report = getTopologyReport(clone);
+  clone.dispose();
+  return report;
+};
+
+const topologyDefectScore = (report: ReturnType<typeof getTopologyReport>) =>
+  report.boundaryEdges + (report.nonManifoldEdges * 10);
+
+const rebuildGeometryWithManifold = async (
+  geometry: THREE.BufferGeometry,
+  label: string
+): Promise<{ geometry: THREE.BufferGeometry; report: ReturnType<typeof getTopologyReport> }> => {
+  const rebuilt = await manifoldSubtract(geometry, [], {
+    baseIsManifold: false,
+    filletRadius: 0,
+    filletSegments: 1,
+  });
+
+  const report = getNormalizedTopologyReport(rebuilt);
+  if (MANIFOLD_REPAIR_DEBUG) {
+    console.log(`🏗️ [${label}] After Manifold rebuild:`, report);
+  }
+
+  return { geometry: rebuilt, report };
+};
+
+/**
+ * Ensure geometry is manifold by checking topology and applying repair if needed.
+ * Prefer a full Manifold rebuild first; fall back to lighter repairs only if needed.
+ */
+const ensureGeometryIsManifold = async (
+  geometry: THREE.BufferGeometry,
+  label: string = 'export'
+): Promise<THREE.BufferGeometry> => {
+  const rawReport = getRawTopologyReport(geometry);
+
+  // Check topology on a welded clone — do NOT mutate the original geometry
+  const checkGeom = normalizeGeometryForTopology(geometry.clone());
+  const report = getTopologyReport(checkGeom);
+
+  if (MANIFOLD_REPAIR_DEBUG) {
+    console.log(`📊 [${label}] Manifold check:`, report);
+  }
+
+  const shouldSkipDirectManifold = report.boundaryEdges > 50000 || report.nonManifoldEdges > 2000;
+  const shouldPreserveRawClosedGeometry =
+    rawReport.boundaryEdges === 0
+    && rawReport.nonManifoldEdges === 0
+    && report.boundaryEdges === 0;
+
+  if (report.isManifold || shouldPreserveRawClosedGeometry) {
+    if (shouldPreserveRawClosedGeometry && !report.isManifold) {
+      console.warn(`⚡ [${label}] Preserving raw closed geometry; welded topology only exposes coincident overlaps`);
+    }
+    console.log(`✅ [${label}] Already manifold, passing through`);
+    checkGeom.dispose();
+    return geometry;
+  }
+
+  checkGeom.dispose();
+
+  // Geometry needs repair — weld it and then repair
+  const normalizedGeometry = normalizeGeometryForTopology(geometry);
+
+  if (!shouldSkipDirectManifold) {
+    try {
+      const directManifold = await rebuildGeometryWithManifold(normalizedGeometry, label);
+      if (directManifold.report.isManifold) {
+        console.log(`✅ [${label}] Direct Manifold rebuild succeeded`);
+        geometry.dispose();
+        normalizedGeometry.dispose();
+        return directManifold.geometry;
+      }
+
+      console.warn(`⚠️ [${label}] Direct Manifold rebuild incomplete; trying surgical fallback`);
+      directManifold.geometry.dispose();
+    } catch (err) {
+      console.warn(`⚠️ [${label}] Direct Manifold rebuild failed; trying surgical fallback`, err);
+    }
+  } else if (MANIFOLD_REPAIR_DEBUG) {
+    console.warn(`⚡ [${label}] Skipping direct Manifold rebuild on severely broken mesh (boundary=${report.boundaryEdges}, nonManifold=${report.nonManifoldEdges})`);
+  }
+
+  console.warn(`⚠️ [${label}] Non-manifold geometry detected (boundary: ${report.boundaryEdges}, non-manifold: ${report.nonManifoldEdges}); attempting fallback repair`);
+
+  let surgicalRepaired = surgicalSlotRepair(normalizedGeometry.clone());
+  let surgicalReport = getNormalizedTopologyReport(surgicalRepaired);
+  const shouldSkipProgressiveWeld = shouldSkipDirectManifold || report.faces > 1000000;
+
+  if (MANIFOLD_REPAIR_DEBUG) {
+    console.log(`🔬 [${label}] After surgical repair:`, surgicalReport);
+  }
+
+  // If surgical repair didn't achieve manifold, try progressive welding with larger tolerances.
+  // The remaining boundary edges are often at arm-junction gaps slightly above the surgical tolerance.
+  if (!surgicalReport.isManifold && !shouldSkipProgressiveWeld) {
+    for (const weldTol of [0.001, 0.01, 0.1]) {
+      const candidate = BufferGeometryUtils.mergeVertices(surgicalRepaired.clone(), weldTol) as THREE.BufferGeometry;
+      // candidate is already indexed from mergeVertices, use getTopologyReport directly
+      const candidateReport = getTopologyReport(candidate);
+      if (MANIFOLD_REPAIR_DEBUG) {
+        console.log(`🔧 [${label}] Progressive weld (tol=${weldTol}):`, candidateReport);
+      }
+      if (candidateReport.isManifold || candidateReport.boundaryEdges < surgicalReport.boundaryEdges) {
+        surgicalRepaired.dispose();
+        surgicalRepaired = candidate;
+        surgicalReport = candidateReport;
+        if (surgicalReport.isManifold) break;
+      } else {
+        candidate.dispose();
+        break; // Not improving — stop trying larger tolerances
+      }
+    }
+  } else if (!surgicalReport.isManifold && MANIFOLD_REPAIR_DEBUG) {
+    console.warn(`⚡ [${label}] Skipping progressive weld for severe or very large mesh`);
+  }
+
+  if (surgicalReport.isManifold) {
+    console.log(`✅ [${label}] Surgical repair + progressive weld succeeded`);
+    geometry.dispose();
+    normalizedGeometry.dispose();
+    return surgicalRepaired;
+  }
+
+  if (shouldSkipDirectManifold) {
+    console.warn(`⚡ [${label}] Skipping final Manifold rebuild for speed; returning best fast-repaired geometry`);
+    geometry.dispose();
+    normalizedGeometry.dispose();
+    return surgicalRepaired;
+  }
+
+  console.warn(`⚠️ [${label}] Surgical repair incomplete; applying final Manifold rebuild`);
+  try {
+    const manifoldRepaired = await rebuildGeometryWithManifold(surgicalRepaired, `${label} repaired`);
+
+    if (manifoldRepaired.report.isManifold) {
+      console.log(`✅ [${label}] Final Manifold rebuild succeeded`);
+      surgicalRepaired.dispose();
+      geometry.dispose();
+      normalizedGeometry.dispose();
+      return manifoldRepaired.geometry;
+    }
+
+    const originalScore = topologyDefectScore(report);
+    const surgicalScore = topologyDefectScore(surgicalReport);
+    const manifoldScore = topologyDefectScore(manifoldRepaired.report);
+    const bestGeometry = manifoldScore <= surgicalScore && manifoldScore <= originalScore
+      ? manifoldRepaired.geometry
+      : surgicalScore <= originalScore
+        ? surgicalRepaired
+        : normalizedGeometry;
+
+    if (bestGeometry !== manifoldRepaired.geometry) manifoldRepaired.geometry.dispose();
+    if (bestGeometry !== surgicalRepaired) surgicalRepaired.dispose();
+    if (bestGeometry !== normalizedGeometry) normalizedGeometry.dispose();
+    geometry.dispose();
+    console.warn(`⚠️ [${label}] Export repair incomplete; using lowest-defect result`);
+    return bestGeometry;
+  } catch (err) {
+    console.error(`❌ [${label}] Final Manifold rebuild failed:`, err);
+    geometry.dispose();
+    normalizedGeometry.dispose();
+    return surgicalRepaired;
+  }
 };
 
 const createSequentialIndex = (vertexCount: number): THREE.BufferAttribute => {
@@ -384,9 +582,11 @@ const cleanupGeometryForExportAsync = async (
 export class STLExporter {
   /**
    * Parse a Three.js object (Group, Mesh, or Geometry) and return binary STL data
+   * Note: This method is now async to support optional manifold repair
    */
-  parse(object: THREE.Object3D | THREE.BufferGeometry, options?: STLParseOptions): ArrayBuffer {
+  async parse(object: THREE.Object3D | THREE.BufferGeometry, options?: STLParseOptions): Promise<ArrayBuffer> {
     const binary = options?.binary !== false;
+    const ensureManifold = options?.ensureManifold ?? false;
 
     let geometry: THREE.BufferGeometry | null = null;
 
@@ -403,11 +603,16 @@ export class STLExporter {
       throw new Error('No valid geometry found to export');
     }
 
-    const cleanedGeometry = cleanupGeometryForExport(geometry, options);
+    let cleanedGeometry = await cleanupGeometryForExportAsync(geometry, options);
+
+    // Optional final manifold check/repair
+    if (ensureManifold) {
+      cleanedGeometry = await ensureGeometryIsManifold(cleanedGeometry, 'export');
+    }
 
     try {
       if (binary) {
-        return this.writeBinary(cleanedGeometry);
+        return await this.writeBinaryAsync(cleanedGeometry);
       }
 
       // ASCII path kept for compatibility with legacy callers.
@@ -417,11 +622,11 @@ export class STLExporter {
     } finally {
       cleanedGeometry.dispose();
     }
-
   }
 
   async parseAsync(object: THREE.Object3D | THREE.BufferGeometry, options?: STLParseOptions): Promise<ArrayBuffer> {
     const binary = options?.binary !== false;
+    const ensureManifold = options?.ensureManifold ?? false;
 
     let geometry: THREE.BufferGeometry | null = null;
 
@@ -437,7 +642,12 @@ export class STLExporter {
       throw new Error('No valid geometry found to export');
     }
 
-    const cleanedGeometry = await cleanupGeometryForExportAsync(geometry, options);
+    let cleanedGeometry = await cleanupGeometryForExportAsync(geometry, options);
+
+    // Optional final manifold check/repair
+    if (ensureManifold) {
+      cleanedGeometry = await ensureGeometryIsManifold(cleanedGeometry, 'export');
+    }
 
     try {
       if (binary) {
@@ -773,7 +983,8 @@ export class STLExporter {
 }
 
 export class ThreeMFExporter {
-  async parse(object: THREE.Object3D | THREE.BufferGeometry, options?: ExportCleanupOptions): Promise<Blob> {
+  async parse(object: THREE.Object3D | THREE.BufferGeometry, options?: STLParseOptions): Promise<Blob> {
+    const ensureManifold = options?.ensureManifold ?? false;
     let geometry: THREE.BufferGeometry | null = null;
 
     if (object instanceof THREE.BufferGeometry) {
@@ -788,7 +999,11 @@ export class ThreeMFExporter {
       throw new Error('No valid geometry found to export');
     }
 
-    const cleaned = await cleanupGeometryForExportAsync(geometry, options);
+    let cleaned = await cleanupGeometryForExportAsync(geometry, options);
+
+    if (ensureManifold) {
+      cleaned = await ensureGeometryIsManifold(cleaned, 'export-3mf');
+    }
 
     try {
       const indexed = cleaned.index ? cleaned : cleaned.clone().setIndex(createSequentialIndex((cleaned.getAttribute('position') as THREE.BufferAttribute).count));

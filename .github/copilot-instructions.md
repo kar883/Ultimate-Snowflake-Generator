@@ -1,7 +1,7 @@
 # AI Coding Assistant Instructions for Ultimate Snowflake Generator
 
 ## Project Overview
-This is a React + TypeScript web application for generating customizable 3D snowflake designs. Users can input text, configure geometric patterns, and export STL files for 3D printing. The app uses Three.js for 3D rendering, CSG operations for slot cutting, and OpenType.js for font rendering.
+This is a React + TypeScript web application for generating customizable 3D snowflake designs. Users can input text, configure geometric patterns, and export STL files for 3D printing. The app uses Three.js for 3D rendering, CSG operations for slot cutting, and OpenType.js for font rendering. the 2d and 3d designs should appear the same of each respective plane.
 
 ## Architecture & Key Components
 

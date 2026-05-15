@@ -189,6 +189,8 @@ const DESCRIPTIONS: Record<string, string> = {
   "Rounded Tips": "Adds rounded caps to the ends of the final branches.",
   "Cut Slots": "Toggles the automatic slot cutting operation for assembly.",
   "Slot Width": "Extra clearance added on top of the model extrusion height. 0.2 mm gives a snug fit; increase for a looser assembly.",
+  "Baked Profile Slot Path": "Build slots from the 2D profile and extrude once, then fall back to legacy 3D cutting only when needed.",
+  "Slot Pipeline Metrics": "Live counters for baked-profile attempts, success rate, fallback frequency, and average timing.",
   // ── Auto-fit / Fixed-size ──────────────────────────────────────────────────
   "Auto-fit": "Automatically rescales the font size whenever you change fonts, letter spacing, or boldness to keep the arms exactly at the target outer radius.",
   "Fixed-size": "One-shot manual set. The outer radius slider adjusts the font size once, but further edits (font changes, spacing) will not rescale automatically.",
@@ -1451,12 +1453,19 @@ interface ControlPanelProps {
   onOpenShortcutsModal?: (tab: 'shortcuts' | 'apikey' | 'aiscope', message?: string) => void;
   onSaveAsDefault?: () => void;
   onRestoreFactoryDefaults?: () => void;
+  slotPipelineStats?: {
+    bakedAttempts: number;
+    bakedSuccesses: number;
+    fallbackAttempts: number;
+    bakedAvgMs: number;
+    fallbackAvgMs: number;
+  };
   activeTab: 'global' | 'text' | 'Letter Ctrl' | 'hubs' | 'abstract' | 'planes' | 'images';
   onTabChange: (tab: 'global' | 'text' | 'Letter Ctrl' | 'hubs' | 'abstract' | 'planes' | 'images') => void;
 }
 
 const ControlPanel: React.FC<ControlPanelProps> = ({
-  config, onUpdate, updateGroup, updateCharOffset, updateTextGroups, updateHubs, updateAbstracts, updateImages, onAiPolish, aiLoading, aiProgress, onExportSTL, onExport3MF, onExportLayerSTL, onExportLayer3MF, onExportSelectedLayersSTL, onExportSelectedLayers3MF, onEstimateExportStats, onPrecomputeExportStats, onExportAllLayersZip, onExport2D, exportLoading, exportLoadingKey, onFetchFont, onFontUpload, dynamicFonts, /* SLOT-DISABLED: onAutoConfigureSlots, calculateOptimalSlots, */ setViewMode, undo, redo, canUndo, canRedo, shortcuts, onUpdateShortcuts, onResetShortcuts, onOpenShortcutsModal, onSaveAsDefault, onRestoreFactoryDefaults, activeTab, onTabChange
+  config, onUpdate, updateGroup, updateCharOffset, updateTextGroups, updateHubs, updateAbstracts, updateImages, onAiPolish, aiLoading, aiProgress, onExportSTL, onExport3MF, onExportLayerSTL, onExportLayer3MF, onExportSelectedLayersSTL, onExportSelectedLayers3MF, onEstimateExportStats, onPrecomputeExportStats, onExportAllLayersZip, onExport2D, exportLoading, exportLoadingKey, onFetchFont, onFontUpload, dynamicFonts, /* SLOT-DISABLED: onAutoConfigureSlots, calculateOptimalSlots, */ setViewMode, undo, redo, canUndo, canRedo, shortcuts, onUpdateShortcuts, onResetShortcuts, onOpenShortcutsModal, onSaveAsDefault, onRestoreFactoryDefaults, slotPipelineStats, activeTab, onTabChange
 }) => {
   const { t } = useTranslation(config.language || 'en');
   const tabContentRef = useRef<HTMLDivElement>(null);
@@ -2999,7 +3008,42 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                           />
                         </div>
                       )}
+                      {config.slotEnabled && (
+                        <div className="flex justify-between items-center">
+                          <InfoTooltip label={t('Baked Profile Slot Path')} description={getDescription('Baked Profile Slot Path', t)} />
+                          <Toggle
+                            label={(config.slotBakedProfileEnabled ?? true) ? t('ON') : t('OFF')}
+                            checked={config.slotBakedProfileEnabled ?? true}
+                            onChange={(checked) => onUpdate({ slotBakedProfileEnabled: checked }, true)}
+                          />
+                        </div>
+                      )}
                 </div>
+
+                {config.slotEnabled && slotPipelineStats && (
+                  <div className="p-3 bg-slate-800/30 rounded-xl border border-white/5 space-y-2">
+                    <div className={settingsHeaderClass}>
+                      <div className={settingsHeaderDotClass}></div>
+                      <span className={settingsHeaderLabelClass}>{t('Slot Pipeline Metrics')}</span>
+                    </div>
+                    <div className="text-[9px] font-black uppercase tracking-wide text-slate-300">
+                      Baked Attempts: {slotPipelineStats.bakedAttempts}
+                    </div>
+                    <div className="text-[9px] font-black uppercase tracking-wide text-slate-300">
+                      Baked Success: {slotPipelineStats.bakedSuccesses}
+                      {slotPipelineStats.bakedAttempts > 0 ? ` (${Math.round((slotPipelineStats.bakedSuccesses / slotPipelineStats.bakedAttempts) * 100)}%)` : ' (0%)'}
+                    </div>
+                    <div className="text-[9px] font-black uppercase tracking-wide text-slate-300">
+                      Fallback Uses: {slotPipelineStats.fallbackAttempts}
+                    </div>
+                    <div className="text-[9px] font-black uppercase tracking-wide text-slate-400">
+                      Avg Baked: {slotPipelineStats.bakedAvgMs.toFixed(1)}ms
+                    </div>
+                    <div className="text-[9px] font-black uppercase tracking-wide text-slate-400">
+                      Avg Fallback: {slotPipelineStats.fallbackAvgMs.toFixed(1)}ms
+                    </div>
+                  </div>
+                )}
 
                 <div className="space-y-2">
                    {config.layers.map((layer, idx) => (

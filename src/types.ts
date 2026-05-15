@@ -205,6 +205,7 @@ export interface SnowflakeConfig {
   bevelAmount: number;
   bevelSegments: number;
   slotEnabled: boolean;
+  slotBakedProfileEnabled?: boolean;
   slotBridgesEnabled: boolean;
   slotLength: number;
   slotWidth: number;

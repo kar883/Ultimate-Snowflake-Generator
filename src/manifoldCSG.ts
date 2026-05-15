@@ -229,28 +229,40 @@ export async function manifoldProfileCutAndExtrude(
   const wasm = await initManifold();
   const { Manifold, Mesh, CrossSection } = wasm;
 
-  const cleanBase = prepare(baseGeometry, { weld: false });
-  const basePos = cleanBase.attributes.position.array as Float32Array;
-  const baseIdx = cleanBase.index!.array as Uint32Array;
+  const makeProfileBaseSolid = () => {
+    const weldTolerances = [1e-5, 5e-5, 1e-4, 2e-4];
+    let lastError: unknown = null;
 
-  const baseMeshObj = new Mesh({
-    numProp: 3,
-    vertProperties: basePos,
-    triVerts: baseIdx,
-  });
-  baseMeshObj.merge();
+    for (const tolerance of weldTolerances) {
+      const cleanBase = prepare(baseGeometry, { weld: true, tolerance });
+      const basePos = cleanBase.attributes.position.array as Float32Array;
+      const baseIdx = cleanBase.index!.array as Uint32Array;
 
-  let baseSolid: any;
-  try {
-    baseSolid = createManifoldFromMesh(Manifold, baseMeshObj);
-  } catch (err: any) {
-    baseMeshObj.delete?.();
-    cleanBase.dispose();
-    throw err;
-  }
+      const baseMeshObj = new Mesh({
+        numProp: 3,
+        vertProperties: basePos,
+        triVerts: baseIdx,
+      });
+      baseMeshObj.merge();
 
-  baseMeshObj.delete?.();
-  cleanBase.dispose();
+      try {
+        const baseSolid = createManifoldFromMesh(Manifold, baseMeshObj);
+        baseMeshObj.delete?.();
+        cleanBase.dispose();
+        return baseSolid;
+      } catch (err) {
+        lastError = err;
+        baseMeshObj.delete?.();
+        cleanBase.dispose();
+      }
+    }
+
+    throw lastError instanceof Error
+      ? lastError
+      : new Error('Failed to create manifold operand for baked profile cut');
+  };
+
+  const baseSolid = makeProfileBaseSolid();
 
   let profile = baseSolid.project();
   baseSolid.delete?.();
@@ -301,6 +313,8 @@ export async function manifoldUnionAndExtrudeShapeInstances(
     bevelSize?: number;
     bevelThickness?: number;
     bevelSegments?: number;
+    /** Slot rectangles to subtract in 2D profile space before extrusion (baked-in approach). */
+    slotProfiles?: SlotProfile2D[];
   }
 ): Promise<THREE.BufferGeometry> {
   if (!instances.length) {
@@ -364,6 +378,22 @@ export async function manifoldUnionAndExtrudeShapeInstances(
   } catch (err) {
     strokeProfiles.forEach((profile) => profile.delete?.());
     throw err;
+  }
+
+  // Subtract slot profiles in 2D CrossSection space before extrusion.
+  // This is the correct baked-in approach: the flat 2D profile is the right place
+  // to cut slots — NOT by projecting an already-extruded 3D mesh back to 2D.
+  for (const p of (options?.slotProfiles ?? [])) {
+    if (unionProfile.isEmpty()) break;
+    const slot = CrossSection.square(
+      [Math.max(0.01, p.length), Math.max(0.01, p.width)], false
+    )
+      .translate((p.xOffset ?? 0) + (p.length / 2), -(p.width / 2) + (p.yOffset ?? 0))
+      .rotate(p.rotationDeg ?? 0);
+    const next = unionProfile.subtract(slot);
+    slot.delete?.();
+    unionProfile.delete?.();
+    unionProfile = next;
   }
 
   try {

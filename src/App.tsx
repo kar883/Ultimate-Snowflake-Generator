@@ -20,6 +20,7 @@ import { getApiKey, loadAiScope, type AiScopeConfig } from './components/Shortcu
 import {
   type ShapeInstance2D,
   type SlotProfile2D,
+  manifoldProfileCutAndExtrude,
   manifoldSubtract,
   manifoldUnionAndExtrudeShapeInstances,
   manifoldUnionGeometries,
@@ -38,7 +39,10 @@ const APP_VERSION = '1.0.9';
 const APP_DEBUG = false;
 // Bump when mesh generation logic changes (slot geometry, CSG sequencing, etc.)
 // so cached groups from older algorithms are not reused.
-const GEOMETRY_ALGO_VERSION = 'slot-2026-04-15-k';
+const GEOMETRY_ALGO_VERSION = 'slot-2026-05-14-baked-profile-a';
+// Feature-flagged slot strategy: build slot openings in profile space and extrude once.
+const ENABLE_BAKED_PROFILE_SLOT_PATH = true;
+const DEFAULT_BAKED_PROFILE_SLOT_ENABLED = true;
 
 declare global {
   interface Window {
@@ -62,6 +66,14 @@ type ValidationScenarioResult = {
 };
 
 type MeshGenerationMode = 'preview' | 'export' | 'validation' | 'refresh';
+
+type SlotPipelineStats = {
+  bakedAttempts: number;
+  bakedSuccesses: number;
+  fallbackAttempts: number;
+  bakedTotalMs: number;
+  fallbackTotalMs: number;
+};
 
 const DEFAULT_SHORTCUTS: ShortcutConfig = {
     undo: { key: 'z', ctrlKey: true },
@@ -393,33 +405,57 @@ function composeMatrix2D(...operations: THREE_ACTUAL.Matrix3[]): THREE_ACTUAL.Ma
 }
 
 function describeTopologyFailure(label: string, geometry: THREE_ACTUAL.BufferGeometry): string | null {
+  const rawTopologyGeometry = (() => {
+    const clone = geometry.clone();
+    if (!clone.index) {
+      const count = clone.attributes.position?.count ?? 0;
+      const index = new Uint32Array(count);
+      for (let i = 0; i < count; i++) index[i] = i;
+      clone.setIndex(new THREE_ACTUAL.BufferAttribute(index, 1));
+    }
+    return clone;
+  })();
+
+  const rawReport = getTopologyReport(rawTopologyGeometry);
+  rawTopologyGeometry.dispose();
+
   const topologyGeometry = (() => {
     const clone = geometry.clone();
-    const indexed = clone.index
-      ? clone
-      : (() => {
-          const count = clone.attributes.position?.count ?? 0;
-          const index = new Uint32Array(count);
-          for (let i = 0; i < count; i++) index[i] = i;
-          clone.setIndex(new THREE_ACTUAL.BufferAttribute(index, 1));
-          return clone;
-        })();
-
-    const welded = BufferGeometryUtils.mergeVertices(indexed, 1e-5) as THREE_ACTUAL.BufferGeometry;
-    if (welded !== indexed) {
-      indexed.dispose();
-      return welded;
+    if (!clone.index) {
+      const count = clone.attributes.position?.count ?? 0;
+      const index = new Uint32Array(count);
+      for (let i = 0; i < count; i++) index[i] = i;
+      clone.setIndex(new THREE_ACTUAL.BufferAttribute(index, 1));
     }
-    return indexed;
+    const welded = BufferGeometryUtils.mergeVertices(clone, 1e-5) as THREE_ACTUAL.BufferGeometry;
+    if (welded !== clone) clone.dispose();
+    return welded;
   })();
 
   const report = getTopologyReport(topologyGeometry);
   topologyGeometry.dispose();
+
+  // Preserve raw closed solids when welding only exposes coincident overlaps.
+  // Trying to surgically repair these large export meshes turns them into open meshes.
+  if (
+    rawReport.boundaryEdges === 0
+    && rawReport.nonManifoldEdges === 0
+    && report.boundaryEdges === 0
+  ) {
+    return null;
+  }
+
   if (report.boundaryEdges === 0 && report.nonManifoldEdges === 0) {
     return null;
   }
 
   return `${label} is not a closed manifold (boundary=${report.boundaryEdges}, nonManifold=${report.nonManifoldEdges}, faces=${report.faces})`;
+}
+
+const MAX_SURGICAL_REPAIR_VERTEX_COUNT = 750000;
+
+function shouldSkipHeavyTopologyRepair(geometry: THREE_ACTUAL.BufferGeometry): boolean {
+  return (geometry.attributes.position?.count ?? 0) > MAX_SURGICAL_REPAIR_VERTEX_COUNT;
 }
 
 function collectGroupTopology(group: THREE_ACTUAL.Group): MeshTopologyValidation[] {
@@ -1997,7 +2033,15 @@ const applyWatertightSlotCuts = async (
   enabledLayers: LayerConfig[],
   config: SnowflakeConfig,
   bevelPerSide: number,
-  options?: { baseIsManifold?: boolean; preferWorker?: boolean; allowRepair?: boolean; logTopologyWarnings?: boolean },
+  options?: {
+    baseIsManifold?: boolean;
+    preferWorker?: boolean;
+    allowRepair?: boolean;
+    logTopologyWarnings?: boolean;
+    useBakedProfile?: boolean;
+    onBakedProfileAttempt?: (durationMs: number, succeeded: boolean) => void;
+    onLegacyPathComplete?: (durationMs: number) => void;
+  },
   signal?: AbortSignal
 ): Promise<THREE_ACTUAL.BufferGeometry> => {
   if (signal?.aborted) throw new DOMException('Slot cut aborted', 'AbortError');
@@ -2280,6 +2324,14 @@ const applyWatertightSlotCuts = async (
       if (logTopologyWarnings) {
         console.warn(`[slot-csg] ${topologyFailure}`);
       }
+      if (shouldSkipHeavyTopologyRepair(candidate)) {
+        if (logTopologyWarnings) {
+          console.warn(`[slot-csg] ${label} exceeds fast repair budget; preserving slot-cut geometry without surgical repair`);
+        }
+        candidate.computeVertexNormals();
+        candidate.computeBoundingBox();
+        return candidate;
+      }
       const repaired = surgicalSlotRepair(candidate);
       const repairedFailure = describeTopologyFailure(`${label} repaired`, repaired);
       if (!repairedFailure) {
@@ -2300,6 +2352,47 @@ const applyWatertightSlotCuts = async (
     return candidate;
   };
 
+  const shouldUseBakedProfile = ENABLE_BAKED_PROFILE_SLOT_PATH && (options?.useBakedProfile ?? DEFAULT_BAKED_PROFILE_SLOT_ENABLED);
+  if (shouldUseBakedProfile) {
+    const bakedStart = performance.now();
+    try {
+      const bakedResult = await manifoldProfileCutAndExtrude(
+        layerForCut,
+        profiles,
+        materialThickness
+      );
+
+      const validatedBaked = ensureClosedManifold(
+        bakedResult,
+        `${layer.name} baked profile slot result`
+      );
+
+      if (validatedBaked) {
+        const bakedMs = performance.now() - bakedStart;
+        options?.onBakedProfileAttempt?.(bakedMs, true);
+        if (bakedMs > 120) {
+          console.debug(`[slot-csg] Baked profile cut for ${layer.name} took ${bakedMs.toFixed(1)}ms`);
+        }
+        return validatedBaked;
+      }
+
+      if (logTopologyWarnings) {
+        console.warn(`[slot-csg] Baked profile slot path produced open geometry for ${layer.name}; retrying with fallback CSG`);
+      }
+      options?.onBakedProfileAttempt?.(performance.now() - bakedStart, false);
+    } catch (bakedErr) {
+      if (bakedErr instanceof DOMException && bakedErr.name === 'AbortError') {
+        throw bakedErr;
+      }
+      options?.onBakedProfileAttempt?.(performance.now() - bakedStart, false);
+      if (logTopologyWarnings) {
+        console.warn(`[slot-csg] Baked profile slot path failed for ${layer.name}; retrying with fallback CSG`, bakedErr);
+      }
+    }
+  }
+
+  const legacyPathStartMs = performance.now();
+
   const buildManifoldBaseFallback = async (): Promise<THREE_ACTUAL.BufferGeometry> => {
     if (options?.baseIsManifold) {
       const fallback = layerForCut.clone();
@@ -2308,7 +2401,17 @@ const applyWatertightSlotCuts = async (
       return fallback;
     }
 
-    const validated = ensureClosedManifold(surgicalSlotRepair(layerForCut.clone()), `${layer.name} fallback base`);
+    // Check topology BEFORE running surgical repair — surgical repair can break manifold
+    // geometries (from manifoldUnion) by removing small triangles and creating new holes.
+    const preCheckFailure = describeTopologyFailure(`${layer.name} fallback base`, layerForCut);
+    if (!preCheckFailure) {
+      const fallback = layerForCut.clone();
+      fallback.computeVertexNormals();
+      fallback.computeBoundingBox();
+      return fallback;
+    }
+
+    const validated = ensureClosedManifold(layerForCut.clone(), `${layer.name} fallback base`);
     if (!validated) {
       throw new Error(`${layer.name} fallback base is not a closed manifold`);
     }
@@ -2316,14 +2419,18 @@ const applyWatertightSlotCuts = async (
   };
 
   const forceWorkerForLargeMesh = (layerForCut.getAttribute('position')?.count ?? 0) > FORCE_WORKER_SLOT_CUT_VERTEX_THRESHOLD;
+  let workerTried = false;
+  let workerFailedOpen = false;
 
   if (options?.preferWorker || forceWorkerForLargeMesh) {
     try {
+      workerTried = true;
       const workerOut = await runWorkerCut();
       const validatedWorker = ensureClosedManifold(workerOut, `${layer.name} worker slot result`);
       if (validatedWorker) {
         return validatedWorker;
       }
+      workerFailedOpen = true;
       if (allowRepair && logTopologyWarnings) {
         console.warn(`[slot-csg] Worker-first slot cut returned open geometry for ${layer.name}; retrying manifold`);
       }
@@ -2334,9 +2441,33 @@ const applyWatertightSlotCuts = async (
       if (!allowRepair) {
         return layerGeo;
       }
+      workerFailedOpen = true;
       if (allowRepair && logTopologyWarnings) {
         console.warn(`Worker-first slot cutting failed for ${layer.name}; retrying manifold`, workerErr);
       }
+    }
+  }
+
+  // Fast path: if worker-first already failed for this dense mesh, skip expensive
+  // manifold retry and go straight to a single fallback base attempt.
+  if (workerFailedOpen && (options?.preferWorker || forceWorkerForLargeMesh)) {
+    if (allowRepair && logTopologyWarnings) {
+      console.warn(`[slot-csg] Fast path enabled for ${layer.name}; skipping manifold retry after worker failure`);
+    }
+    try {
+      const fallbackBase = await buildManifoldBaseFallback();
+      if (allowRepair && logTopologyWarnings) {
+        console.warn(`[slot-csg] Fast path using fallback base for ${layer.name}`);
+      }
+      return fallbackBase;
+    } catch (fallbackErr) {
+      if (allowRepair && logTopologyWarnings) {
+        console.warn(`Fast-path fallback base failed for ${layer.name}; using original layer geometry`, fallbackErr);
+      }
+      const fallback = layerGeo.clone();
+      fallback.computeVertexNormals();
+      fallback.computeBoundingBox();
+      return fallback;
     }
   }
 
@@ -2369,19 +2500,24 @@ const applyWatertightSlotCuts = async (
     if (allowRepair && logTopologyWarnings) {
       console.warn(`Manifold slot cutting failed for ${layer.name}`, manifoldErr);
     }
-    try {
-      const workerOut = await runWorkerCut();
-      const validatedWorker = ensureClosedManifold(workerOut, `${layer.name} worker fallback slot result`);
-      if (validatedWorker) {
-        return validatedWorker;
+    if (!workerTried) {
+      try {
+        workerTried = true;
+        const workerOut = await runWorkerCut();
+        const validatedWorker = ensureClosedManifold(workerOut, `${layer.name} worker fallback slot result`);
+        if (validatedWorker) {
+          return validatedWorker;
+        }
+        if (allowRepair && logTopologyWarnings) {
+          console.warn(`[slot-csg] Worker fallback slot cut returned open geometry for ${layer.name}; preserving manifold base`);
+        }
+      } catch (workerErr) {
+        if (allowRepair && logTopologyWarnings) {
+          console.warn(`Worker slot cutting failed for ${layer.name}`, workerErr);
+        }
       }
-      if (allowRepair && logTopologyWarnings) {
-        console.warn(`[slot-csg] Worker fallback slot cut returned open geometry for ${layer.name}; preserving manifold base`);
-      }
-    } catch (workerErr) {
-      if (allowRepair && logTopologyWarnings) {
-        console.warn(`Worker slot cutting failed for ${layer.name}`, workerErr);
-      }
+    } else if (allowRepair && logTopologyWarnings) {
+      console.warn(`[slot-csg] Skipping duplicate worker fallback for ${layer.name}; worker path already attempted`);
     }
 
     try {
@@ -2397,6 +2533,7 @@ const applyWatertightSlotCuts = async (
       throw manifoldErr;
     }
   } finally {
+    options?.onLegacyPathComplete?.(performance.now() - legacyPathStartMs);
     cutters.forEach((g) => g.dispose());
     layerForCut.dispose();
   }
@@ -3070,6 +3207,7 @@ const createFactoryInitialState = (): SnowflakeConfig => ({
   bevelAmount: 0.4,
   bevelSegments: 5,
   slotEnabled: false,
+  slotBakedProfileEnabled: DEFAULT_BAKED_PROFILE_SLOT_ENABLED,
   slotBridgesEnabled: true,
   slotLength: 95,
   slotWidth: 0.2,
@@ -3095,6 +3233,9 @@ const loadStartupState = (): SnowflakeConfig => {
 
     return {
       ...mergedTop,
+      slotBakedProfileEnabled: typeof parsed.slotBakedProfileEnabled === 'boolean'
+        ? parsed.slotBakedProfileEnabled
+        : DEFAULT_BAKED_PROFILE_SLOT_ENABLED,
       layers: (Array.isArray(parsed.layers) ? parsed.layers : factory.layers).map((layer, idx) => {
         const normalizedLayer: LayerConfig = {
           ...(factory.layers[idx] ?? createDefaultLayer(`layer-${idx + 1}`, `Plane ${idx + 1}`)),
@@ -3410,6 +3551,55 @@ const App: React.FC = () => {
   const [dynamicFonts, setDynamicFonts] = useState<Record<string, string>>(FONT_TTF_URLS);
   const [fontsPreloaded, setFontsPreloaded] = useState(false);
 
+  const initialSlotPipelineStats: SlotPipelineStats = {
+    bakedAttempts: 0,
+    bakedSuccesses: 0,
+    fallbackAttempts: 0,
+    bakedTotalMs: 0,
+    fallbackTotalMs: 0,
+  };
+  const [slotPipelineStats, setSlotPipelineStats] = useState<SlotPipelineStats>(initialSlotPipelineStats);
+  const slotPipelineStatsRef = useRef<SlotPipelineStats>(initialSlotPipelineStats);
+  const slotPipelineStatsLastFlushRef = useRef(0);
+
+  const flushSlotPipelineStats = useCallback((force = false) => {
+    const now = Date.now();
+    if (!force && (now - slotPipelineStatsLastFlushRef.current) < 250) return;
+    slotPipelineStatsLastFlushRef.current = now;
+    setSlotPipelineStats({ ...slotPipelineStatsRef.current });
+  }, []);
+
+  const recordBakedProfileAttempt = useCallback((durationMs: number, succeeded: boolean) => {
+    const stats = slotPipelineStatsRef.current;
+    stats.bakedAttempts += 1;
+    if (succeeded) stats.bakedSuccesses += 1;
+    stats.bakedTotalMs += Math.max(0, durationMs);
+    flushSlotPipelineStats();
+  }, [flushSlotPipelineStats]);
+
+  const recordLegacyPathComplete = useCallback((durationMs: number) => {
+    const stats = slotPipelineStatsRef.current;
+    stats.fallbackAttempts += 1;
+    stats.fallbackTotalMs += Math.max(0, durationMs);
+    flushSlotPipelineStats();
+  }, [flushSlotPipelineStats]);
+
+  const slotPipelineStatsSummary = useMemo(() => {
+    const bakedAvgMs = slotPipelineStats.bakedAttempts > 0
+      ? slotPipelineStats.bakedTotalMs / slotPipelineStats.bakedAttempts
+      : 0;
+    const fallbackAvgMs = slotPipelineStats.fallbackAttempts > 0
+      ? slotPipelineStats.fallbackTotalMs / slotPipelineStats.fallbackAttempts
+      : 0;
+    return {
+      bakedAttempts: slotPipelineStats.bakedAttempts,
+      bakedSuccesses: slotPipelineStats.bakedSuccesses,
+      fallbackAttempts: slotPipelineStats.fallbackAttempts,
+      bakedAvgMs,
+      fallbackAvgMs,
+    };
+  }, [slotPipelineStats]);
+
   // Font preloader hook
   const { preloadAllFonts, getFont, isFontLoaded } = useFontPreloader();
 
@@ -3665,10 +3855,12 @@ const App: React.FC = () => {
     targetLayerIds?: string[]
   ): string => {
     const normalizedTargets = (targetLayerIds ?? []).filter(Boolean);
+    const slotPathMode = (cfg.slotBakedProfileEnabled ?? DEFAULT_BAKED_PROFILE_SLOT_ENABLED) ? 'baked' : 'legacy';
     return hashConfig(cfg)
       + '|q:' + quality
       + '|targets:' + (normalizedTargets.length > 0 ? [...normalizedTargets].sort().join(',') : 'all')
       + '|slotBridge:' + SLOT_BRIDGE_RULE_VERSION
+      + '|slotPath:' + slotPathMode
       + '|algo:' + GEOMETRY_ALGO_VERSION;
   }, []);
 
@@ -3780,6 +3972,7 @@ const App: React.FC = () => {
       globalStrokeWeight: cfg.globalStrokeWeight,
       baseIsManifold: options.baseIsManifold ?? false,
       preferWorker: options.preferWorker ?? false,
+      slotBakedProfileEnabled: cfg.slotBakedProfileEnabled ?? DEFAULT_BAKED_PROFILE_SLOT_ENABLED,
       algo: GEOMETRY_ALGO_VERSION,
     };
 
@@ -3953,6 +4146,19 @@ const App: React.FC = () => {
       clearGeometryCache();
       clearSlotCutResultCache();
     }
+    if ('slotBakedProfileEnabled' in updates && updates.slotBakedProfileEnabled !== config.slotBakedProfileEnabled) {
+      clearGeometryCache();
+      clearSlotCutResultCache();
+      modelCache3D.clear();
+      slotPipelineStatsRef.current = {
+        bakedAttempts: 0,
+        bakedSuccesses: 0,
+        fallbackAttempts: 0,
+        bakedTotalMs: 0,
+        fallbackTotalMs: 0,
+      };
+      flushSlotPipelineStats(true);
+    }
     // Clear geometry and model caches when quality changes so the new resolution
     // is actually applied rather than serving the old cached mesh
     if ('quality' in updates && updates.quality !== lastQuality.current) {
@@ -3970,6 +4176,7 @@ const App: React.FC = () => {
              ('slotLength' in updates) ||
              ('slotWidth' in updates) ||
              ('slotMode' in updates) ||
+             ('slotBakedProfileEnabled' in updates) ||
              ('globalStrokeWeight' in updates);
     };
 
@@ -4436,9 +4643,12 @@ const App: React.FC = () => {
       clearGeometryCache();
       clearSlotCutResultCache();
     }
-    const qualityToUse = overrideQuality || rendered3DConfig.quality;
+    const qualityToUse = overrideQuality || config.quality;
     const interactiveSlotPreview = config.slotEnabled
       && (generationMode === 'preview' || generationMode === 'refresh');
+    const lowQualitySlotExport = config.slotEnabled
+      && generationMode === 'export'
+      && qualityToUse === 'low';
     
     // For preview + slots: aggressively reduce vertex count to prevent manifold crashes
     // and lag. Font glyphs × curve segments × bevel segments = millions of verts; preview
@@ -4447,9 +4657,13 @@ const App: React.FC = () => {
     let curveSeg = 12;
     let bevelSegCap = 10;
 
-    if (interactiveSlotPreview) {
+    if (interactiveSlotPreview || lowQualitySlotExport) {
       // Keep interactive slot preview responsive while still honoring quality.
-      // This mapping intentionally stays below export detail to avoid UI stalls.
+      // Low-quality slot export uses the same tessellation budget so worker CSG
+      // operates on the same practical mesh density the user sees in preview.
+      if (lowQualitySlotExport) {
+        console.debug('[slot-csg] Low-quality export using preview-grade tessellation');
+      }
       if (qualityToUse === 'low') {
         qMult = 0.35;
         curveSeg = 5;
@@ -5525,6 +5739,9 @@ const App: React.FC = () => {
                   ...opts,
                   allowRepair: generationMode !== 'preview',
                   logTopologyWarnings: generationMode !== 'preview',
+                  useBakedProfile: config.slotBakedProfileEnabled ?? DEFAULT_BAKED_PROFILE_SLOT_ENABLED,
+                  onBakedProfileAttempt: recordBakedProfileAttempt,
+                  onLegacyPathComplete: recordLegacyPathComplete,
                 },
                 signal
               );
@@ -5594,7 +5811,7 @@ const App: React.FC = () => {
           const preferWorkerPreviewCut = interactiveSlotPreview || forceWorkerSlotCut;
           try {
             if (canUseFlat2DPreUnion && layerShapeInstances.length > 0) {
-              const slotUnionCurveSegments = interactiveSlotPreview
+              const slotUnionCurveSegments = (interactiveSlotPreview || lowQualitySlotExport)
                 ? 4
                 : generationMode === 'export'
                   ? (qualityToUse === 'low'
@@ -5617,7 +5834,7 @@ const App: React.FC = () => {
                   bevelSize: config.bevelEnabled ? bevelPerSide : 0,
                   bevelThickness: config.bevelEnabled ? bevelPerSide : 0,
                   bevelSegments: config.bevelEnabled
-                    ? (interactiveSlotPreview
+                    ? ((interactiveSlotPreview || lowQualitySlotExport)
                         ? 1
                         : Math.max(1, config.bevelSegments))
                     : 1,
@@ -5678,7 +5895,20 @@ const App: React.FC = () => {
               });
             } catch (mergedCutErr) {
               console.warn(`Manifold slot cut failed for ${layer.name}; keeping uncut geometry`, mergedCutErr);
-              cutLayerGeo = mergedLayerGeo;
+              // Normalize the fallback geometry so downstream repair (which requires indexed geometry) can work.
+              // Non-indexed geometry (3 unique verts per triangle) makes surgicalSlotRepair a no-op.
+              const fallbackNorm = mergedLayerGeo.clone();
+              if (!fallbackNorm.index) {
+                const count = fallbackNorm.attributes.position.count;
+                const idx = new Uint32Array(count);
+                for (let i = 0; i < count; i++) idx[i] = i;
+                fallbackNorm.setIndex(new THREE_ACTUAL.BufferAttribute(idx, 1));
+              }
+              const fallbackWelded = BufferGeometryUtils.mergeVertices(fallbackNorm, 1e-4) as THREE_ACTUAL.BufferGeometry;
+              if (fallbackWelded !== fallbackNorm) fallbackNorm.dispose();
+              fallbackWelded.computeVertexNormals();
+              fallbackWelded.computeBoundingBox();
+              cutLayerGeo = fallbackWelded;
             }
           }
 
@@ -5737,19 +5967,37 @@ const App: React.FC = () => {
           : null;
         if (layerTopologyFailure) {
           console.warn(`[slot-csg] ${layerTopologyFailure}; rebuilding manifold layer geometry`);
-          try {
-            const repairedLayerGeo = surgicalSlotRepair(cutSourceGeo.clone());
-            const repairedFailure = describeTopologyFailure(`${layer.name} repaired slot geometry`, repairedLayerGeo);
-            if (repairedFailure) {
-              repairedLayerGeo.dispose();
-              throw new Error(repairedFailure);
-            }
+          if (shouldSkipHeavyTopologyRepair(cutSourceGeo)) {
+            console.warn(`[slot-csg] ${layer.name} composed slot geometry exceeds fast repair budget; preserving geometry`);
+          } else {
+            try {
+              // Normalize (add index + weld) before surgical repair — surgicalSlotRepair bails
+              // early on non-indexed geometry, doing nothing useful.
+              const toRepairLayer = (() => {
+                const g = cutSourceGeo.clone();
+                if (!g.index) {
+                  const count = g.attributes.position.count;
+                  const idx = new Uint32Array(count);
+                  for (let i = 0; i < count; i++) idx[i] = i;
+                  g.setIndex(new THREE_ACTUAL.BufferAttribute(idx, 1));
+                }
+                const welded = BufferGeometryUtils.mergeVertices(g, 1e-4) as THREE_ACTUAL.BufferGeometry;
+                if (welded !== g) g.dispose();
+                return welded;
+              })();
+              const repairedLayerGeo = surgicalSlotRepair(toRepairLayer);
+              const repairedFailure = describeTopologyFailure(`${layer.name} repaired slot geometry`, repairedLayerGeo);
+              if (repairedFailure) {
+                repairedLayerGeo.dispose();
+                throw new Error(repairedFailure);
+              }
 
-            cutSourceGeo.dispose();
-            cutSourceGeo = repairedLayerGeo;
-          } catch (repairErr) {
-            if (generationMode !== 'preview') {
-              console.warn(`Failed to rebuild manifold layer geometry for ${layer.name}`, repairErr);
+              cutSourceGeo.dispose();
+              cutSourceGeo = repairedLayerGeo;
+            } catch (repairErr) {
+              if (generationMode !== 'preview') {
+                console.warn(`Failed to rebuild manifold layer geometry for ${layer.name}`, repairErr);
+              }
             }
           }
         }
@@ -5765,19 +6013,37 @@ const App: React.FC = () => {
           : null;
         if (transformedTopologyFailure) {
           console.warn(`[slot-csg] ${transformedTopologyFailure}; rebuilding manifold transformed geometry`);
-          try {
-            const repairedFinalGeo = surgicalSlotRepair(finalGeo.clone());
-            const repairedFinalFailure = describeTopologyFailure(`${layer.name} repaired transformed geometry`, repairedFinalGeo);
-            if (repairedFinalFailure) {
-              repairedFinalGeo.dispose();
-              throw new Error(repairedFinalFailure);
-            }
+          if (shouldSkipHeavyTopologyRepair(finalGeo)) {
+            console.warn(`[slot-csg] ${layer.name} transformed display geometry exceeds fast repair budget; preserving geometry`);
+          } else {
+            try {
+              // Normalize (add index + weld) before surgical repair — surgicalSlotRepair bails
+              // early on non-indexed geometry, doing nothing useful.
+              const toRepairFinal = (() => {
+                const g = finalGeo.clone();
+                if (!g.index) {
+                  const count = g.attributes.position.count;
+                  const idx = new Uint32Array(count);
+                  for (let i = 0; i < count; i++) idx[i] = i;
+                  g.setIndex(new THREE_ACTUAL.BufferAttribute(idx, 1));
+                }
+                const welded = BufferGeometryUtils.mergeVertices(g, 1e-4) as THREE_ACTUAL.BufferGeometry;
+                if (welded !== g) g.dispose();
+                return welded;
+              })();
+              const repairedFinalGeo = surgicalSlotRepair(toRepairFinal);
+              const repairedFinalFailure = describeTopologyFailure(`${layer.name} repaired transformed geometry`, repairedFinalGeo);
+              if (repairedFinalFailure) {
+                repairedFinalGeo.dispose();
+                throw new Error(repairedFinalFailure);
+              }
 
-            finalGeo.dispose();
-            finalGeo = repairedFinalGeo;
-          } catch (repairFinalErr) {
-            if (generationMode !== 'preview') {
-              console.warn(`Failed to rebuild manifold transformed geometry for ${layer.name}`, repairFinalErr);
+              finalGeo.dispose();
+              finalGeo = repairedFinalGeo;
+            } catch (repairFinalErr) {
+              if (generationMode !== 'preview') {
+                console.warn(`Failed to rebuild manifold transformed geometry for ${layer.name}`, repairFinalErr);
+              }
             }
           }
         }
@@ -5919,20 +6185,84 @@ const App: React.FC = () => {
       : q === 'med'
         ? 0.0000018
         : 0.0000026;
+    const slotEnabled = config.slotEnabled ?? false;
 
     return {
-      optimize: true,
+      optimize: !slotEnabled,
       weldTolerance,
       quality: q,
-      nearLosslessDecimation: true,
+      nearLosslessDecimation: !slotEnabled,
       binary: true,
+      // Enable final manifold repair for slot-enabled designs to ensure watertight exports
+      ensureManifold: slotEnabled,
     };
   };
 
+  // ── Diagnostic helper ────────────────────────────────────────────────────────
+  // Logs a 3-stage topology report to the browser console for each mesh found in
+  // the export object so we can pinpoint exactly where topology defects are introduced.
+  //   Stage 1 (pre-export): raw geometry as it arrives from the mesh/group
+  //   Stage 2 (normalized): after index + mergeVertices(1e-5) – what the export
+  //            pipeline sees before any repair
+  //   Stage 3 (post-Manifold): logged inside stlExporter.ts when ensureManifold=true
+  const logPreExportTopology = (object: THREE_ACTUAL.Object3D, label: string = 'export') => {
+    const meshes: THREE_ACTUAL.Mesh[] = [];
+    if (object instanceof THREE_ACTUAL.Mesh) {
+      meshes.push(object);
+    } else {
+      object.traverse((child) => {
+        if (child instanceof THREE_ACTUAL.Mesh) meshes.push(child as THREE_ACTUAL.Mesh);
+      });
+    }
+
+    if (meshes.length === 0) {
+      console.log(`🔍 [${label}] No meshes found for topology check`);
+      return;
+    }
+
+    for (const mesh of meshes) {
+      const geo = mesh.geometry as THREE_ACTUAL.BufferGeometry;
+      const meshLabel = `${label}/${mesh.name || mesh.userData.layerId || 'unnamed'}`;
+
+      // Stage 1: raw geometry
+      const rawVertices = geo.attributes.position?.count ?? 0;
+      const rawTriangles = geo.index ? geo.index.count / 3 : rawVertices / 3;
+      const rawReport = getTopologyReport(geo);
+      console.log(`🔍 [${meshLabel}] Stage 1 (raw): verts=${rawVertices}, tris=${Math.round(rawTriangles)}, boundary=${rawReport.boundaryEdges}, nonManifold=${rawReport.nonManifoldEdges}, manifold=${rawReport.isManifold}`);
+
+      // Stage 2: welded (index + mergeVertices) — gives accurate topology for non-indexed geometry
+      try {
+        const cloned = geo.clone();
+        if (!cloned.index) {
+          const count = cloned.attributes.position?.count ?? 0;
+          const idx = new Uint32Array(count);
+          for (let i = 0; i < count; i++) idx[i] = i;
+          cloned.setIndex(new THREE_ACTUAL.BufferAttribute(idx, 1));
+        }
+        const welded = BufferGeometryUtils.mergeVertices(cloned, 1e-5) as THREE_ACTUAL.BufferGeometry;
+        if (welded !== cloned) cloned.dispose();
+        const weldedVertices = welded.attributes.position?.count ?? 0;
+        const weldedTriangles = welded.index ? welded.index.count / 3 : weldedVertices / 3;
+        const weldedReport = getTopologyReport(welded);
+        console.log(`🔍 [${meshLabel}] Stage 2 (welded): verts=${weldedVertices}, tris=${Math.round(weldedTriangles)}, boundary=${weldedReport.boundaryEdges}, nonManifold=${weldedReport.nonManifoldEdges}, manifold=${weldedReport.isManifold}`);
+        welded.dispose();
+      } catch (e) {
+        console.warn(`🔍 [${meshLabel}] Stage 2 welding failed:`, e);
+      }
+    }
+  };
+  // ─────────────────────────────────────────────────────────────────────────────
+
   const getCachedPreviewGroupForExport = useCallback((qualityToUse: DesignQuality) => {
+    // Slot-enabled 3D preview uses BSP worker cuts (fast but can be non-manifold).
+    // Exports use the export path, and we avoid reusing the preview cache because
+    // it can hold geometry that was generated for visualization rather than export.
+    if (config.slotEnabled) return null;
+
     const makePreviewKey = (cfg: SnowflakeConfig) => hashConfig(cfg)
       + '|q:' + qualityToUse
       + '|targets:all'
+      + '|slotPath:' + ((cfg.slotBakedProfileEnabled ?? DEFAULT_BAKED_PROFILE_SLOT_ENABLED) ? 'baked' : 'legacy')
       + '|algo:' + GEOMETRY_ALGO_VERSION;
 
     // Prefer the currently rendered 3D snapshot cache key first.
@@ -6325,12 +6655,13 @@ const App: React.FC = () => {
     try {
         const qualityToUse = quality || config.quality;
         const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
-      const fallbackMode: MeshGenerationMode = qualityToUse === rendered3DConfig.quality ? 'preview' : 'export';
+      const fallbackMode: MeshGenerationMode = (config.slotEnabled || qualityToUse !== rendered3DConfig.quality) ? 'export' : 'preview';
 
         await yieldToMainThread();
       const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode);
 
         await yieldToMainThread();
+        logPreExportTopology(group, 'combined-stl');
         const exporter = new STLExporter();
         const result = await exporter.parseAsync(group, getExportCleanupOptions(quality));
         const blob = new Blob([result], { type: 'application/octet-stream' });
@@ -6365,12 +6696,13 @@ const App: React.FC = () => {
     try {
       const qualityToUse = quality || config.quality;
       const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
-      const fallbackMode: MeshGenerationMode = qualityToUse === rendered3DConfig.quality ? 'preview' : 'export';
+      const fallbackMode: MeshGenerationMode = (config.slotEnabled || qualityToUse !== rendered3DConfig.quality) ? 'export' : 'preview';
 
       await yieldToMainThread();
       const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode);
 
       await yieldToMainThread();
+      logPreExportTopology(group, 'combined-3mf');
       const exporter = new ThreeMFExporter();
       const blob = await exporter.parse(group, getExportCleanupOptions(quality));
       const actualTriangles = countTrianglesInObject(group);
@@ -6405,13 +6737,14 @@ const App: React.FC = () => {
     try {
         const qualityToUse = quality || config.quality;
         const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
-      const fallbackMode: MeshGenerationMode = qualityToUse === rendered3DConfig.quality ? 'preview' : 'export';
+      const fallbackMode: MeshGenerationMode = (config.slotEnabled || qualityToUse !== rendered3DConfig.quality) ? 'export' : 'preview';
 
         await yieldToMainThread();
       const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode, { targetLayerIds: [layer.id] });
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
         if (mesh) {
             await yieldToMainThread();
+            logPreExportTopology(mesh, `layer-stl/${layer.name}`);
             const exporter = new STLExporter();
             const result = await exporter.parseAsync(mesh, getExportCleanupOptions(quality));
             const blob = new Blob([result], { type: 'application/octet-stream' });
@@ -6447,13 +6780,14 @@ const App: React.FC = () => {
     try {
       const qualityToUse = quality || config.quality;
       const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
-      const fallbackMode: MeshGenerationMode = qualityToUse === rendered3DConfig.quality ? 'preview' : 'export';
+      const fallbackMode: MeshGenerationMode = (config.slotEnabled || qualityToUse !== rendered3DConfig.quality) ? 'export' : 'preview';
 
       await yieldToMainThread();
       const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode, { targetLayerIds: [layer.id] });
       const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
       if (mesh) {
         await yieldToMainThread();
+        logPreExportTopology(mesh, `layer-3mf/${layer.name}`);
         const exporter = new ThreeMFExporter();
         const blob = await exporter.parse(mesh, getExportCleanupOptions(quality));
         const actualTriangles = countTrianglesInObject(mesh);
@@ -6477,7 +6811,7 @@ const App: React.FC = () => {
       try {
         const qualityToUse = quality || config.quality;
         const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
-        const fallbackMode: MeshGenerationMode = qualityToUse === rendered3DConfig.quality ? 'preview' : 'export';
+        const fallbackMode: MeshGenerationMode = (config.slotEnabled || qualityToUse !== rendered3DConfig.quality) ? 'export' : 'preview';
           await yieldToMainThread();
         const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode);
           const zip = new JSZip();
@@ -6508,6 +6842,7 @@ const App: React.FC = () => {
                 // Yield between per-layer serialization steps so the UI stays responsive.
                 await yieldToMainThread();
               }
+              logPreExportTopology(child, `zip-stl/${child.name || i}`);
               const result = await exporter.parseAsync(child, getExportCleanupOptions(quality));
               // STL ZIP remains binary STL files for slicer compatibility.
               const data = result as ArrayBuffer;
@@ -6547,7 +6882,7 @@ const App: React.FC = () => {
     try {
       const qualityToUse = quality || config.quality;
       const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
-      const fallbackMode: MeshGenerationMode = qualityToUse === rendered3DConfig.quality ? 'preview' : 'export';
+      const fallbackMode: MeshGenerationMode = (config.slotEnabled || qualityToUse !== rendered3DConfig.quality) ? 'export' : 'preview';
 
       await yieldToMainThread();
       const targetLayerIds = selectedLayers.map(({ layer }) => layer.id);
@@ -6562,6 +6897,7 @@ const App: React.FC = () => {
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
         if (!mesh) continue;
         if (i > 0) await yieldToMainThread();
+        logPreExportTopology(mesh, `batch-stl/${layer.name}`);
         const result = await exporter.parseAsync(mesh, getExportCleanupOptions(quality));
         const blob = new Blob([result], { type: 'application/octet-stream' });
         const actualTriangles = Math.max(0, Math.floor((blob.size - 84) / 50));
@@ -6605,7 +6941,7 @@ const App: React.FC = () => {
     try {
       const qualityToUse = quality || config.quality;
       const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
-      const fallbackMode: MeshGenerationMode = qualityToUse === rendered3DConfig.quality ? 'preview' : 'export';
+      const fallbackMode: MeshGenerationMode = (config.slotEnabled || qualityToUse !== rendered3DConfig.quality) ? 'export' : 'preview';
 
       await yieldToMainThread();
       const targetLayerIds = selectedLayers.map(({ layer }) => layer.id);
@@ -6620,6 +6956,7 @@ const App: React.FC = () => {
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
         if (!mesh) continue;
         if (i > 0) await yieldToMainThread();
+        logPreExportTopology(mesh, `batch-3mf/${layer.name}`);
         const blob = await exporter.parse(mesh, getExportCleanupOptions(quality));
         const actualTriangles = countTrianglesInObject(mesh);
         totalTriangles += actualTriangles;
@@ -7761,6 +8098,7 @@ const App: React.FC = () => {
                 <div className="w-[420px] flex flex-col border-r border-white/10 bg-slate-900/30 backdrop-blur-sm shrink-0 z-40">
                     <ControlPanel
                         config={config}
+                      slotPipelineStats={slotPipelineStatsSummary}
                         onUpdate={handleUpdateConfig}
                         updateGroup={updateGroup}
                         updateCharOffset={updateCharOffset}
