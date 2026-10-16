@@ -10,6 +10,8 @@
  */
 
 import Module from 'manifold-3d';
+// @ts-ignore
+import manifoldWasmUrl from 'manifold-3d/manifold.wasm?url';
 import * as THREE from 'three';
 // @ts-ignore
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
@@ -34,7 +36,13 @@ export interface ShapeInstance2D {
 export async function initManifold() {
   if (!wasmInstance) {
     if (MANIFOLD_DEBUG) console.log('🔧 Initializing Manifold WASM...');
-    wasmInstance = await Module();
+    const wasmUrl = new URL(manifoldWasmUrl, document.baseURI).href;
+    const wasmResponse = await fetch(wasmUrl);
+    if (!wasmResponse.ok) {
+      throw new Error(`Failed to load manifold.wasm (${wasmResponse.status}) from ${wasmUrl}`);
+    }
+    // Emscripten can't load file:// wasm on the main thread (packaged Electron), so hand it the bytes.
+    wasmInstance = await Module({ wasmBinary: await wasmResponse.arrayBuffer() });
     wasmInstance.setup();
     if (MANIFOLD_DEBUG) console.log('✅ Manifold ready');
   }
