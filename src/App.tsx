@@ -35,7 +35,7 @@ import { getAdjustedGlyphPathCommands, getPathCommandBounds, makePathFromCommand
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, /*makeSlotKey,*/ getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, /*slotCutCache,*/ makeUnderlineKey } from './geometryCache';
 
 const MAX_HISTORY = 50;
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.1.1';
 const APP_DEBUG = false;
 // Bump when mesh generation logic changes (slot geometry, CSG sequencing, etc.)
 // so cached groups from older algorithms are not reused.
