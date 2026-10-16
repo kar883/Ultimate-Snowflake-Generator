@@ -46,6 +46,8 @@ export async function manifoldSubtract(
   slotGeometries: THREE.BufferGeometry[],
   options?: {
     baseIsManifold?: boolean;
+    /** Throw on any operand/subtract failure instead of skipping the slot. */
+    strict?: boolean;
     filletRadius?: number;
     filletSegments?: number;
     filletStyle?: 'fillet' | 'chamfer';
@@ -105,6 +107,12 @@ export async function manifoldSubtract(
       result = result.subtract(slotManifold);
       slotManifold.delete?.();
     } catch (err: any) {
+      if (options?.strict) {
+        slotMeshObj.delete?.();
+        cleanSlot.dispose();
+        result.delete?.();
+        throw new Error(`Slot ${i + 1}/${slotGeometries.length} failed in strict manifold mode: ${err.message ?? err}`);
+      }
       if (MANIFOLD_DEBUG) console.warn(`  Slot ${i + 1} failed: ${err.message ?? err}`);
     }
     slotMeshObj.delete?.();
@@ -143,6 +151,30 @@ export async function manifoldSubtract(
   const faceCount = out.index ? out.index.count / 3 : 0;
 
   if (MANIFOLD_DEBUG) console.log(`✅ Manifold CSG: ${posCount} verts, ${faceCount} faces (watertight)`);
+  return out;
+}
+
+/** Welds on position only and reports edge-pairing defects, for error messages. */
+function describeOperand(geo: THREE.BufferGeometry): string {
+  const clean = prepare(geo, { weld: true, tolerance: 1e-5 });
+  const idx = clean.index!.array as Uint32Array;
+  const directed = new Map<string, number>();
+  for (let i = 0; i < idx.length; i += 3) {
+    for (let e = 0; e < 3; e++) {
+      const key = `${idx[i + e]}_${idx[i + ((e + 1) % 3)]}`;
+      directed.set(key, (directed.get(key) ?? 0) + 1);
+    }
+  }
+  let open = 0;
+  let nonManifold = 0;
+  for (const [key, count] of directed) {
+    const [a, b] = key.split('_');
+    const rev = directed.get(`${b}_${a}`) ?? 0;
+    if (count > 1 || rev > 1) nonManifold++;
+    else if (rev === 0) open++;
+  }
+  const out = `verts=${clean.attributes.position.count}, tris=${idx.length / 3}, openEdges=${open}, nonManifoldEdges=${nonManifold}`;
+  clean.dispose();
   return out;
 }
 
@@ -190,7 +222,16 @@ export async function manifoldUnionGeometries(
   };
 
   for (let i = 0; i < geometries.length; i++) {
-    const { piece, clean, meshObj } = makeOperandManifold(geometries[i]);
+    let operand: ReturnType<typeof makeOperandManifold>;
+    try {
+      operand = makeOperandManifold(geometries[i]);
+    } catch (err: any) {
+      const diag = describeOperand(geometries[i]);
+      throw new Error(
+        `manifoldUnionGeometries operand ${i}/${geometries.length} is not a valid solid (${diag}): ${err?.message ?? err}`
+      );
+    }
+    const { piece, clean, meshObj } = operand;
 
     try {
       if (!unionResult) {
@@ -315,6 +356,11 @@ export async function manifoldUnionAndExtrudeShapeInstances(
     bevelSegments?: number;
     /** Slot rectangles to subtract in 2D profile space before extrusion (baked-in approach). */
     slotProfiles?: SlotProfile2D[];
+    /** Morphological close radius (mm) removing hairline seams, followed by simplify(). 0/undefined disables. */
+    closeEpsilon?: number;
+    simplifyEpsilon?: number;
+    /** Lower bound (mm) for the bevel refinement edge length; larger values give fewer triangles. */
+    minRefineEdgeLength?: number;
   }
 ): Promise<THREE.BufferGeometry> {
   if (!instances.length) {
@@ -380,6 +426,20 @@ export async function manifoldUnionAndExtrudeShapeInstances(
     throw err;
   }
 
+  const closeEps = options?.closeEpsilon ?? 0;
+  if (closeEps > 0) {
+    const grown = unionProfile.offset(closeEps, 'Round', 2, 16);
+    unionProfile.delete?.();
+    const shrunk = grown.offset(-closeEps, 'Round', 2, 16);
+    grown.delete?.();
+    unionProfile = shrunk;
+  }
+  if ((options?.simplifyEpsilon ?? 0) > 0) {
+    const simplified = unionProfile.simplify(options!.simplifyEpsilon);
+    unionProfile.delete?.();
+    unionProfile = simplified;
+  }
+
   // Subtract slot profiles in 2D CrossSection space before extrusion.
   // This is the correct baked-in approach: the flat 2D profile is the right place
   // to cut slots — NOT by projecting an already-extruded 3D mesh back to 2D.
@@ -407,7 +467,7 @@ export async function manifoldUnionAndExtrudeShapeInstances(
       const bevelSegments = Math.max(1, options?.bevelSegments ?? 1);
       const minSharpAngle = bevelSegments === 1 ? 0 : 55;
       const smoothness = Math.min(0.92, Math.max(0.22, bevelSize / (bevelSize + 0.35)));
-      const targetEdgeLength = Math.max(0.35, (bevelSize * 1.45) / bevelSegments);
+      const targetEdgeLength = Math.max(options?.minRefineEdgeLength ?? 0.35, (bevelSize * 1.45) / bevelSegments);
 
       const smoothed = solid.smoothOut(minSharpAngle, smoothness);
       solid.delete?.();
@@ -436,12 +496,12 @@ function manifoldUnionOp(a: any, b: any): any {
   throw new Error('Manifold union operation unavailable (expected add() or union())');
 }
 
-function shapeToPolygons(
+export function shapeToPolygons(
   shape: THREE.Shape,
   curveSegments: number,
   transform?: THREE.Matrix3
 ): Array<Array<[number, number]>> {
-  const extracted = shape.extractPoints(Math.max(24, curveSegments));
+  const extracted = shape.extractPoints(Math.max(8, curveSegments));
   const polygons: Array<Array<[number, number]>> = [];
 
   const outer = normalizeLoop(extracted.shape, false, transform);
@@ -628,9 +688,17 @@ function prepare(
 ): THREE.BufferGeometry {
   const weld = options?.weld ?? true;
   const tolerance = options?.tolerance ?? 1e-5;
+  // mergeVertices only welds vertices whose attributes all match; per-face normals/UVs
+  // (BoxGeometry, ExtrudeGeometry) would keep every face open. Weld on position only.
+  const positionOnly = geo.clone();
+  Object.keys(positionOnly.attributes).forEach((name) => {
+    if (name !== 'position') positionOnly.deleteAttribute(name);
+  });
+  positionOnly.clearGroups();
   const merged = weld
-    ? (BufferGeometryUtils.mergeVertices(geo.clone(), tolerance) as THREE.BufferGeometry)
-    : geo.clone();
+    ? (BufferGeometryUtils.mergeVertices(positionOnly, tolerance) as THREE.BufferGeometry)
+    : positionOnly;
+  if (merged !== positionOnly) positionOnly.dispose();
   const pos = merged.attributes.position.array as Float32Array;
   const src = merged.index
     ? Array.from(merged.index.array as Uint32Array)
@@ -641,7 +709,7 @@ function prepare(
   for (let i = 0; i < src.length; i += 3) {
     const a = src[i], b = src[i+1], c = src[i+2];
     if (a === b || b === c || a === c) continue;
-    if (new THREE.Vector3().crossVectors(v(b).sub(v(a)), v(c).sub(v(a))).lengthSq() < 1e-10) continue;
+    if (new THREE.Vector3().crossVectors(v(b).sub(v(a)), v(c).sub(v(a))).lengthSq() < 1e-24) continue;
     valid.push(a, b, c);
   }
 

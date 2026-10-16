@@ -32,6 +32,7 @@ export function hashConfig(config: any): string {
     bevelAmount: config.bevelAmount,
     bevelSegments: config.bevelSegments,
     slotEnabled: config.slotEnabled,
+    manifoldExact: config.manifoldExact ?? false,
     slotLength: config.slotLength,
     slotWidth: config.slotWidth,
     quality: config.quality,

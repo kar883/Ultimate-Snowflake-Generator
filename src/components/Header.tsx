@@ -39,7 +39,7 @@ const Header: React.FC<HeaderProps> = ({
   onResetShortcuts,
   onSaveAsDefault,
   onRestoreFactoryDefaults,
-  appVersion = '1.0.9',
+  appVersion = '1.1.0',
   language = 'en',
   onLanguageChange,
   showTooltips,

@@ -2125,7 +2125,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
 
         if (SLOT_DEBUG_OVERLAY_ENABLED && config.slotEnabled) {
           const enabledLayers = config.layers.filter(l => l.enabled);
-          const materialThickness = config.extrusionDepth + (config.bevelEnabled ? Math.min(config.bevelAmount, config.extrusionDepth / 2) * 2 : 0);
+          const materialThickness = config.extrusionDepth;
 
           enabledLayers.forEach((layer, layerIndex) => {
             let layerMesh: THREE.Mesh | null = null;

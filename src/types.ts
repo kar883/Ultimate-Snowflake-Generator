@@ -206,6 +206,8 @@ export interface SnowflakeConfig {
   bevelSegments: number;
   slotEnabled: boolean;
   slotBakedProfileEnabled?: boolean;
+  /** Opt-in: build slotted layers purely with Manifold (2D union -> extrude -> subtract), no repair/fallbacks. */
+  manifoldExact?: boolean;
   slotBridgesEnabled: boolean;
   slotLength: number;
   slotWidth: number;

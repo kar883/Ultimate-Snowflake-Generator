@@ -189,7 +189,6 @@ const DESCRIPTIONS: Record<string, string> = {
   "Rounded Tips": "Adds rounded caps to the ends of the final branches.",
   "Cut Slots": "Toggles the automatic slot cutting operation for assembly.",
   "Slot Width": "Extra clearance added on top of the model extrusion height. 0.2 mm gives a snug fit; increase for a looser assembly.",
-  "Baked Profile Slot Path": "Build slots from the 2D profile and extrude once, then fall back to legacy 3D cutting only when needed.",
   "Slot Pipeline Metrics": "Live counters for baked-profile attempts, success rate, fallback frequency, and average timing.",
   // ── Auto-fit / Fixed-size ──────────────────────────────────────────────────
   "Auto-fit": "Automatically rescales the font size whenever you change fonts, letter spacing, or boldness to keep the arms exactly at the target outer radius.",
@@ -869,9 +868,11 @@ const AiRandomizerMenu: React.FC<{
 const CutSlotsMenu: React.FC<{
   config: SnowflakeConfig;
   onUpdate: (updates: Partial<SnowflakeConfig>, commitTo3D?: boolean) => void;
+  onSaveStartupSlots?: () => void;
+  startupSlotsEnabled?: boolean;
   className?: string;
   t?: (key: string) => string;
-}> = ({ config, onUpdate, className, t }) => {
+}> = ({ config, onUpdate, onSaveStartupSlots, startupSlotsEnabled, className, t }) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -957,6 +958,16 @@ const CutSlotsMenu: React.FC<{
               </button>
             ))}
           </div>
+          {onSaveStartupSlots && config.slotEnabled !== (startupSlotsEnabled ?? false) && (
+            <button
+              onClick={onSaveStartupSlots}
+              className="mt-0.5 py-1.5 px-2 text-[9px] font-black uppercase rounded bg-slate-900/60 text-slate-300 hover:bg-emerald-500 hover:text-white transition-all flex items-center justify-center gap-1.5"
+              title="Save the current Cut Slots on/off state as the startup default"
+            >
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg>
+              Save slots on/off as startup default
+            </button>
+          )}
         </div>,
         document.body
       )}
@@ -1297,7 +1308,7 @@ const DeferredTextInput: React.FC<DeferredTextInputProps> = ({ value, onChange, 
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: '12px', height: '12px' }}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
                </button>
             )}
-            {onSaveDefault && (
+            {onSaveDefault && showRevert && (
               <button
                 onClick={onSaveDefault}
                 className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center ml-1"
@@ -1383,7 +1394,7 @@ const ControlRow: React.FC<{ label: string; children: React.ReactNode; onReset?:
                 )}
             </div>
             <div style={{ display: 'flex', alignItems: 'center' }}>
-                {onSaveDefault && (
+                {onSaveDefault && isModified && (
                   <button
                     onClick={onSaveDefault}
                     className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1"
@@ -1452,20 +1463,17 @@ interface ControlPanelProps {
   onResetShortcuts?: () => void;
   onOpenShortcutsModal?: (tab: 'shortcuts' | 'apikey' | 'aiscope', message?: string) => void;
   onSaveAsDefault?: () => void;
+  onSaveStartupSlots?: () => void;
+  onSaveStartupPlanes?: () => void;
+  startupSlotsEnabled?: boolean;
+  startupLayersEnabled?: boolean[];
   onRestoreFactoryDefaults?: () => void;
-  slotPipelineStats?: {
-    bakedAttempts: number;
-    bakedSuccesses: number;
-    fallbackAttempts: number;
-    bakedAvgMs: number;
-    fallbackAvgMs: number;
-  };
   activeTab: 'global' | 'text' | 'Letter Ctrl' | 'hubs' | 'abstract' | 'planes' | 'images';
   onTabChange: (tab: 'global' | 'text' | 'Letter Ctrl' | 'hubs' | 'abstract' | 'planes' | 'images') => void;
 }
 
 const ControlPanel: React.FC<ControlPanelProps> = ({
-  config, onUpdate, updateGroup, updateCharOffset, updateTextGroups, updateHubs, updateAbstracts, updateImages, onAiPolish, aiLoading, aiProgress, onExportSTL, onExport3MF, onExportLayerSTL, onExportLayer3MF, onExportSelectedLayersSTL, onExportSelectedLayers3MF, onEstimateExportStats, onPrecomputeExportStats, onExportAllLayersZip, onExport2D, exportLoading, exportLoadingKey, onFetchFont, onFontUpload, dynamicFonts, /* SLOT-DISABLED: onAutoConfigureSlots, calculateOptimalSlots, */ setViewMode, undo, redo, canUndo, canRedo, shortcuts, onUpdateShortcuts, onResetShortcuts, onOpenShortcutsModal, onSaveAsDefault, onRestoreFactoryDefaults, slotPipelineStats, activeTab, onTabChange
+  config, onUpdate, updateGroup, updateCharOffset, updateTextGroups, updateHubs, updateAbstracts, updateImages, onAiPolish, aiLoading, aiProgress, onExportSTL, onExport3MF, onExportLayerSTL, onExportLayer3MF, onExportSelectedLayersSTL, onExportSelectedLayers3MF, onEstimateExportStats, onPrecomputeExportStats, onExportAllLayersZip, onExport2D, exportLoading, exportLoadingKey, onFetchFont, onFontUpload, dynamicFonts, /* SLOT-DISABLED: onAutoConfigureSlots, calculateOptimalSlots, */ setViewMode, undo, redo, canUndo, canRedo, shortcuts, onUpdateShortcuts, onResetShortcuts, onOpenShortcutsModal, onSaveAsDefault, onSaveStartupSlots, onSaveStartupPlanes, startupSlotsEnabled, startupLayersEnabled, onRestoreFactoryDefaults, activeTab, onTabChange
 }) => {
   const { t } = useTranslation(config.language || 'en');
   const tabContentRef = useRef<HTMLDivElement>(null);
@@ -1845,7 +1853,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
             )}
           </div>
           <div className="flex items-center">
-            {(onSaveDefault || onSaveAsDefault) && (
+            {(onSaveDefault || onSaveAsDefault) && showRevert && (
               <button
                 onClick={onSaveDefault || onSaveAsDefault}
                 className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1"
@@ -2005,7 +2013,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: '12px', height: '12px' }}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
                                       </button>
                                   )}
-                                      {onSaveAsDefault && (
+                                      {onSaveAsDefault && config.color !== '#38bdf8' && (
                                         <button
                                         onClick={onSaveAsDefault}
                                         className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1"
@@ -2069,7 +2077,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                       <div className={settingsHeaderDotClass}></div>
                       <span className={settingsHeaderLabelClass}>{t('Edge Profile')}</span>
                         <div className="ml-auto flex items-center">
-                          {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
+                          {onSaveAsDefault && !config.bevelEnabled && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
                           <Toggle
                             label={config.bevelEnabled ? t('ON') : t('OFF')}
                             checked={config.bevelEnabled}
@@ -2221,7 +2229,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                           )}
                        </div>
                        <div className="flex items-center gap-2">
-                          {onSaveAsDefault && (
+                          {onSaveAsDefault && currentArmRadius !== 95 && (
                             <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}>
                               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg>
                             </button>
@@ -2275,7 +2283,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                   <div className={settingsHeaderDotClass}></div>
                   <span className={settingsHeaderLabelClass}>{t('Mirror Effect')}</span>
                   <div className="ml-auto flex items-center">
-                    {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
+                    {onSaveAsDefault && !groupData.mirrorEnabled && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
                     <Toggle
                       label={groupData.mirrorEnabled ? t('ON') : t('OFF')}
                       checked={groupData.mirrorEnabled}
@@ -2295,7 +2303,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                       <div className={settingsHeaderDotClass}></div>
                       <span className={settingsHeaderLabelClass}>{t('Underline')}</span>
                           <div className="ml-auto flex items-center">
-                            {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
+                            {onSaveAsDefault && groupData.underline.enabled && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
                             <Toggle
                               label={groupData.underline.enabled ? t('ON') : t('OFF')}
                               checked={groupData.underline.enabled}
@@ -2546,7 +2554,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                               <div className={settingsHeaderDotClass}></div>
                               <span className={settingsHeaderLabelClass}>{t('Oscillation')}</span>
                                   <div className="ml-auto flex items-center">
-                                    {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
+                                    {onSaveAsDefault && activeLayer.hubs[selectedHubIndex].oscillationEnabled && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
                                     <Toggle
                                       label={activeLayer.hubs[selectedHubIndex].oscillationEnabled ? t('ON') : t('OFF')}
                                       checked={activeLayer.hubs[selectedHubIndex].oscillationEnabled}
@@ -2987,7 +2995,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                             {!config.syncAllLayers && <button onClick={() => onUpdate({ syncAllLayers: true })} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
                         </div>
                       <div className="flex items-center">
-                        {onSaveAsDefault && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
+                        {onSaveAsDefault && !config.syncAllLayers && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
                         <Toggle label={config.syncAllLayers ? t('ON') : t('OFF')} checked={config.syncAllLayers} onChange={(c) => onUpdate({ syncAllLayers: c })} />
                       </div>
                     </div>
@@ -3008,42 +3016,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                           />
                         </div>
                       )}
-                      {config.slotEnabled && (
-                        <div className="flex justify-between items-center">
-                          <InfoTooltip label={t('Baked Profile Slot Path')} description={getDescription('Baked Profile Slot Path', t)} />
-                          <Toggle
-                            label={(config.slotBakedProfileEnabled ?? true) ? t('ON') : t('OFF')}
-                            checked={config.slotBakedProfileEnabled ?? true}
-                            onChange={(checked) => onUpdate({ slotBakedProfileEnabled: checked }, true)}
-                          />
-                        </div>
-                      )}
                 </div>
-
-                {config.slotEnabled && slotPipelineStats && (
-                  <div className="p-3 bg-slate-800/30 rounded-xl border border-white/5 space-y-2">
-                    <div className={settingsHeaderClass}>
-                      <div className={settingsHeaderDotClass}></div>
-                      <span className={settingsHeaderLabelClass}>{t('Slot Pipeline Metrics')}</span>
-                    </div>
-                    <div className="text-[9px] font-black uppercase tracking-wide text-slate-300">
-                      Baked Attempts: {slotPipelineStats.bakedAttempts}
-                    </div>
-                    <div className="text-[9px] font-black uppercase tracking-wide text-slate-300">
-                      Baked Success: {slotPipelineStats.bakedSuccesses}
-                      {slotPipelineStats.bakedAttempts > 0 ? ` (${Math.round((slotPipelineStats.bakedSuccesses / slotPipelineStats.bakedAttempts) * 100)}%)` : ' (0%)'}
-                    </div>
-                    <div className="text-[9px] font-black uppercase tracking-wide text-slate-300">
-                      Fallback Uses: {slotPipelineStats.fallbackAttempts}
-                    </div>
-                    <div className="text-[9px] font-black uppercase tracking-wide text-slate-400">
-                      Avg Baked: {slotPipelineStats.bakedAvgMs.toFixed(1)}ms
-                    </div>
-                    <div className="text-[9px] font-black uppercase tracking-wide text-slate-400">
-                      Avg Fallback: {slotPipelineStats.fallbackAvgMs.toFixed(1)}ms
-                    </div>
-                  </div>
-                )}
 
                 <div className="space-y-2">
                    {config.layers.map((layer, idx) => (
@@ -3063,9 +3036,19 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                               className="w-28 h-7 text-[10px]"
                               placeholder={t('Layer Name')}
                               t={t}
+                              defaultValue={['Base Plane', 'Cross Plane', 'Tilt Plane'][idx]}
                               onSaveDefault={onSaveAsDefault}
                             />
                             <div className="flex items-center gap-2 ml-auto">
+                                {onSaveStartupPlanes && layer.enabled !== (startupLayersEnabled?.[idx] ?? idx === 0) && (
+                                  <button
+                                    onClick={onSaveStartupPlanes}
+                                    className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center"
+                                    title="Save which planes are on as the startup default"
+                                  >
+                                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg>
+                                  </button>
+                                )}
                                 <span className={`text-[9px] font-black uppercase tracking-wide ${layer.enabled ? 'text-emerald-400' : 'text-slate-500'}`}>
                                   {layer.enabled ? t('ON') : t('OFF')}
                                 </span>
@@ -3286,7 +3269,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
         {/* Footer actions */}
         <div className="p-2 bg-slate-900/80 border-t border-white/10 shrink-0">
             <div className="grid grid-cols-3 gap-2 h-8">
-              <CutSlotsMenu config={config} onUpdate={onUpdate} className="w-full h-8" t={t} />
+              <CutSlotsMenu config={config} onUpdate={onUpdate} onSaveStartupSlots={onSaveStartupSlots} startupSlotsEnabled={startupSlotsEnabled} className="w-full h-8" t={t} />
               <AiRandomizerMenu onGenerate={onAiPolish} isLoading={aiLoading} progress={aiProgress} className="w-full h-8" t={t} onOpenShortcutsModal={onOpenShortcutsModal} />
               <ExportMenu
                 label="Export"

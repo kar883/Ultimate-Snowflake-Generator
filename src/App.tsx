@@ -35,7 +35,7 @@ import { getAdjustedGlyphPathCommands, getPathCommandBounds, makePathFromCommand
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, /*makeSlotKey,*/ getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, /*slotCutCache,*/ makeUnderlineKey } from './geometryCache';
 
 const MAX_HISTORY = 50;
-const APP_VERSION = '1.0.9';
+const APP_VERSION = '1.1.0';
 const APP_DEBUG = false;
 // Bump when mesh generation logic changes (slot geometry, CSG sequencing, etc.)
 // so cached groups from older algorithms are not reused.
@@ -66,14 +66,6 @@ type ValidationScenarioResult = {
 };
 
 type MeshGenerationMode = 'preview' | 'export' | 'validation' | 'refresh';
-
-type SlotPipelineStats = {
-  bakedAttempts: number;
-  bakedSuccesses: number;
-  fallbackAttempts: number;
-  bakedTotalMs: number;
-  fallbackTotalMs: number;
-};
 
 const DEFAULT_SHORTCUTS: ShortcutConfig = {
     undo: { key: 'z', ctrlKey: true },
@@ -1160,9 +1152,12 @@ const unionSlotBridgeGeometry = async (
   baseGeometry: THREE_ACTUAL.BufferGeometry,
   bridgeGeometries: THREE_ACTUAL.BufferGeometry[],
   layerName: string,
-  options?: { preferFastMerge?: boolean; weldTolerance?: number }
+  options?: { preferFastMerge?: boolean; weldTolerance?: number; strict?: boolean }
 ): Promise<THREE_ACTUAL.BufferGeometry> => {
   if (bridgeGeometries.length === 0) return baseGeometry;
+  if (options?.strict) {
+    return manifoldUnionGeometries([baseGeometry, ...bridgeGeometries]);
+  }
 
   // Bridge union often fails manifold on complex meshes. Use fast merge as primary strategy
   // for bridges since they just need stable geometry for slot cutting, not manifold strictness.
@@ -1718,8 +1713,10 @@ const createBakedBridgePlanesForLayer = (
     // coplanar top/bottom faces, which are a common source of manifold-union failures.
     // Use materialThickness (actual model thickness) not depthZ (bounding box span)
     // to prevent bridge blocks from extending beyond model boundaries.
-    const zInset = Math.min(0.05, Math.max(0.01, materialThickness * 0.0025));
-    const bridgeHeightZ = Math.max(0.01, materialThickness - (zInset * 2));
+    // The slotted base is extruded to exactly config.extrusionDepth (bevel is carved
+    // inside that thickness), so bridges must match it rather than add bevel on top.
+    const zInset = Math.min(0.05, Math.max(0.01, config.extrusionDepth * 0.0025));
+    const bridgeHeightZ = Math.max(0.01, config.extrusionDepth - (zInset * 2));
     const effectiveSlotWidth = Math.max(0.1, config.slotWidth + localWidthAdjustmentPerSide);
     // Keep user baseline (slot width + 1mm), but never allow bridge to be thinner
     // than the cutter thickness axis; otherwise subtraction can erase it entirely.
@@ -2037,10 +2034,10 @@ const applyWatertightSlotCuts = async (
     baseIsManifold?: boolean;
     preferWorker?: boolean;
     allowRepair?: boolean;
+    /** Export: throw instead of silently returning an uncut plane when every slot-cut strategy fails. */
+    failOnUncut?: boolean;
     logTopologyWarnings?: boolean;
     useBakedProfile?: boolean;
-    onBakedProfileAttempt?: (durationMs: number, succeeded: boolean) => void;
-    onLegacyPathComplete?: (durationMs: number) => void;
   },
   signal?: AbortSignal
 ): Promise<THREE_ACTUAL.BufferGeometry> => {
@@ -2082,7 +2079,8 @@ const applyWatertightSlotCuts = async (
     return repaired;
   };
   
-  const materialThickness = config.extrusionDepth + (config.bevelEnabled ? bevelPerSide * 2 : 0);
+  // Slotted planes are extruded to exactly extrusionDepth (bevel is carved inside it).
+  const materialThickness = config.extrusionDepth;
   const profiles = createSlotProfilesForLayer(layer, layerIndex, enabledLayers, config, materialThickness);
   if (profiles.length === 0) {
     return ensureClosedPassthrough(layerGeo, `${layer.name} slot bypass base`);
@@ -2146,7 +2144,25 @@ const applyWatertightSlotCuts = async (
       `SlotBridge: layer=${layerIndex} slotWidth=${config.slotWidth.toFixed(2)} widthOffset=${(layer.slotWidthOffset ?? 0).toFixed(2)} bridgePlanes=${bridgePlanes.length}`
     );
 
+    let bridgesUnioned = false;
     if (bridgePlanes.length > 0) {
+      // Prefer a true Manifold union so the base stays a valid solid for the baked-profile path.
+      try {
+        const unionedWithBridges = await manifoldUnionGeometries([layerForCut, ...bridgePlanes]);
+        layerForCut.dispose();
+        layerForCut = unionedWithBridges;
+        bridgePlanes.forEach((geometry) => geometry.dispose());
+        bridgesUnioned = true;
+      } catch (unionErr) {
+        if (config.manifoldExact) {
+          bridgePlanes.forEach((geometry) => geometry.dispose());
+          throw unionErr;
+        }
+        console.warn(`Manifold bridge union failed for layer ${layerIndex}; falling back to merge+weld`, unionErr);
+      }
+    }
+
+    if (bridgePlanes.length > 0 && !bridgesUnioned) {
       let geometriesToMerge: THREE_ACTUAL.BufferGeometry[] = [];
       try {
         // Normalize geometries to a common attribute/index layout before merge.
@@ -2187,6 +2203,26 @@ const applyWatertightSlotCuts = async (
         geometriesToMerge.forEach((geo) => geo.dispose());
         bridgePlanes.forEach((geometry) => geometry.dispose());
       }
+    }
+  }
+
+  if (config.manifoldExact) {
+    // Manifold-exact: one boolean on Manifold operands, validated, no worker/repair/fallback.
+    try {
+      const exactOut = await manifoldSubtract(layerForCut, cutters, {
+        baseIsManifold: true,
+        strict: true,
+        filletRadius: 0,
+      });
+      const exactFailure = describeTopologyFailure(`${layer.name} manifold-exact slot result`, exactOut);
+      if (exactFailure) {
+        exactOut.dispose();
+        throw new Error(exactFailure);
+      }
+      return exactOut;
+    } finally {
+      cutters.forEach((g) => g.dispose());
+      layerForCut.dispose();
     }
   }
 
@@ -2369,7 +2405,6 @@ const applyWatertightSlotCuts = async (
 
       if (validatedBaked) {
         const bakedMs = performance.now() - bakedStart;
-        options?.onBakedProfileAttempt?.(bakedMs, true);
         if (bakedMs > 120) {
           console.debug(`[slot-csg] Baked profile cut for ${layer.name} took ${bakedMs.toFixed(1)}ms`);
         }
@@ -2379,19 +2414,15 @@ const applyWatertightSlotCuts = async (
       if (logTopologyWarnings) {
         console.warn(`[slot-csg] Baked profile slot path produced open geometry for ${layer.name}; retrying with fallback CSG`);
       }
-      options?.onBakedProfileAttempt?.(performance.now() - bakedStart, false);
     } catch (bakedErr) {
       if (bakedErr instanceof DOMException && bakedErr.name === 'AbortError') {
         throw bakedErr;
       }
-      options?.onBakedProfileAttempt?.(performance.now() - bakedStart, false);
       if (logTopologyWarnings) {
         console.warn(`[slot-csg] Baked profile slot path failed for ${layer.name}; retrying with fallback CSG`, bakedErr);
       }
     }
   }
-
-  const legacyPathStartMs = performance.now();
 
   const buildManifoldBaseFallback = async (): Promise<THREE_ACTUAL.BufferGeometry> => {
     if (options?.baseIsManifold) {
@@ -2453,6 +2484,9 @@ const applyWatertightSlotCuts = async (
   if (workerFailedOpen && (options?.preferWorker || forceWorkerForLargeMesh)) {
     if (allowRepair && logTopologyWarnings) {
       console.warn(`[slot-csg] Fast path enabled for ${layer.name}; skipping manifold retry after worker failure`);
+    }
+    if (options?.failOnUncut) {
+      throw new Error(`Slot cut failed for ${layer.name} (worker path); refusing to export an uncut plane`);
     }
     try {
       const fallbackBase = await buildManifoldBaseFallback();
@@ -2520,6 +2554,10 @@ const applyWatertightSlotCuts = async (
       console.warn(`[slot-csg] Skipping duplicate worker fallback for ${layer.name}; worker path already attempted`);
     }
 
+    if (options?.failOnUncut) {
+      const reason = manifoldErr instanceof Error ? manifoldErr.message : String(manifoldErr);
+      throw new Error(`Slot cut failed for ${layer.name}; refusing to export an uncut plane. Cause: ${reason}`);
+    }
     try {
       const fallbackBase = await buildManifoldBaseFallback();
       if (allowRepair && logTopologyWarnings) {
@@ -2533,7 +2571,6 @@ const applyWatertightSlotCuts = async (
       throw manifoldErr;
     }
   } finally {
-    options?.onLegacyPathComplete?.(performance.now() - legacyPathStartMs);
     cutters.forEach((g) => g.dispose());
     layerForCut.dispose();
   }
@@ -3191,6 +3228,38 @@ const syncLayerLegacyTextFields = (layer: LayerConfig, groupsInput?: TextGroupCo
 };
 
 const USER_DEFAULTS_STORAGE_KEY = 'snowflake-user-defaults-v1';
+// Cut Slots on/off and per-plane on/off are saved separately so the general
+// "save as default" never turns slots or extra planes on at startup by accident.
+const STARTUP_VISIBILITY_STORAGE_KEY = 'snowflake-startup-visibility-v1';
+
+type StartupVisibility = { slotEnabled: boolean; layers: boolean[] };
+
+const readStartupVisibility = (layerCount: number): StartupVisibility => {
+  let saved: { slotEnabled?: unknown; layers?: unknown } | null = null;
+  try {
+    const raw = window.localStorage.getItem(STARTUP_VISIBILITY_STORAGE_KEY);
+    saved = raw ? JSON.parse(raw) : null;
+  } catch {
+    saved = null;
+  }
+  const savedLayers = Array.isArray(saved?.layers) ? (saved!.layers as unknown[]) : null;
+  return {
+    slotEnabled: typeof saved?.slotEnabled === 'boolean' ? saved.slotEnabled : false,
+    layers: Array.from({ length: layerCount }, (_, idx) =>
+      savedLayers && typeof savedLayers[idx] === 'boolean' ? (savedLayers[idx] as boolean) : idx === 0
+    ),
+  };
+};
+
+const applyStartupVisibility = (cfg: SnowflakeConfig): SnowflakeConfig => {
+  const vis = readStartupVisibility(cfg.layers.length);
+  return {
+    ...cfg,
+    slotEnabled: vis.slotEnabled,
+    activeLayerIndex: 0,
+    layers: cfg.layers.map((layer, idx) => ({ ...layer, enabled: vis.layers[idx] })),
+  };
+};
 
 const createFactoryInitialState = (): SnowflakeConfig => ({
   projectName: 'MySnowflake',
@@ -3208,6 +3277,7 @@ const createFactoryInitialState = (): SnowflakeConfig => ({
   bevelSegments: 5,
   slotEnabled: false,
   slotBakedProfileEnabled: DEFAULT_BAKED_PROFILE_SLOT_ENABLED,
+  manifoldExact: true,
   slotBridgesEnabled: true,
   slotLength: 95,
   slotWidth: 0.2,
@@ -3219,7 +3289,7 @@ const createFactoryInitialState = (): SnowflakeConfig => ({
   freeFloatingCheck: true,
 });
 
-const loadStartupState = (): SnowflakeConfig => {
+const loadStartupStateBase = (): SnowflakeConfig => {
   const factory = createFactoryInitialState();
   try {
     const raw = window.localStorage.getItem(USER_DEFAULTS_STORAGE_KEY);
@@ -3228,14 +3298,13 @@ const loadStartupState = (): SnowflakeConfig => {
     if (!parsed || !Array.isArray(parsed.layers) || parsed.layers.length === 0) return factory;
     if (typeof parsed.projectName !== 'string') return factory;
     const mergedTop = { ...factory, ...parsed };
-    const slotMaterial = mergedTop.extrusionDepth + (mergedTop.bevelEnabled ? Math.min(mergedTop.bevelAmount, mergedTop.extrusionDepth / 2) * 2 : 0);
+    const slotMaterial = mergedTop.extrusionDepth;
     const slotThickness = Math.max(0.1, slotMaterial + (mergedTop.slotWidth || 0));
 
     return {
       ...mergedTop,
-      slotBakedProfileEnabled: typeof parsed.slotBakedProfileEnabled === 'boolean'
-        ? parsed.slotBakedProfileEnabled
-        : DEFAULT_BAKED_PROFILE_SLOT_ENABLED,
+      slotBakedProfileEnabled: true,
+      manifoldExact: true,
       layers: (Array.isArray(parsed.layers) ? parsed.layers : factory.layers).map((layer, idx) => {
         const normalizedLayer: LayerConfig = {
           ...(factory.layers[idx] ?? createDefaultLayer(`layer-${idx + 1}`, `Plane ${idx + 1}`)),
@@ -3294,6 +3363,8 @@ const loadStartupState = (): SnowflakeConfig => {
     return factory;
   }
 };
+
+const loadStartupState = (): SnowflakeConfig => applyStartupVisibility(loadStartupStateBase());
 
 const App: React.FC = () => {
   const MAX_SLOT_CUT_CACHE_ENTRIES = 36;
@@ -3550,55 +3621,6 @@ const App: React.FC = () => {
   );
   const [dynamicFonts, setDynamicFonts] = useState<Record<string, string>>(FONT_TTF_URLS);
   const [fontsPreloaded, setFontsPreloaded] = useState(false);
-
-  const initialSlotPipelineStats: SlotPipelineStats = {
-    bakedAttempts: 0,
-    bakedSuccesses: 0,
-    fallbackAttempts: 0,
-    bakedTotalMs: 0,
-    fallbackTotalMs: 0,
-  };
-  const [slotPipelineStats, setSlotPipelineStats] = useState<SlotPipelineStats>(initialSlotPipelineStats);
-  const slotPipelineStatsRef = useRef<SlotPipelineStats>(initialSlotPipelineStats);
-  const slotPipelineStatsLastFlushRef = useRef(0);
-
-  const flushSlotPipelineStats = useCallback((force = false) => {
-    const now = Date.now();
-    if (!force && (now - slotPipelineStatsLastFlushRef.current) < 250) return;
-    slotPipelineStatsLastFlushRef.current = now;
-    setSlotPipelineStats({ ...slotPipelineStatsRef.current });
-  }, []);
-
-  const recordBakedProfileAttempt = useCallback((durationMs: number, succeeded: boolean) => {
-    const stats = slotPipelineStatsRef.current;
-    stats.bakedAttempts += 1;
-    if (succeeded) stats.bakedSuccesses += 1;
-    stats.bakedTotalMs += Math.max(0, durationMs);
-    flushSlotPipelineStats();
-  }, [flushSlotPipelineStats]);
-
-  const recordLegacyPathComplete = useCallback((durationMs: number) => {
-    const stats = slotPipelineStatsRef.current;
-    stats.fallbackAttempts += 1;
-    stats.fallbackTotalMs += Math.max(0, durationMs);
-    flushSlotPipelineStats();
-  }, [flushSlotPipelineStats]);
-
-  const slotPipelineStatsSummary = useMemo(() => {
-    const bakedAvgMs = slotPipelineStats.bakedAttempts > 0
-      ? slotPipelineStats.bakedTotalMs / slotPipelineStats.bakedAttempts
-      : 0;
-    const fallbackAvgMs = slotPipelineStats.fallbackAttempts > 0
-      ? slotPipelineStats.fallbackTotalMs / slotPipelineStats.fallbackAttempts
-      : 0;
-    return {
-      bakedAttempts: slotPipelineStats.bakedAttempts,
-      bakedSuccesses: slotPipelineStats.bakedSuccesses,
-      fallbackAttempts: slotPipelineStats.fallbackAttempts,
-      bakedAvgMs,
-      fallbackAvgMs,
-    };
-  }, [slotPipelineStats]);
 
   // Font preloader hook
   const { preloadAllFonts, getFont, isFontLoaded } = useFontPreloader();
@@ -3873,7 +3895,7 @@ const App: React.FC = () => {
     bevelPerSide: number,
     options: { baseIsManifold?: boolean; preferWorker?: boolean }
   ): string => {
-    const materialThickness = cfg.extrusionDepth + (cfg.bevelEnabled ? bevelPerSide * 2 : 0);
+    const materialThickness = cfg.extrusionDepth;
 
     const enabledLayerSummary = enabledLayers.map((l) => ({
       id: l.id,
@@ -4146,18 +4168,11 @@ const App: React.FC = () => {
       clearGeometryCache();
       clearSlotCutResultCache();
     }
-    if ('slotBakedProfileEnabled' in updates && updates.slotBakedProfileEnabled !== config.slotBakedProfileEnabled) {
+    if ('slotBakedProfileEnabled' in updates && updates.slotBakedProfileEnabled !== config.slotBakedProfileEnabled
+      || 'manifoldExact' in updates && updates.manifoldExact !== config.manifoldExact) {
       clearGeometryCache();
       clearSlotCutResultCache();
       modelCache3D.clear();
-      slotPipelineStatsRef.current = {
-        bakedAttempts: 0,
-        bakedSuccesses: 0,
-        fallbackAttempts: 0,
-        bakedTotalMs: 0,
-        fallbackTotalMs: 0,
-      };
-      flushSlotPipelineStats(true);
     }
     // Clear geometry and model caches when quality changes so the new resolution
     // is actually applied rather than serving the old cached mesh
@@ -4177,6 +4192,7 @@ const App: React.FC = () => {
              ('slotWidth' in updates) ||
              ('slotMode' in updates) ||
              ('slotBakedProfileEnabled' in updates) ||
+             ('manifoldExact' in updates) ||
              ('globalStrokeWeight' in updates);
     };
 
@@ -4260,7 +4276,7 @@ const App: React.FC = () => {
       // Normalize Phase 1 slot-bridge config so legacy and partially-populated
       // states always use the same first-class mating-clearance semantics.
       // EXCEPTION: skip on manual bridge toggle-only changes to preserve cache stability
-      const normalizedMaterialThickness = next.extrusionDepth + (next.bevelEnabled ? Math.min(next.bevelAmount, next.extrusionDepth / 2) * 2 : 0);
+      const normalizedMaterialThickness = next.extrusionDepth;
       const normalizedSlotThickness = Math.max(0.1, normalizedMaterialThickness + (next.slotWidth || 0));
       next = {
         ...next,
@@ -5738,10 +5754,9 @@ const App: React.FC = () => {
                 {
                   ...opts,
                   allowRepair: generationMode !== 'preview',
+                  failOnUncut: generationMode === 'export',
                   logTopologyWarnings: generationMode !== 'preview',
                   useBakedProfile: config.slotBakedProfileEnabled ?? DEFAULT_BAKED_PROFILE_SLOT_ENABLED,
-                  onBakedProfileAttempt: recordBakedProfileAttempt,
-                  onLegacyPathComplete: recordLegacyPathComplete,
                 },
                 signal
               );
@@ -5750,7 +5765,7 @@ const App: React.FC = () => {
             });
           };
 
-          if (interactiveSlotPreview) {
+          if (interactiveSlotPreview && !config.manifoldExact) {
             // Hot path for interactive 3D preview: avoid manifold pre-union/extrude,
             // which can freeze on dense glyph meshes. Go straight to worker-first cut.
             layerGeometries.forEach((g) => {
@@ -5808,22 +5823,15 @@ const App: React.FC = () => {
           const canUseFlat2DPreUnion = true;
           // For interactive slot preview, always prefer worker-first cutting.
           // Manifold on very dense text meshes can OOM and stall the UI.
-          const preferWorkerPreviewCut = interactiveSlotPreview || forceWorkerSlotCut;
+          const preferWorkerPreviewCut = !config.manifoldExact && (interactiveSlotPreview || forceWorkerSlotCut);
           try {
+            if (config.manifoldExact && layerShapeInstances.length === 0) {
+              throw new Error(`Manifold-exact: no 2D shapes available for ${layer.name}`);
+            }
             if (canUseFlat2DPreUnion && layerShapeInstances.length > 0) {
-              const slotUnionCurveSegments = (interactiveSlotPreview || lowQualitySlotExport)
-                ? 4
-                : generationMode === 'export'
-                  ? (qualityToUse === 'low'
-                      ? 10
-                      : qualityToUse === 'med'
-                        ? 12
-                        : 16)
-                  : qualityToUse === 'low'
-                    ? 14
-                    : qualityToUse === 'med'
-                      ? 20
-                      : 28;
+              // Curve divisions per Bezier segment and bevel refinement length scale with quality.
+              const slotUnionCurveSegments = qualityToUse === 'low' ? 12 : qualityToUse === 'med' ? 16 : 24;
+              const minRefineEdgeLength = qualityToUse === 'low' ? 0.8 : qualityToUse === 'med' ? 0.55 : 0.35;
               unioned2DLayerGeo = await manifoldUnionAndExtrudeShapeInstances(
                 layerShapeInstances,
                 effectiveDepth,
@@ -5834,14 +5842,18 @@ const App: React.FC = () => {
                   bevelSize: config.bevelEnabled ? bevelPerSide : 0,
                   bevelThickness: config.bevelEnabled ? bevelPerSide : 0,
                   bevelSegments: config.bevelEnabled
-                    ? ((interactiveSlotPreview || lowQualitySlotExport)
+                    ? ((interactiveSlotPreview || lowQualitySlotExport) && !config.manifoldExact
                         ? 1
                         : Math.max(1, config.bevelSegments))
                     : 1,
+                  closeEpsilon: config.manifoldExact ? 0.01 : 0,
+                  simplifyEpsilon: config.manifoldExact ? 0.005 : 0,
+                  minRefineEdgeLength,
                 }
               );
             }
           } catch (shapeUnionErr) {
+            if (config.manifoldExact) throw shapeUnionErr;
             console.warn(`2D pre-union/extrude failed for ${layer.name}, using 3D fallback path`, shapeUnionErr);
           }
 
@@ -5866,12 +5878,13 @@ const App: React.FC = () => {
 
           if (unioned2DLayerGeo) {
             try {
-              const unioned2DBaseIsManifold = !config.bevelEnabled;
+              const unioned2DBaseIsManifold = config.manifoldExact || !config.bevelEnabled;
               cutLayerGeo = await cutWithSlotCache(unioned2DLayerGeo, false, {
                 baseIsManifold: unioned2DBaseIsManifold,
                 preferWorker: preferWorkerPreviewCut,
               });
             } catch (shapeCutErr) {
+              if (config.manifoldExact) throw shapeCutErr;
               console.warn(`2D-unioned slot cut failed for ${layer.name}; retrying with 3D fallback bases`, shapeCutErr);
             }
           }
@@ -5894,6 +5907,7 @@ const App: React.FC = () => {
                 preferWorker: preferWorkerPreviewCut,
               });
             } catch (mergedCutErr) {
+              if (generationMode === 'export') throw mergedCutErr;
               console.warn(`Manifold slot cut failed for ${layer.name}; keeping uncut geometry`, mergedCutErr);
               // Normalize the fallback geometry so downstream repair (which requires indexed geometry) can work.
               // Non-indexed geometry (3 unique verts per triangle) makes surgicalSlotRepair a no-op.
@@ -5927,7 +5941,7 @@ const App: React.FC = () => {
           });
         }
 
-        const layerMaterialThickness = config.extrusionDepth + (config.bevelEnabled ? bevelPerSide * 2 : 0);
+        const layerMaterialThickness = config.extrusionDepth;
         const sourceBounds = cutSourceGeo.boundingBox ?? (() => {
           cutSourceGeo.computeBoundingBox();
           return cutSourceGeo.boundingBox;
@@ -5950,18 +5964,20 @@ const App: React.FC = () => {
         if (slotBridgeGeometries.length > 0) {
           try {
             const bridgedGeo = await unionSlotBridgeGeometry(cutSourceGeo, slotBridgeGeometries, layer.name, {
-              preferFastMerge: interactiveSlotPreview,
+              preferFastMerge: interactiveSlotPreview && !config.manifoldExact,
+              strict: !!config.manifoldExact,
             });
             cutSourceGeo.dispose();
             cutSourceGeo = bridgedGeo;
           } catch (bridgeErr) {
+            if (config.manifoldExact) throw bridgeErr;
             console.warn(`Slot bridge generation failed for ${layer.name}; keeping base cut geometry`, bridgeErr);
           } finally {
             slotBridgeGeometries.forEach((geo) => geo.dispose());
           }
         }
 
-        const repairSlotOutputs = generationMode !== 'preview';
+        const repairSlotOutputs = generationMode !== 'preview' && !config.manifoldExact;
         const layerTopologyFailure = repairSlotOutputs
           ? describeTopologyFailure(`${layer.name} composed slot geometry`, cutSourceGeo)
           : null;
@@ -6194,7 +6210,8 @@ const App: React.FC = () => {
       nearLosslessDecimation: !slotEnabled,
       binary: true,
       // Enable final manifold repair for slot-enabled designs to ensure watertight exports
-      ensureManifold: slotEnabled,
+      // (skipped in manifold-exact mode, where re-welding/repair could re-break Manifold output)
+      ensureManifold: slotEnabled && !config.manifoldExact,
     };
   };
 
@@ -6520,22 +6537,31 @@ const App: React.FC = () => {
         // so each plane reflects actual post-cut geometry differences.
         let measuredTriangles: number | null = null;
         if (config.slotEnabled && targetLayerIds.length === 1) {
+          // Always measure at the quality the preview is actually built with, then scale
+          // to the requested quality with the heuristic ratio so low < med < high holds.
           const previewMeshKey = hashConfig(config)
-            + '|q:' + quality
+            + '|q:' + config.quality
             + '|targets:all'
             + '|algo:' + GEOMETRY_ALGO_VERSION;
 
           const previewGroup = modelCache3D.get(previewMeshKey)
-            || (quality === config.quality
-              ? await generateMesh(() => {}, quality, config, 'preview')
-              : null);
+            || await generateMesh(() => {}, config.quality, config, 'preview');
 
           if (previewGroup) {
             const mesh = previewGroup.children.find(
               (child) => child instanceof THREE_ACTUAL.Mesh && child.userData.layerId === targetLayerIds[0]
             ) as THREE_ACTUAL.Mesh | undefined;
             if (mesh) {
-              measuredTriangles = Math.max(1, countTrianglesInObject(mesh));
+              const measuredAtCurrent = Math.max(1, countTrianglesInObject(mesh));
+              if (quality === config.quality) {
+                measuredTriangles = measuredAtCurrent;
+              } else {
+                const rawCurrent = buildRawExportEstimate(format, config.quality, targetLayers);
+                measuredTriangles = Math.max(
+                  1,
+                  Math.round(measuredAtCurrent * (raw.triangles / Math.max(1, rawCurrent.triangles)))
+                );
+              }
             }
           }
         }
@@ -7156,6 +7182,21 @@ const App: React.FC = () => {
     }
   }, [config, handleError, showNotification, t]);
 
+  const [startupVisibility, setStartupVisibility] = useState<StartupVisibility>(() => readStartupVisibility(3));
+
+  const saveStartupVisibility = useCallback((part: 'slots' | 'planes') => {
+    try {
+      const next: StartupVisibility = part === 'slots'
+        ? { ...startupVisibility, slotEnabled: !!config.slotEnabled }
+        : { ...startupVisibility, layers: config.layers.map((layer) => !!layer.enabled) };
+      window.localStorage.setItem(STARTUP_VISIBILITY_STORAGE_KEY, JSON.stringify(next));
+      setStartupVisibility(next);
+      showNotification(t('savedStartupDefaultsNotice'), 'success');
+    } catch (error) {
+      handleError(error, 'Save Startup Slots/Planes');
+    }
+  }, [startupVisibility, config.slotEnabled, config.layers, handleError, showNotification, t]);
+
   const restoreFactoryDefaults = useCallback(() => {
     if (!window.confirm(t('restoreFactoryDefaultsConfirm'))) {
       return;
@@ -7168,9 +7209,11 @@ const App: React.FC = () => {
 
     try {
       window.localStorage.removeItem(USER_DEFAULTS_STORAGE_KEY);
+      window.localStorage.removeItem(STARTUP_VISIBILITY_STORAGE_KEY);
     } catch {
       // Ignore storage errors; session reset still proceeds.
     }
+    setStartupVisibility(readStartupVisibility(3));
 
     setConfig(factoryConfig);
     setConfig3D(factoryConfig);
@@ -7231,11 +7274,13 @@ const App: React.FC = () => {
         const loaded = JSON.parse(event.target?.result as string) as Partial<SnowflakeConfig>;
         const factory = createFactoryInitialState();
         const mergedTop = { ...factory, ...loaded } as SnowflakeConfig;
-        const slotMaterial = mergedTop.extrusionDepth + (mergedTop.bevelEnabled ? Math.min(mergedTop.bevelAmount, mergedTop.extrusionDepth / 2) * 2 : 0);
+        const slotMaterial = mergedTop.extrusionDepth;
         const slotThickness = Math.max(0.1, slotMaterial + (mergedTop.slotWidth || 0));
 
         const normalizedLoaded: SnowflakeConfig = {
           ...mergedTop,
+          slotBakedProfileEnabled: true,
+          manifoldExact: true,
           layers: (Array.isArray(loaded.layers) ? loaded.layers : factory.layers).map((layer, idx) => {
             const normalizedLayer: LayerConfig = {
               ...(factory.layers[idx] ?? createDefaultLayer(`layer-${idx + 1}`, `Plane ${idx + 1}`)),
@@ -8098,7 +8143,6 @@ const App: React.FC = () => {
                 <div className="w-[420px] flex flex-col border-r border-white/10 bg-slate-900/30 backdrop-blur-sm shrink-0 z-40">
                     <ControlPanel
                         config={config}
-                      slotPipelineStats={slotPipelineStatsSummary}
                         onUpdate={handleUpdateConfig}
                         updateGroup={updateGroup}
                         updateCharOffset={updateCharOffset}
@@ -8138,6 +8182,10 @@ const App: React.FC = () => {
                             setShowShortcutsModal(true);
                         }}
                         onSaveAsDefault={saveCurrentAsDefaults}
+                        onSaveStartupSlots={() => saveStartupVisibility('slots')}
+                        onSaveStartupPlanes={() => saveStartupVisibility('planes')}
+                        startupSlotsEnabled={startupVisibility.slotEnabled}
+                        startupLayersEnabled={startupVisibility.layers}
                         onRestoreFactoryDefaults={restoreFactoryDefaults}
                         activeTab={activeTab}
                         onTabChange={setActiveTab}
