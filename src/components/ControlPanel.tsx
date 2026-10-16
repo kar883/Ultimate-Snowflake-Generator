@@ -2732,8 +2732,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                     {renderSlider(t('Initial Length'), activeLayer.abstracts[selectedAbstractIndex].initialLength ?? 30, 1, 100, 1, (v, c) => updateAbstractConfig({ initialLength: v }, c), "mm", false, 30)}
                                     {renderSlider(t('Length Decay'), activeLayer.abstracts[selectedAbstractIndex].lengthDecay ?? 0.8, 0.1, 1, 0.01, (v, c) => updateAbstractConfig({ lengthDecay: v }, c), "", false, 0.8)}
                                     {renderSlider(t('Random Seed'), activeLayer.abstracts[selectedAbstractIndex].randomSeed ?? 1234, 0, 9999, 1, (v, c) => updateAbstractConfig({ randomSeed: v }, c), "", false, 1234)}
-                                    {renderSlider(t('Angle Variation'), activeLayer.abstracts[selectedAbstractIndex].angleVariation ?? 0, 0, 45, 1, (v, c) => updateAbstractConfig({ angleVariation: v }, c), "°", false, 0)}
-                                    {renderSlider(t('Length Variation'), activeLayer.abstracts[selectedAbstractIndex].lengthVariation ?? 0, 0, 50, 1, (v, c) => updateAbstractConfig({ lengthVariation: v }, c), "mm", false, 0)}
+                                    {renderSlider(t('Angle Variation'), activeLayer.abstracts[selectedAbstractIndex].angleVariation ?? 0, 0, 45, 0.01, (v, c) => updateAbstractConfig({ angleVariation: v }, c), "°", false, 0)}
+                                    {renderSlider(t('Length Variation'), activeLayer.abstracts[selectedAbstractIndex].lengthVariation ?? 0, 0, 50, 0.1, (v, c) => updateAbstractConfig({ lengthVariation: v }, c), "mm", false, 0)}
                                     {renderSlider(t('Thickness Decay'), activeLayer.abstracts[selectedAbstractIndex].thicknessDecay ?? 0.8, 0.1, 1, 0.01, (v, c) => updateAbstractConfig({ thicknessDecay: v }, c), "", false, 0.8)}
                                 </div>
                             </div>
