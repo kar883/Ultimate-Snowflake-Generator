@@ -163,7 +163,7 @@ function checkAndPromptForUpdates(isManual = false) {
         type: 'info',
         title: 'Update Available',
         message: 'A new version is available!',
-        detail: `Version ${versionInfo.latestVersion} is now available.\nYou are currently using version ${versionInfo.currentVersion}.\n\nThe Windows installer will prompt you to uninstall any previous version before it continues.`,
+        detail: `Version ${versionInfo.latestVersion} is now available.\nYou are currently using version ${versionInfo.currentVersion}.\n\nThe installer will replace your existing installation.`,
         buttons: ['Download', 'Later'],
         defaultId: 0,
         cancelId: 1
