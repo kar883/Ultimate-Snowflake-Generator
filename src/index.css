@@ -36,3 +36,26 @@
 .custom-scrollbar::-webkit-scrollbar-thumb:active {
   background: #64748b;
 }
+
+.appearance-reduce-motion *,
+.appearance-reduce-motion *::before,
+.appearance-reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+  transition-duration: 0.01ms !important;
+}
+
+.appearance-high-contrast .text-slate-500,
+.appearance-high-contrast .text-slate-600 {
+  color: #cbd5e1 !important;
+}
+
+.appearance-high-contrast .border-white\/5,
+.appearance-high-contrast .border-white\/10 {
+  border-color: rgba(226, 232, 240, 0.35) !important;
+}
+
+.appearance-panel {
+  background-color: var(--app-panel-color) !important;
+}

@@ -19,12 +19,23 @@ import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUti
 let wasmInstance: any = null;
 const MANIFOLD_DEBUG = false;
 
+type ManifoldModuleOptions = {
+  locateFile?: () => string;
+  wasmBinary?: ArrayBuffer;
+};
+
+const initializeManifoldModule = Module as unknown as (
+  options?: ManifoldModuleOptions
+) => ReturnType<typeof Module>;
+
 export interface SlotProfile2D {
   length: number;
   width: number;
   xOffset?: number;
   yOffset?: number;
   rotationDeg?: number;
+  chamferStart?: number;
+  chamferEnd?: number;
 }
 
 export interface ShapeInstance2D {
@@ -32,6 +43,27 @@ export interface ShapeInstance2D {
   transform?: THREE.Matrix3;
   strokeWidth?: number;
 }
+
+const createSlotCrossSection = (CrossSection: any, profile: SlotProfile2D): any => {
+  const length = Math.max(0.01, profile.length);
+  const width = Math.max(0.01, profile.width);
+  const xStart = profile.xOffset ?? 0;
+  const xEnd = xStart + length;
+  const centerY = (profile.yOffset ?? 0) - (width / 2);
+  const startChamfer = Math.min(width / 2, Math.max(0, profile.chamferStart ?? 0), length / 2);
+  const endChamfer = Math.min(width / 2, Math.max(0, profile.chamferEnd ?? 0), length / 2);
+  const points = [
+    [xStart + startChamfer, centerY + (width / 2)],
+    [xEnd - endChamfer, centerY + (width / 2)],
+    [xEnd, centerY + (width / 2) - endChamfer],
+    [xEnd, centerY - (width / 2) + endChamfer],
+    [xEnd - endChamfer, centerY - (width / 2)],
+    [xStart + startChamfer, centerY - (width / 2)],
+    [xStart, centerY - (width / 2) + startChamfer],
+    [xStart, centerY + (width / 2) - startChamfer],
+  ];
+  return CrossSection.ofPolygons([points], 'Positive').rotate(profile.rotationDeg ?? 0);
+};
 
 export async function initManifold() {
   if (!wasmInstance) {
@@ -41,8 +73,11 @@ export async function initManifold() {
     if (!wasmResponse.ok) {
       throw new Error(`Failed to load manifold.wasm (${wasmResponse.status}) from ${wasmUrl}`);
     }
+
     // Emscripten can't load file:// wasm on the main thread (packaged Electron), so hand it the bytes.
-    wasmInstance = await Module({ wasmBinary: await wasmResponse.arrayBuffer() });
+    wasmInstance = await initializeManifoldModule({
+      wasmBinary: await wasmResponse.arrayBuffer(),
+    });
     wasmInstance.setup();
     if (MANIFOLD_DEBUG) console.log('✅ Manifold ready');
   }
@@ -323,11 +358,7 @@ export async function manifoldProfileCutAndExtrude(
 
   try {
     for (const p of profiles) {
-      const slot = CrossSection.square([Math.max(0.01, p.length), Math.max(0.01, p.width)], false)
-        // Keep profile placement consistent with the 3D fallback cutter path:
-        // xOffset marks the slot start, and geometry extends +length from there.
-        .translate((p.xOffset ?? 0) + (p.length / 2), -(p.width / 2) + (p.yOffset ?? 0))
-        .rotate(p.rotationDeg ?? 0);
+      const slot = createSlotCrossSection(CrossSection, p);
       const next = profile.subtract(slot);
       slot.delete?.();
       profile.delete?.();
@@ -453,11 +484,7 @@ export async function manifoldUnionAndExtrudeShapeInstances(
   // to cut slots — NOT by projecting an already-extruded 3D mesh back to 2D.
   for (const p of (options?.slotProfiles ?? [])) {
     if (unionProfile.isEmpty()) break;
-    const slot = CrossSection.square(
-      [Math.max(0.01, p.length), Math.max(0.01, p.width)], false
-    )
-      .translate((p.xOffset ?? 0) + (p.length / 2), -(p.width / 2) + (p.yOffset ?? 0))
-      .rotate(p.rotationDeg ?? 0);
+    const slot = createSlotCrossSection(CrossSection, p);
     const next = unionProfile.subtract(slot);
     slot.delete?.();
     unionProfile.delete?.();
@@ -488,6 +515,152 @@ export async function manifoldUnionAndExtrudeShapeInstances(
     return meshToBufferGeometry(finalMesh);
   } finally {
     unionProfile?.delete?.();
+  }
+}
+
+export interface FilletPrismResult {
+  geometry: THREE.BufferGeometry;
+  appliedBevel: number;
+  // Why the requested bevel was reduced; null when it was applied in full.
+  limitedBy: 'depth' | 'wall' | null;
+}
+
+/**
+ * Extrudes a shape (z from 0 to height) with a true fillet/chamfer on the top and
+ * bottom edges. The side wall stays on the original outline; each edge is built from
+ * thin slabs whose cross-section is the exact inward offset of the outline at that
+ * height, so there are no miter spikes and no folded caps at sharp corners.
+ * The bevel is limited by half the height and by the point where the flat top would
+ * break into more pieces than the outline (the wall is rounded all the way through).
+ */
+export async function manifoldFilletPrism(
+  shape: THREE.Shape,
+  height: number,
+  bevel: number,
+  segments: number,
+  chamfer: boolean,
+  curveSegments: number
+): Promise<FilletPrismResult> {
+  const wasm = await initManifold();
+  const { CrossSection } = wasm;
+  const polygons = shapeToPolygons(shape, curveSegments);
+  const base = CrossSection.ofPolygons(polygons, 'Positive');
+  const owned: any[] = [base];
+  try {
+    const depthCap = Math.max(0, height / 2 - 1e-3);
+    const requested = Math.max(0, Math.min(bevel, depthCap));
+    const baseParts = Math.max(1, base.decompose().length);
+
+    const keepsTop = (d: number) => {
+      const inset = base.offset(-d, 'Round', 2, 16);
+      const parts = inset.isEmpty() ? 0 : inset.decompose().length;
+      inset.delete?.();
+      return parts > 0 && parts <= baseParts;
+    };
+
+    let applied = requested;
+    if (applied > 1e-4 && !keepsTop(applied)) {
+      let lo = 0;
+      let hi = applied;
+      for (let i = 0; i < 18; i++) {
+        const mid = (lo + hi) / 2;
+        if (keepsTop(mid)) lo = mid; else hi = mid;
+      }
+      applied = lo * 0.98;
+    }
+
+    const contours: Array<Array<[number, number]>> = polygons;
+    // Exact (mitered) inward offset vectors; valid until the first edge collapses.
+    const vectors = contours.map((c) => c.map((p, i) => {
+      const a = c[(i - 1 + c.length) % c.length];
+      const b = c[(i + 1) % c.length];
+      const e1x = p[0] - a[0], e1y = p[1] - a[1];
+      const e2x = b[0] - p[0], e2y = b[1] - p[1];
+      const l1 = Math.hypot(e1x, e1y) || 1, l2 = Math.hypot(e2x, e2y) || 1;
+      const n1x = -e1y / l1, n1y = e1x / l1, n2x = -e2y / l2, n2y = e2x / l2;
+      const denom = Math.max(0.05, 1 + n1x * n2x + n1y * n2y);
+      return [(n1x + n2x) / denom, (n1y + n2y) / denom] as [number, number];
+    }));
+
+    // First time any edge shrinks to zero length under the mitered offset.
+    let collapse = Infinity;
+    contours.forEach((c, ci) => {
+      for (let i = 0; i < c.length; i++) {
+        const j = (i + 1) % c.length;
+        const ex = c[j][0] - c[i][0], ey = c[j][1] - c[i][1];
+        const len = Math.hypot(ex, ey) || 1;
+        const rate = ((vectors[ci][i][0] - vectors[ci][j][0]) * ex + (vectors[ci][i][1] - vectors[ci][j][1]) * ey) / len;
+        if (rate > 1e-9) collapse = Math.min(collapse, len / rate);
+      }
+    });
+    if (applied > collapse * 0.97) applied = Math.max(0, collapse * 0.97);
+
+    const limitedByFinal: FilletPrismResult['limitedBy'] =
+      applied < bevel - 1e-6 ? (applied < depthCap - 1e-6 ? 'wall' : 'depth') : null;
+
+    const b = applied;
+    const steps = chamfer ? 1 : Math.max(12, Math.min(segments, 12) * 3);
+    const rings: Array<[number, number]> = [];
+    if (b <= 1e-4) {
+      rings.push([0, 0], [0, height]);
+    } else {
+      for (let s = 0; s <= steps; s++) {
+        const th = (s / steps) * (Math.PI / 2);
+        rings.push(chamfer ? [b * (1 - s / steps), b * (s / steps)] : [b * (1 - Math.sin(th)), b * (1 - Math.cos(th))]);
+      }
+      for (let s = 0; s <= steps; s++) {
+        const th = (s / steps) * (Math.PI / 2);
+        rings.push(chamfer ? [b * (s / steps), height - b + b * (s / steps)] : [b * (1 - Math.cos(th)), height - b + b * Math.sin(th)]);
+      }
+    }
+
+    const positions: number[] = [];
+    const indices: number[] = [];
+    const ringStart: number[][] = contours.map(() => []);
+    contours.forEach((c, ci) => {
+      rings.forEach(([inset, z]) => {
+        ringStart[ci].push(positions.length / 3);
+        c.forEach((p, i) => positions.push(p[0] + vectors[ci][i][0] * inset, p[1] + vectors[ci][i][1] * inset, z));
+      });
+      for (let r = 0; r < rings.length - 1; r++) {
+        for (let k = 0; k < c.length; k++) {
+          const k2 = (k + 1) % c.length;
+          const a = ringStart[ci][r] + k, a2 = ringStart[ci][r] + k2;
+          const u = ringStart[ci][r + 1] + k, u2 = ringStart[ci][r + 1] + k2;
+          indices.push(a, a2, u, a2, u2, u);
+        }
+      }
+    });
+
+    // Caps reuse the original outline's triangulation; vertices keep their indices.
+    const faces = THREE.ShapeUtils.triangulateShape(
+      contours[0].map((p) => new THREE.Vector2(p[0], p[1])),
+      contours.slice(1).map((h) => h.map((p) => new THREE.Vector2(p[0], p[1])))
+    );
+    const offsets: number[] = [];
+    let acc = 0;
+    contours.forEach((c) => { offsets.push(acc); acc += c.length; });
+    const capIndex = (flatIdx: number, ringIdx: number) => {
+      let ci = offsets.length - 1;
+      while (offsets[ci] > flatIdx) ci--;
+      return ringStart[ci][ringIdx] + (flatIdx - offsets[ci]);
+    };
+    faces.forEach((f) => {
+      indices.push(capIndex(f[0], rings.length - 1), capIndex(f[1], rings.length - 1), capIndex(f[2], rings.length - 1));
+      indices.push(capIndex(f[2], 0), capIndex(f[1], 0), capIndex(f[0], 0));
+    });
+
+    const indexed = new THREE.BufferGeometry();
+    indexed.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    indexed.setIndex(indices);
+    // Smooth shading along the rounded edge, crisp at the star's real corners.
+    const shaded = BufferGeometryUtils.toCreasedNormals(indexed, (50 * Math.PI) / 180);
+    indexed.dispose();
+    // Match ExtrudeGeometry's attribute set so it can be merged with text/abstract geometry.
+    shaded.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array((shaded.attributes.position.count) * 2), 2));
+    return { geometry: shaded, appliedBevel: applied, limitedBy: limitedByFinal };
+  } finally {
+    owned.forEach((o) => o.delete?.());
   }
 }
 

@@ -267,14 +267,24 @@ interface ExportMenuProps {
     isActive?: boolean;
   }>;
   defaultEstimateLayerIndices?: number[];
+  tutorialId?: string;
 }
 
 const ExportMenu: React.FC<ExportMenuProps> = ({
-  label, onExportSTL, onExport3MF, onExportSelectedPlanesSTL, onExportSelectedPlanes3MF, onExport2D, onEstimateExportStats, onPrecomputeExportStats, isLoading, disabled, className, baseColor = "bg-sky-600", direction = 'up', show2D = false, shortcut, t, compact = false, planeActions, defaultEstimateLayerIndices
+  label, onExportSTL, onExport3MF, onExportSelectedPlanesSTL, onExportSelectedPlanes3MF, onExport2D, onEstimateExportStats, onPrecomputeExportStats, isLoading, disabled, className, baseColor = "bg-sky-600", direction = 'up', show2D = false, shortcut, t, compact = false, planeActions, defaultEstimateLayerIndices, tutorialId
 }) => {
   const [quality, setQuality] = useState<DesignQuality>('low');
   const [format, setFormat] = useState<'stl' | '3mf' | 'svg' | 'dxf'>('stl');
   const [isOpen, setIsOpen] = useState(false);
+  useEffect(() => {
+    if (!tutorialId) return;
+    const onTutorial = (e: Event) => {
+      const d = (e as CustomEvent<{ id: string; open: boolean }>).detail;
+      if (d?.id === tutorialId) setIsOpen(!!d.open);
+    };
+    window.addEventListener('tutorial:menu', onTutorial);
+    return () => window.removeEventListener('tutorial:menu', onTutorial);
+  }, [tutorialId]);
   const [selectedPlaneIndices, setSelectedPlaneIndices] = useState<number[]>([]);
   const [hoveredFormat, setHoveredFormat] = useState<'stl' | '3mf' | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
@@ -288,6 +298,8 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as Node;
+      // Clicks inside the tutorial card must not close the menu it is explaining.
+      if (target instanceof Element && target.closest('[data-tutorial-card]')) return;
       if (
         containerRef.current && !containerRef.current.contains(target) &&
         dropdownRef.current && !dropdownRef.current.contains(target)
@@ -513,7 +525,7 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
   };
 
   return (
-    <div ref={containerRef} className={`relative flex rounded-lg shadow-lg ${disabled ? 'opacity-50 pointer-events-none' : ''} ${className}`}>
+    <div ref={containerRef} data-tutorial={tutorialId} className={`relative flex rounded-lg shadow-lg ${disabled ? 'opacity-50 pointer-events-none' : ''} ${className}`}>
       <InfoTooltip label={label} description={getDescription('Export', t)} shortcut={shortcut} className="flex-1">
         <button
           onClick={handleMainClick}
@@ -528,6 +540,7 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
         </button>
       </InfoTooltip>
       <button
+        data-tutorial-toggle={tutorialId}
         onClick={handleToggleOpen}
         className={toggleButtonClass}
       >
@@ -539,6 +552,7 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
       {isOpen && createPortal(
         <div
            ref={dropdownRef}
+           data-tutorial="export-menu"
            className="fixed z-[9999] bg-slate-800 border border-white/10 rounded-lg shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 flex flex-col p-1.5 gap-1"
            style={{
              top: position.top,
@@ -717,8 +731,18 @@ const AiRandomizerMenu: React.FC<{
   className?: string;
   t?: (key: string) => string;
   onOpenShortcutsModal?: (tab: 'shortcuts' | 'apikey' | 'aiscope', message?: string) => void;
-}> = ({ onGenerate, isLoading, progress, className, t, onOpenShortcutsModal }) => {
+  tutorialId?: string;
+}> = ({ onGenerate, isLoading, progress, className, t, onOpenShortcutsModal, tutorialId }) => {
   const [isOpen, setIsOpen] = useState(false);
+  useEffect(() => {
+    if (!tutorialId) return;
+    const onTutorial = (e: Event) => {
+      const d = (e as CustomEvent<{ id: string; open: boolean }>).detail;
+      if (d?.id === tutorialId) setIsOpen(!!d.open);
+    };
+    window.addEventListener('tutorial:menu', onTutorial);
+    return () => window.removeEventListener('tutorial:menu', onTutorial);
+  }, [tutorialId]);
   const [lastMode, setLastMode] = useState<'3d' | '2d' | 'fractal' | null>(null);
   const [resetOnRefresh, setResetOnRefresh] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -728,6 +752,7 @@ const AiRandomizerMenu: React.FC<{
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as Node;
+      if (target instanceof Element && target.closest('[data-tutorial-card]')) return;
       if (
         containerRef.current && !containerRef.current.contains(target) &&
         dropdownRef.current && !dropdownRef.current.contains(target)
@@ -777,7 +802,7 @@ const AiRandomizerMenu: React.FC<{
   const modeLabel = lastMode ? (lastMode === 'fractal' ? 'Trad.' : lastMode.toUpperCase()) : '3D';
 
   return (
-    <div ref={containerRef} className={`relative flex rounded-lg shadow-lg ${className}`}>
+    <div ref={containerRef} data-tutorial={tutorialId} className={`relative flex rounded-lg shadow-lg ${className}`}>
       <div className="relative flex-1 rounded-l-lg bg-violet-600 overflow-hidden">
         {isLoading && (
           <div className="absolute inset-0 bg-violet-400/40 transition-all duration-300 ease-out" style={{ width: `${progress}%` }} />
@@ -811,6 +836,7 @@ const AiRandomizerMenu: React.FC<{
       {isOpen && !isLoading && createPortal(
         <div
           ref={dropdownRef}
+          data-tutorial={tutorialId ? `${tutorialId}-menu` : undefined}
           className="fixed z-[9999] bg-slate-800 border border-white/10 rounded-lg shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 flex flex-col p-1.5 gap-1"
           style={{ top: position.top, left: position.left, width: Math.max(position.width, 190), transform: 'translateY(-100%) translateY(-4px)' }}
         >
@@ -872,8 +898,18 @@ const CutSlotsMenu: React.FC<{
   startupSlotsEnabled?: boolean;
   className?: string;
   t?: (key: string) => string;
-}> = ({ config, onUpdate, onSaveStartupSlots, startupSlotsEnabled, className, t }) => {
+  tutorialId?: string;
+}> = ({ config, onUpdate, onSaveStartupSlots, startupSlotsEnabled, className, t, tutorialId }) => {
   const [isOpen, setIsOpen] = useState(false);
+  useEffect(() => {
+    if (!tutorialId) return;
+    const onTutorial = (e: Event) => {
+      const d = (e as CustomEvent<{ id: string; open: boolean }>).detail;
+      if (d?.id === tutorialId) setIsOpen(!!d.open);
+    };
+    window.addEventListener('tutorial:menu', onTutorial);
+    return () => window.removeEventListener('tutorial:menu', onTutorial);
+  }, [tutorialId]);
   const containerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ top: 0, left: 0, width: 0 });
@@ -881,6 +917,7 @@ const CutSlotsMenu: React.FC<{
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as Node;
+      if (target instanceof Element && target.closest('[data-tutorial-card]')) return;
       if (
         containerRef.current && !containerRef.current.contains(target) &&
         dropdownRef.current && !dropdownRef.current.contains(target)
@@ -921,7 +958,7 @@ const CutSlotsMenu: React.FC<{
   };
 
   return (
-    <div ref={containerRef} className={`relative flex rounded-lg shadow-lg ${className}`}>
+    <div ref={containerRef} data-tutorial={tutorialId} className={`relative flex rounded-lg shadow-lg ${className}`}>
       <InfoTooltip label={t ? t('Cut Slots') : 'Cut Slots'} description={getDescription('Cut Slots', t)} className="flex-1">
         <button
           onClick={handleToggle}
@@ -943,6 +980,7 @@ const CutSlotsMenu: React.FC<{
       {isOpen && createPortal(
         <div
           ref={dropdownRef}
+          data-tutorial={tutorialId ? `${tutorialId}-menu` : undefined}
           className="fixed z-[9999] bg-slate-800 border border-white/10 rounded-lg shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 flex flex-col p-1.5 gap-1"
           style={{ top: position.top, left: position.left, width: Math.max(position.width, 190), transform: 'translateY(-100%) translateY(-4px)' }}
         >
@@ -1427,6 +1465,7 @@ const ControlRow: React.FC<{ label: string; children: React.ReactNode; onReset?:
 );
 
 interface ControlPanelProps {
+  hubBevelLimit?: { applied: number; requested: number; by: 'depth' | 'wall' } | null;
   config: SnowflakeConfig;
   onUpdate: (updates: Partial<SnowflakeConfig>, commitTo3D?: boolean) => void;
   updateGroup: (group: 'primary' | 'secondary', updates: Partial<TextGroupConfig>, commitTo3D?: boolean) => void;
@@ -1473,6 +1512,7 @@ interface ControlPanelProps {
 }
 
 const ControlPanel: React.FC<ControlPanelProps> = ({
+  hubBevelLimit,
   config, onUpdate, updateGroup, updateCharOffset, updateTextGroups, updateHubs, updateAbstracts, updateImages, onAiPolish, aiLoading, aiProgress, onExportSTL, onExport3MF, onExportLayerSTL, onExportLayer3MF, onExportSelectedLayersSTL, onExportSelectedLayers3MF, onEstimateExportStats, onPrecomputeExportStats, onExportAllLayersZip, onExport2D, exportLoading, exportLoadingKey, onFetchFont, onFontUpload, dynamicFonts, /* SLOT-DISABLED: onAutoConfigureSlots, calculateOptimalSlots, */ setViewMode, undo, redo, canUndo, canRedo, shortcuts, onUpdateShortcuts, onResetShortcuts, onOpenShortcutsModal, onSaveAsDefault, onSaveStartupSlots, onSaveStartupPlanes, startupSlotsEnabled, startupLayersEnabled, onRestoreFactoryDefaults, activeTab, onTabChange
 }) => {
   const { t } = useTranslation(config.language || 'en');
@@ -1957,6 +1997,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                  return (
                  <InfoTooltip key={tab} label={TAB_LABELS[tab]} shortcut={TAB_SHORTCUTS[tab] ? shortcuts?.[TAB_SHORTCUTS[tab] as keyof ShortcutConfig] : undefined} placement="bottom" className="h-full">
                      <button
+                       data-tutorial={`tab-${tab}`}
                        onClick={() => onTabChange(tab)}
                        className={`${isActive ? btnActive : btnInactive} w-full`}
                        style={{
@@ -2095,6 +2136,11 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                <InfoTooltip label={t('Chamfer')} description={getDescription('Chamfer', t)} className="flex-1"><button onClick={() => onUpdate({ bevelType: 'chamfer' }, true)} className={`w-full px-3 py-1 text-[9px] font-black uppercase rounded ${config.bevelType === 'chamfer' ? 'bg-sky-500 text-white' : 'text-slate-500'}`}>{t('Chamfer')}</button></InfoTooltip>
                           </div>
                           {renderSlider(t('Bevel Amount'), config.bevelAmount, 0, 5, 0.05, (v, c) => onUpdate({ bevelAmount: v }, c), "mm", false, 0.4)}
+                          {hubBevelLimit && config.bevelAmount > hubBevelLimit.applied + 1e-3 && (
+                            <div className="text-[11px] text-amber-400 -mt-2 mb-2 px-1">
+                              Hub bevel limited to {hubBevelLimit.applied.toFixed(2)} mm ({hubBevelLimit.by === 'depth' ? 'half the extrusion depth; increase depth for a larger fillet' : 'hub wall too thin for a larger fillet'}).
+                            </div>
+                          )}
                           {config.bevelType === 'fillet' && renderSlider(t('Fillet Detail'), config.bevelSegments, 2, 12, 1, (v, c) => onUpdate({ bevelSegments: v }, c), "", false, 2)}
                         </div>
                      )}
@@ -3018,7 +3064,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                       )}
                 </div>
 
-                <div className="space-y-2">
+                <div data-tutorial="plane-cards" className="space-y-2">
                    {config.layers.map((layer, idx) => (
                       <div key={layer.id} className={`p-2 rounded-lg border transition-all ${config.activeLayerIndex === idx ? 'bg-sky-900/20 border-sky-500/30' : 'bg-slate-800/30 border-white/5'}`}>
                          <div className="flex items-center gap-2 w-full">
@@ -3238,6 +3284,80 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                                                   )}
                                                 </>
                                               )}
+                                              {/* Custom bridges UI disabled for now.
+                                              <div className="mt-2 border-t border-white/5 pt-2 space-y-2">
+                                                <div className="flex items-center justify-between">
+                                                  <span className="text-[9px] font-black uppercase tracking-wider text-slate-500">Custom Bridges</span>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => handleLayerUpdate(idx, {
+                                                      slotBridges: [
+                                                        ...(layer.slotBridges || []),
+                                                        {
+                                                          id: `slot-bridge-${Date.now()}`,
+                                                          enabled: true,
+                                                          positionPct: 50,
+                                                          length: 6,
+                                                          width: 1.2,
+                                                          edgeOffset: 0,
+                                                          clearanceMargin: 0.35,
+                                                        },
+                                                      ],
+                                                    }, true)}
+                                                    className="px-2 py-1 rounded bg-sky-600/20 text-sky-300 border border-sky-500/30 text-[9px] font-black uppercase hover:bg-sky-500/30"
+                                                  >
+                                                    + Add Bridge
+                                                  </button>
+                                                </div>
+                                                {(layer.slotBridges || []).map((bridge, bridgeIndex) => (
+                                                  <div key={bridge.id || bridgeIndex} className="rounded border border-white/5 bg-slate-900/40 p-2 space-y-2">
+                                                    <div className="flex items-center justify-between">
+                                                      <span className="text-[9px] font-bold text-slate-400">Bridge {bridgeIndex + 1}</span>
+                                                      <button
+                                                        type="button"
+                                                        onClick={() => handleLayerUpdate(idx, {
+                                                          slotBridges: (layer.slotBridges || []).filter((_, currentIndex) => currentIndex !== bridgeIndex),
+                                                        }, true)}
+                                                        className="text-[9px] font-bold text-rose-400 hover:text-rose-300"
+                                                      >
+                                                        Remove
+                                                      </button>
+                                                    </div>
+                                                    <div className="grid grid-cols-3 gap-1.5">
+                                                      {([
+                                                        ['positionPct', 'Position %', 0, 100, 1],
+                                                        ['length', 'Length', 0.2, 100, 0.1],
+                                                        ['width', 'Width', 0.2, 20, 0.1],
+                                                      ] as const).map(([field, label, min, max, step]) => (
+                                                        <label key={field} className="text-[8px] font-bold uppercase text-slate-500">
+                                                          {label}
+                                                          <input
+                                                            type="number"
+                                                            min={min}
+                                                            max={max}
+                                                            step={step}
+                                                            value={Number(bridge[field] ?? 0)}
+                                                            onChange={(event) => {
+                                                              const nextBridges = [...(layer.slotBridges || [])];
+                                                              nextBridges[bridgeIndex] = {
+                                                                ...nextBridges[bridgeIndex],
+                                                                [field]: Number(event.target.value),
+                                                              };
+                                                              handleLayerUpdate(idx, { slotBridges: nextBridges }, false);
+                                                            }}
+                                                            onBlur={() => handleLayerUpdate(idx, { slotBridges: [...(layer.slotBridges || [])] }, true)}
+                                                            className="mt-1 w-full h-6 rounded bg-slate-800 border border-white/10 px-1 text-[10px] text-slate-200"
+                                                          />
+                                                        </label>
+                                                      ))}
+                                                    </div>
+                                                  </div>
+                                                ))}
+                                                {(layer.slotBridges || []).length === 0 && (
+                                                  <div className="text-[9px] text-slate-600">No custom bridges. Automatic bridges remain active.</div>
+                                                )}
+                                              </div>
+                                              */}
                                             </>
                                           )}
                                         </>
@@ -3257,7 +3377,31 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                           <div className={settingsHeaderDotClass}></div>
                           <span className={settingsHeaderLabelClass}>{t('All Planes')}</span>
                         </div>
-                        {renderSlider(t('Slot Length'), config.slotLength, 10, 200, 0.05, (v, c) => onUpdate({ slotLength: v }, c), "mm", false, 95)}
+                        <label className="flex items-center gap-2 text-[10px] text-slate-300">
+                          <input
+                            type="checkbox"
+                            checked={config.automaticSlotLength !== false}
+                            onChange={(event) => onUpdate({ automaticSlotLength: event.target.checked }, true)}
+                            className="accent-sky-500"
+                          />
+                          <span>Automatic slot length from model size</span>
+                        </label>
+                        {renderSlider(
+                          t('Slot Length'),
+                          config.slotLength,
+                          10,
+                          200,
+                          0.05,
+                          (v, c) => onUpdate({ slotLength: v }, c),
+                          "mm",
+                          config.automaticSlotLength !== false,
+                          95
+                        )}
+                        {config.automaticSlotLength !== false && (
+                          <div className="text-[9px] text-slate-500">
+                            Main slots follow the generated model radius. Tip-in and extension slots retain their own outer-to-inner path.
+                          </div>
+                        )}
                         {renderSlider(t('Slot Width'), config.slotWidth, 0, 3, 0.05, (v, c) => onUpdate({ slotWidth: v }, c), "mm", false, 0.2)}
                     </div>
                 )}
@@ -3269,10 +3413,11 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
         {/* Footer actions */}
         <div className="p-2 bg-slate-900/80 border-t border-white/10 shrink-0">
             <div className="grid grid-cols-3 gap-2 h-8">
-              <CutSlotsMenu config={config} onUpdate={onUpdate} onSaveStartupSlots={onSaveStartupSlots} startupSlotsEnabled={startupSlotsEnabled} className="w-full h-8" t={t} />
-              <AiRandomizerMenu onGenerate={onAiPolish} isLoading={aiLoading} progress={aiProgress} className="w-full h-8" t={t} onOpenShortcutsModal={onOpenShortcutsModal} />
+              <CutSlotsMenu config={config} onUpdate={onUpdate} onSaveStartupSlots={onSaveStartupSlots} startupSlotsEnabled={startupSlotsEnabled} className="w-full h-8" t={t} tutorialId="slots" />
+              <AiRandomizerMenu onGenerate={onAiPolish} isLoading={aiLoading} progress={aiProgress} className="w-full h-8" t={t} onOpenShortcutsModal={onOpenShortcutsModal} tutorialId="ai" />
               <ExportMenu
                 label="Export"
+                tutorialId="export"
                 onExportSTL={onExportSTL}
                 onExport3MF={onExport3MF}
                 onExportSelectedPlanesSTL={(layerIndices, quality) => onExportSelectedLayersSTL?.(layerIndices, quality)}

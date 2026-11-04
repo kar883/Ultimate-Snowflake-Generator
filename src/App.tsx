@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { SnowflakeConfig, TextGroupConfig, HubConfig, CharOffset, LayerConfig, AbstractConfig, DesignQuality, UnderlineConfig, ShortcutConfig, ImageConfig, createDefaultImage } from './types';
+import { AppearanceSettings, SnowflakeConfig, TextGroupConfig, HubConfig, CharOffset, LayerConfig, AbstractConfig, DesignQuality, UnderlineConfig, ShortcutConfig, ImageConfig, createDefaultImage } from './types';
 import { CURSIVE_FONTS, FONT_TTF_URLS, BOLD_FONT_URLS, BOLD_FONT_THRESHOLD } from './constants';
 import { useFontPreloader } from './utils/fontPreloader';
 import ControlPanel from './components/ControlPanel';
@@ -8,6 +8,16 @@ import Snowflake3D from './components/Snowflake3D';
 import Header from './components/Header';
 import ShortcutsModal from './components/ShortcutsModal';
 import AboutModal from './components/AboutModal';
+import TutorialModal from './components/TutorialModal';
+import { EXAMPLE_ENTRIES } from './examples';
+const TUTORIAL_DISABLED_STORAGE_KEY = 'snowflake_tutorial_disabled';
+const loadTutorialDisabled = (): boolean => {
+  try {
+    return localStorage.getItem(TUTORIAL_DISABLED_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
 import UpdateNotification from './components/UpdateNotification';
 import * as THREE_ACTUAL from 'three';
 import { STLExporter, ThreeMFExporter } from './stlExporter';
@@ -35,18 +45,62 @@ import { getAdjustedGlyphPathCommands, getPathCommandBounds, makePathFromCommand
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, /*makeSlotKey,*/ getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, /*slotCutCache,*/ makeUnderlineKey } from './geometryCache';
 
 const MAX_HISTORY = 50;
-const APP_VERSION = '1.1.1';
+const APP_VERSION = '1.1.2';
+import { manifoldFilletPrism } from './manifoldCSG';
+const hubFilletInfoCache = new Map<string, { applied: number; by: 'depth' | 'wall' | null }>();
 const APP_DEBUG = false;
 // Bump when mesh generation logic changes (slot geometry, CSG sequencing, etc.)
 // so cached groups from older algorithms are not reused.
-const GEOMETRY_ALGO_VERSION = 'slot-2026-05-14-baked-profile-a';
+const GEOMETRY_ALGO_VERSION = 'slot-2026-11-04-hub-fillet-loft-j';
 // Feature-flagged slot strategy: build slot openings in profile space and extrude once.
 const ENABLE_BAKED_PROFILE_SLOT_PATH = true;
 const DEFAULT_BAKED_PROFILE_SLOT_ENABLED = true;
+const APPEARANCE_STORAGE_KEY = 'snowflake_appearance_settings';
+const DEFAULT_APPEARANCE: AppearanceSettings = {
+  backgroundColor: '#020617',
+  panelColor: '#0f172a',
+  reduceMotion: false,
+  highContrast: false,
+};
+
+const loadAppearanceSettings = (): AppearanceSettings => {
+  try {
+    const stored = localStorage.getItem(APPEARANCE_STORAGE_KEY);
+    if (!stored) return { ...DEFAULT_APPEARANCE };
+    const parsed = JSON.parse(stored) as Partial<AppearanceSettings>;
+    return {
+      ...DEFAULT_APPEARANCE,
+      ...parsed,
+      backgroundColor: typeof parsed.backgroundColor === 'string' ? parsed.backgroundColor : DEFAULT_APPEARANCE.backgroundColor,
+      panelColor: typeof parsed.panelColor === 'string' ? parsed.panelColor : DEFAULT_APPEARANCE.panelColor,
+      reduceMotion: typeof parsed.reduceMotion === 'boolean' ? parsed.reduceMotion : DEFAULT_APPEARANCE.reduceMotion,
+      highContrast: typeof parsed.highContrast === 'boolean' ? parsed.highContrast : DEFAULT_APPEARANCE.highContrast,
+    };
+  } catch {
+    return { ...DEFAULT_APPEARANCE };
+  }
+};
 
 declare global {
   interface Window {
     __snowflakeRunManifoldValidation?: () => Promise<ValidationScenarioResult[]>;
+    electronAPI?: {
+      onSaveProject?: (callback: () => void) => void;
+      onLoadProject?: (callback: () => void) => void;
+      onUndo?: (callback: () => void) => void;
+      onRedo?: (callback: () => void) => void;
+      onResetApp?: (callback: () => void) => void;
+      onToggleView?: (callback: () => void) => void;
+      onForceRegenerate?: (callback: () => void) => void;
+      onResetZoom?: (callback: () => void) => void;
+      onAbout?: (callback: () => void) => void;
+      onCheckForUpdates?: (callback: () => void) => void;
+      onShortcuts?: (callback: () => void) => void;
+      checkForUpdates?: () => Promise<unknown>;
+      openExternal?: (url: string) => Promise<unknown>;
+      loadProject?: () => Promise<{ canceled?: boolean; text?: string; error?: string }>;
+      removeAllListeners?: () => void;
+    };
   }
 }
 
@@ -265,7 +319,7 @@ function applyBoldnessToShapes(
   }
 
   if (expandedShapes.length > 0) {
-    console.log(`✅ Applied ${strokeWidth}px boldness to ${expandedShapes.length} shapes`);
+    console.log(`Ã¢Å“â€¦ Applied ${strokeWidth}px boldness to ${expandedShapes.length} shapes`);
     return expandedShapes;
   }
 
@@ -614,7 +668,7 @@ const deepEqual = (a: any, b: any): boolean => {
   return true;
 };
 
-// Efficient structured clone for history — native structuredClone is 10-50× faster
+// Efficient structured clone for history Ã¢â‚¬â€ native structuredClone is 10-50Ãƒâ€” faster
 // than the old recursive implementation for large config objects.
 const deepClone = (obj: any): any => structuredClone(obj);
 
@@ -866,6 +920,47 @@ const getRearMateReach = (
   return Math.max(0.01, fullRearReach * Math.cos(halfGapRad));
 };
 
+// Furthest material (text, hubs, abstracts) along the slot's rear axis, measured
+// inside the slot's width band. Triangle edges are clipped to the band so thin
+// features crossing it are still found.
+const measureRearReach = (
+  geometry: THREE_ACTUAL.BufferGeometry,
+  slotRotationDeg: number,
+  halfBand: number
+): number => {
+  const pos = geometry.getAttribute('position');
+  if (!pos) return 0;
+  const index = geometry.getIndex();
+  const rad = (slotRotationDeg * Math.PI) / 180;
+  const ax = -Math.cos(rad);
+  const ay = -Math.sin(rad);
+  let best = 0;
+  const edge = (i: number, j: number) => {
+    const x1 = pos.getX(i), y1 = pos.getY(i), x2 = pos.getX(j), y2 = pos.getY(j);
+    const p1 = x1 * ax + y1 * ay, p2 = x2 * ax + y2 * ay;
+    const q1 = -x1 * ay + y1 * ax, q2 = -x2 * ay + y2 * ax;
+    let t0 = 0, t1 = 1;
+    const dq = q2 - q1;
+    if (Math.abs(dq) < 1e-9) {
+      if (Math.abs(q1) > halfBand) return;
+    } else {
+      const ta = (-halfBand - q1) / dq, tb = (halfBand - q1) / dq;
+      t0 = Math.max(t0, Math.min(ta, tb));
+      t1 = Math.min(t1, Math.max(ta, tb));
+      if (t0 > t1) return;
+    }
+    best = Math.max(best, p1 + (p2 - p1) * t0, p1 + (p2 - p1) * t1);
+  };
+  const triCount = index ? index.count / 3 : pos.count / 3;
+  for (let t = 0; t < triCount; t++) {
+    const a = index ? index.getX(t * 3) : t * 3;
+    const b = index ? index.getX(t * 3 + 1) : t * 3 + 1;
+    const c = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+    edge(a, b); edge(b, c); edge(c, a);
+  }
+  return best;
+};
+
 const getEffectiveSlotWidthOffset = (
   layer: LayerConfig,
   section: 'crossMain' | 'crossTipIn' | 'tiltMain' | 'tiltExtension'
@@ -975,26 +1070,64 @@ const getClearanceProtectedBridges = (
   layer: LayerConfig,
   slotThickness: number
 ) => {
-  const normalized = normalizeSlotBridgeList(layer);
-  const protectionOn = layer.protectMatingClearance !== false;
+  // Custom bridges are disabled for now; automatic bridges stay active.
+  // const normalized = normalizeSlotBridgeList(layer);
+  // const protectionOn = layer.protectMatingClearance !== false;
+  //
+  // if (!protectionOn) {
+  //   return normalized;
+  // }
+  //
+  // // First-class rule: any enabled bridge must keep a safety envelope clear
+  // // around mating slot volume. Phase 1 clamps width to guarantee minimum
+  // // open channel remains for assembly.
+  // const maxBridgeWidth = Math.max(0.2, (slotThickness * 0.5) - 0.1);
+  // return normalized.map((bridge) => {
+  //   if (!bridge.enabled) return bridge;
+  //   const guardedMax = Math.max(0.2, maxBridgeWidth - bridge.clearanceMargin);
+  //   return {
+  //     ...bridge,
+  //     edgeOffset: Math.max(bridge.edgeOffset, bridge.clearanceMargin),
+  //     width: Math.min(bridge.width, guardedMax),
+  //   };
+  // });
+  void layer;
+  void slotThickness;
+  return [] as ReturnType<typeof normalizeSlotBridgeList>;
+};
 
-  if (!protectionOn) {
-    return normalized;
-  }
+const NOMINAL_MODEL_DIAMETER = 190;
 
-  // First-class rule: any enabled bridge must keep a safety envelope clear
-  // around mating slot volume. Phase 1 clamps width to guarantee minimum
-  // open channel remains for assembly.
-  const maxBridgeWidth = Math.max(0.2, (slotThickness * 0.5) - 0.1);
-  return normalized.map((bridge) => {
-    if (!bridge.enabled) return bridge;
-    const guardedMax = Math.max(0.2, maxBridgeWidth - bridge.clearanceMargin);
-    return {
-      ...bridge,
-      edgeOffset: Math.max(bridge.edgeOffset, bridge.clearanceMargin),
-      width: Math.min(bridge.width, guardedMax),
-    };
-  });
+const getGeometryDiameter = (geometry: THREE_ACTUAL.BufferGeometry): number => {
+  geometry.computeBoundingBox();
+  const bounds = geometry.boundingBox;
+  if (!bounds) return NOMINAL_MODEL_DIAMETER;
+  const maxExtent = Math.max(
+    Math.abs(bounds.min.x),
+    Math.abs(bounds.max.x),
+    Math.abs(bounds.min.y),
+    Math.abs(bounds.max.y)
+  );
+  return maxExtent > 0 ? maxExtent * 2 : NOMINAL_MODEL_DIAMETER;
+};
+
+const getResolvedBaseSlotLength = (
+  config: SnowflakeConfig,
+  layer: LayerConfig,
+  modelDiameter: number
+): number => {
+  const diameterScale = Math.max(0.25, Math.min(4, modelDiameter / NOMINAL_MODEL_DIAMETER));
+  const lengthAdjustmentPerSide = layer.slotLengthAdjustment ?? 0;
+  const configuredLength = (config.slotLength + (lengthAdjustmentPerSide * 2)) * diameterScale;
+
+  // Automatic mode uses the actual generated model envelope rather than the
+  // nominal 95 mm default. The existing per-layer adjustment remains a
+  // deliberate manual override applied symmetrically to the measured reach.
+  const measuredLength = Math.max(2 * diameterScale, modelDiameter / 2);
+  return Math.max(
+    2 * diameterScale,
+    config.automaticSlotLength === false ? configuredLength : measuredLength + (lengthAdjustmentPerSide * 2) * diameterScale
+  );
 };
 
 const createSlotBridgeGeometriesForLayer = (
@@ -1004,7 +1137,8 @@ const createSlotBridgeGeometriesForLayer = (
   config: SnowflakeConfig,
   materialThickness: number,
   centerZ: number,
-  layerDepth: number
+  layerDepth: number,
+  modelDiameter = NOMINAL_MODEL_DIAMETER
 ): THREE_ACTUAL.BufferGeometry[] => {
   if (!config.slotEnabled || config.slotBridgesEnabled === false || !layer.slotBridgeEnabled) return [];
 
@@ -1065,7 +1199,7 @@ const createSlotBridgeGeometriesForLayer = (
     (layer.secondaryEnabled && layer.secondary.enabled) ? (layer.secondary.thickness || 0) : 0,
   ];
   const maxLayerTextThickness = Math.max(0, ...enabledTextThicknesses);
-  const effectiveBoldnessForSlot = Math.max(0, (config.globalStrokeWeight || 0) + (maxLayerTextThickness - 1.0));
+  const effectiveBoldnessForSlot = 0;
   const slotThickness = Math.max(
     0.1,
     materialThickness + effectiveBoldnessForSlot + config.slotWidth + widthAdjustmentPerSide
@@ -1073,7 +1207,7 @@ const createSlotBridgeGeometriesForLayer = (
 
   const protectedBridges = getClearanceProtectedBridges(layer, slotThickness).filter((bridge) => bridge.enabled);
 
-  const profiles = createSlotProfilesForLayer(layer, layerIndex, enabledLayers, config, materialThickness);
+  const profiles = createSlotProfilesForLayer(layer, layerIndex, enabledLayers, config, materialThickness, modelDiameter);
   if (profiles.length === 0) return [];
 
   const profSegments = profiles
@@ -1219,30 +1353,29 @@ const createSlotProfilesForLayer = (
   layerIndex: number,
   enabledLayers: LayerConfig[],
   config: SnowflakeConfig,
-  materialThickness: number
+  materialThickness: number,
+  modelDiameter = NOMINAL_MODEL_DIAMETER,
+  measuredRearReach = 0
 ): SlotProfile2D[] => {
   if (!config.slotEnabled) return [];
   if (config.slotMode === '2-plane' && enabledLayers.length < 2) return [];
   if (config.slotMode === '3-plane' && enabledLayers.length < 3) return [];
 
   const slots: SlotProfile2D[] = [];
-  const modelDiameter = 190;
-  const lengthAdjustmentPerSide = layer.slotLengthAdjustment ?? 0;
+  const diameterScale = Math.max(0.25, Math.min(4, modelDiameter / NOMINAL_MODEL_DIAMETER));
   const widthAdjustmentPerSide = layer.slotWidthOffset ?? 0;
-  const effectiveSlotLength = config.slotLength + (lengthAdjustmentPerSide * 2);
-  const drawLength = Math.max(effectiveSlotLength, (modelDiameter / 2) + 20);
-  const slotLength = Math.max(2, effectiveSlotLength);
+  const drawLength = getResolvedBaseSlotLength(config, layer, modelDiameter);
+  const slotLength = drawLength;
   const baseTiltExtensionLength = Math.max(0.01, slotLength * 0.6);
-  const tiltExtensionLengthAdjustment = layer.slotTiltExtensionLengthAdjustment ?? 0;
+  const tiltExtensionLengthAdjustment = (layer.slotTiltExtensionLengthAdjustment ?? 0) * diameterScale;
   const tiltExtensionLength = Math.max(0.01, baseTiltExtensionLength + tiltExtensionLengthAdjustment);
   const enabledTextThicknesses = [
     layer.primary.enabled ? (layer.primary.thickness || 0) : 0,
     (layer.secondaryEnabled && layer.secondary.enabled) ? (layer.secondary.thickness || 0) : 0,
   ];
   const maxLayerTextThickness = Math.max(0, ...enabledTextThicknesses);
-  // Match the pre-regression blade thickness model: active text thickness is
-  // measured relative to the 1.0 baseline body, not added in full on top.
-  const effectiveBoldnessForSlot = Math.max(0, (config.globalStrokeWeight || 0) + (maxLayerTextThickness - 1.0));
+  // Visual text boldness must not change the assembly clearance channel.
+  const effectiveBoldnessForSlot = 0;
   const slotThickness = Math.max(
     0.1,
     materialThickness + effectiveBoldnessForSlot + config.slotWidth + widthAdjustmentPerSide
@@ -1252,11 +1385,17 @@ const createSlotProfilesForLayer = (
   const mateOverlap = Math.min(1.5, Math.max(0.35, slotThickness * 0.4));
   const armAngle = layer.primary.rotationOffset ?? 0;
   const armCount = getSlotArmCount(layer);
-  const rearMateReach = getRearMateReach(drawLength, armCount, config.slotMode);
+  const rearMateReach = Math.max(
+    getRearMateReach(drawLength, armCount, config.slotMode),
+    config.automaticSlotLength === false ? 0 : measuredRearReach
+  );
   const rearExtensionReach = Math.min(tiltExtensionLength, rearMateReach);
   const baseCrossTipInLength = Math.max(0.01, rearMateReach - rearExtensionReach);
-  const crossTipInLengthAdjustment = layer.slotCrossTipInLengthAdjustment ?? 0;
+  const crossTipInLengthAdjustment = (layer.slotCrossTipInLengthAdjustment ?? 0) * diameterScale;
   const crossTipInLength = Math.max(0.01, Math.min(rearMateReach, baseCrossTipInLength + crossTipInLengthAdjustment));
+  const baseSlotLength = drawLength + mateOverlap;
+  const mainSlotLength = drawLength + mateOverlap;
+  const mainSlotChamfer = Math.min(slotThickness / 2, mateOverlap);
 
   if (config.slotMode === '2-plane') {
     if (layerIndex === 0) {
@@ -1270,11 +1409,13 @@ const createSlotProfilesForLayer = (
   if (layerIndex === 0) {
     // Base: one full-width cut from origin outward past the arm end.
     slots.push({
-      length: drawLength,
+      length: baseSlotLength,
       width: slotThickness,
-      xOffset: -drawLength,
+      xOffset: -baseSlotLength,
       yOffset: 0,
       rotationDeg: -armAngle,
+      chamferStart: mainSlotChamfer,
+      chamferEnd: mainSlotChamfer,
     });
     return slots;
   }
@@ -1291,10 +1432,12 @@ const createSlotProfilesForLayer = (
       materialThickness + effectiveBoldnessForSlot + config.slotWidth + crossTipInWidthAdjustmentPerSide
     );
     slots.push({
-      length: drawLength,
+      length: mainSlotLength,
       width: crossMainSlotThickness,
       yOffset: 0,
       rotationDeg: -armAngle,
+      chamferStart: Math.min(crossMainSlotThickness / 2, mateOverlap),
+      chamferEnd: Math.min(crossMainSlotThickness / 2, mateOverlap),
     });
     // Tip-in: outer arm tip inward, stopping where tilt extension begins.
     slots.push({
@@ -1322,10 +1465,12 @@ const createSlotProfilesForLayer = (
     const tiltExtensionHalfChannel = Math.max(0.12, (tiltExtensionSlotThickness - tiltExtensionBridge) / 2);
 
     slots.push({
-      length: drawLength,
+      length: mainSlotLength,
       width: tiltMainSlotThickness,
       yOffset: 0,
       rotationDeg: -armAngle,
+      chamferStart: Math.min(tiltMainSlotThickness / 2, mateOverlap),
+      chamferEnd: Math.min(tiltMainSlotThickness / 2, mateOverlap),
     });
     // Opposite-arm extension: start at the origin and cut outward on the
     // negative-X arm for 75% of slotLength.
@@ -1357,19 +1502,19 @@ const createAngledSlotCuttersForLayer = (
   config: SnowflakeConfig,
   materialThickness: number,
   centerZ: number,
-  depthZ: number
+  depthZ: number,
+  modelDiameter = NOMINAL_MODEL_DIAMETER
 ): THREE_ACTUAL.BufferGeometry[] => {
   if (!config.slotEnabled) return [];
   if (config.slotMode === '2-plane' && enabledLayers.length < 2) return [];
   if (config.slotMode === '3-plane' && enabledLayers.length < 3) return [];
 
-  const modelDiameter = 190;
-  const lengthAdjustmentPerSide = layer.slotLengthAdjustment ?? 0;
+  const diameterScale = Math.max(0.25, Math.min(4, modelDiameter / NOMINAL_MODEL_DIAMETER));
   const widthAdjustmentPerSide = layer.slotWidthOffset ?? 0;
-  const adjLength = Math.max(2, config.slotLength + (lengthAdjustmentPerSide * 2));
-  const drawLength = Math.max(adjLength, (modelDiameter / 2) + 20);
+  const adjLength = getResolvedBaseSlotLength(config, layer, modelDiameter);
+  const drawLength = Math.max(2 * diameterScale, adjLength);
   const baseTiltExtensionLength = Math.max(0.01, adjLength * 0.6);
-  const tiltExtensionLengthAdjustment = layer.slotTiltExtensionLengthAdjustment ?? 0;
+  const tiltExtensionLengthAdjustment = (layer.slotTiltExtensionLengthAdjustment ?? 0) * diameterScale;
   const tiltExtensionLength = Math.max(0.01, baseTiltExtensionLength + tiltExtensionLengthAdjustment);
   const armAngle = layer.primary.rotationOffset ?? 0;
   const armCount = getSlotArmCount(layer);
@@ -1378,7 +1523,7 @@ const createAngledSlotCuttersForLayer = (
     (layer.secondaryEnabled && layer.secondary.enabled) ? (layer.secondary.thickness || 0) : 0,
   ];
   const maxLayerTextThickness = Math.max(0, ...enabledTextThicknesses);
-  const effectiveBoldnessForSlot = Math.max(0, (config.globalStrokeWeight || 0) + (maxLayerTextThickness - 1.0));
+  const effectiveBoldnessForSlot = 0;
   const slotThickness = Math.max(
     0.1,
     materialThickness + effectiveBoldnessForSlot + config.slotWidth + widthAdjustmentPerSide
@@ -1390,8 +1535,10 @@ const createAngledSlotCuttersForLayer = (
   const rearMateReach = getRearMateReach(drawLength, armCount, config.slotMode);
   const rearExtensionReach = Math.min(tiltExtensionLength, rearMateReach);
   const baseCrossTipInLength = Math.max(0.01, rearMateReach - rearExtensionReach);
-  const crossTipInLengthAdjustment = layer.slotCrossTipInLengthAdjustment ?? 0;
+  const crossTipInLengthAdjustment = (layer.slotCrossTipInLengthAdjustment ?? 0) * diameterScale;
   const crossTipInLength = Math.max(0.01, Math.min(rearMateReach, baseCrossTipInLength + crossTipInLengthAdjustment));
+  const baseSlotLength = drawLength + mateOverlap;
+  const mainSlotLength = drawLength + mateOverlap;
 
   const cutters: THREE_ACTUAL.BufferGeometry[] = [];
 
@@ -1401,15 +1548,33 @@ const createAngledSlotCuttersForLayer = (
     slotThickness: number,
     rotXDeg: number,
     rotZDeg: number,
-    yOffset = 0
+    yOffset = 0,
+    endChamfer = Math.min(slotThickness / 2, mateOverlap)
   ) => {
     if (length <= 0.01 || slotThickness <= 0.01) return;
-    // Match legacy blade orientation: length along X, huge punch along Y,
-    // and slot opening thickness along Z.
-    const g = new THREE_ACTUAL.BoxGeometry(length, fullPunch, slotThickness);
-    // Keep slot placement in local XY before rotation, then apply global Z centering.
-    // If centerZ is applied before rotateX/rotateZ it gets rotated into side offsets.
-    g.translate(nearX + (length / 2), yOffset, 0);
+    // Build the cutter from a chamfered length/thickness profile so fallback
+    // CSG has the same slot contour as the baked Manifold profile.
+    const safeChamfer = Math.min(slotThickness / 2, Math.max(0, endChamfer), length / 2);
+    const halfThickness = slotThickness / 2;
+    const shape = new THREE_ACTUAL.Shape();
+    shape.moveTo(nearX + safeChamfer, halfThickness);
+    shape.lineTo(nearX + length - safeChamfer, halfThickness);
+    shape.lineTo(nearX + length, halfThickness - safeChamfer);
+    shape.lineTo(nearX + length, -halfThickness + safeChamfer);
+    shape.lineTo(nearX + length - safeChamfer, -halfThickness);
+    shape.lineTo(nearX + safeChamfer, -halfThickness);
+    shape.lineTo(nearX, -halfThickness + safeChamfer);
+    shape.lineTo(nearX, halfThickness - safeChamfer);
+    shape.closePath();
+    const g = new THREE_ACTUAL.ExtrudeGeometry(shape, {
+      depth: fullPunch,
+      bevelEnabled: false,
+      steps: 1,
+      curveSegments: 2,
+    });
+    g.translate(0, 0, -fullPunch / 2);
+    g.rotateX(Math.PI / 2);
+    g.translate(0, yOffset, 0);
     g.rotateX((rotXDeg * Math.PI) / 180);
     g.rotateZ((rotZDeg * Math.PI) / 180);
     g.translate(0, 0, centerZ);
@@ -1427,11 +1592,11 @@ const createAngledSlotCuttersForLayer = (
 
   if (layerIndex === 0) {
     // Base slot angle tuned to match Tilt insertion direction.
-    addCutter(-drawLength, drawLength, slotThickness, 240, -armAngle, 0);
+    addCutter(-baseSlotLength, baseSlotLength, slotThickness, 240, -armAngle, 0);
     if (config.slotMode === '3-plane' && armCount % 2 !== 0) {
       // Odd arm counts have no true opposite arm. Add a complementary X-mate
       // blade on the same rear reach so Cross/Tilt can still seat cleanly.
-      addCutter(-rearMateReach, rearMateReach, slotThickness, 120, -armAngle, 0);
+      addCutter(-rearMateReach - mateOverlap, rearMateReach + mateOverlap, slotThickness, 120, -armAngle, 0);
     }
     return cutters;
   }
@@ -1448,9 +1613,9 @@ const createAngledSlotCuttersForLayer = (
       materialThickness + effectiveBoldnessForSlot + config.slotWidth + crossTipInWidthAdjustmentPerSide
     );
 
-    addCutter(0, drawLength, crossMainSlotThickness, 240, -armAngle, 0);
+    addCutter(0, mainSlotLength, crossMainSlotThickness, 240, -armAngle, 0);
     // Tip-in X-blade: from outer tip inward, stopping where tilt extension begins.
-    // Use paired 240°/120° blades so the entry cut aligns with the crossing mate.
+    // Use paired 240Ã‚Â°/120Ã‚Â° blades so the entry cut aligns with the crossing mate.
     addCutter(-rearMateReach, crossTipInLength, crossTipInSlotThickness, 240, -armAngle, 0);
     addCutter(-rearMateReach, crossTipInLength, crossTipInSlotThickness, 120, -armAngle, 0);
     return cutters;
@@ -1470,8 +1635,8 @@ const createAngledSlotCuttersForLayer = (
     const tiltExtensionBridge = Math.min(0.4, Math.max(0.15, tiltExtensionSlotThickness * 0.08));
     const tiltExtensionHalfChannel = Math.max(0.12, (tiltExtensionSlotThickness - tiltExtensionBridge) / 2);
 
-    addCutter(0, drawLength, tiltMainSlotThickness, 240, -armAngle, 0);
-    addCutter(0, drawLength, tiltMainSlotThickness, 120, -armAngle, 0);
+    addCutter(0, mainSlotLength, tiltMainSlotThickness, 240, -armAngle, 0);
+    addCutter(0, mainSlotLength, tiltMainSlotThickness, 120, -armAngle, 0);
     // Opposite-arm extension from origin outward for 75% of slotLength.
     addCutter(
       -(rearExtensionReach + mateOverlap),
@@ -1511,7 +1676,8 @@ const createBakedBridgePlanesForLayer = (
   depthZ: number,
   meshMinX: number,
   meshMaxX: number,
-  sourceGeoForContact: THREE_ACTUAL.BufferGeometry
+  sourceGeoForContact: THREE_ACTUAL.BufferGeometry,
+  modelDiameter = NOMINAL_MODEL_DIAMETER
 ): THREE_ACTUAL.BufferGeometry[] => {
   if (!config.slotEnabled || config.slotBridgesEnabled === false || !layer.slotBridgeEnabled) return [];
 
@@ -1521,7 +1687,7 @@ const createBakedBridgePlanesForLayer = (
     (layer.secondaryEnabled && layer.secondary.enabled) ? (layer.secondary.thickness || 0) : 0,
   ];
   const maxLayerTextThickness = Math.max(0, ...enabledTextThicknesses);
-  const effectiveBoldnessForSlot = Math.max(0, (config.globalStrokeWeight || 0) + (maxLayerTextThickness - 1.0));
+  const effectiveBoldnessForSlot = 0;
   const slotThickness = Math.max(
     0.1,
     materialThickness + effectiveBoldnessForSlot + config.slotWidth + widthAdjustmentPerSide
@@ -1530,12 +1696,12 @@ const createBakedBridgePlanesForLayer = (
   // Baked bridge mode is driven by the layer-level slotBridgeEnabled toggle.
   // Do not require explicit bridge segment entries in layer.slotBridges.
 
-  const modelDiameter = 190;
+  const diameterScale = Math.max(0.25, Math.min(4, modelDiameter / NOMINAL_MODEL_DIAMETER));
   const lengthAdjustmentPerSide = layer.slotLengthAdjustment ?? 0;
-  const adjLength = Math.max(2, config.slotLength + (lengthAdjustmentPerSide * 2));
-  const drawLength = Math.max(adjLength, (modelDiameter / 2) + 20);
+  const adjLength = getResolvedBaseSlotLength(config, layer, modelDiameter);
+  const drawLength = Math.max(2 * diameterScale, adjLength);
   const baseTiltExtensionLength = Math.max(0.01, adjLength * 0.6);
-  const tiltExtensionLengthAdjustment = layer.slotTiltExtensionLengthAdjustment ?? 0;
+  const tiltExtensionLengthAdjustment = (layer.slotTiltExtensionLengthAdjustment ?? 0) * diameterScale;
   const tiltExtensionLength = Math.max(0.01, baseTiltExtensionLength + tiltExtensionLengthAdjustment);
   const armAngle = layer.primary.rotationOffset ?? 0;
   const armCount = getSlotArmCount(layer);
@@ -1545,8 +1711,10 @@ const createBakedBridgePlanesForLayer = (
   const rearMateReach = getRearMateReach(drawLength, armCount, config.slotMode);
   const rearExtensionReach = Math.min(tiltExtensionLength, rearMateReach);
   const baseCrossTipInLength = Math.max(0.01, rearMateReach - rearExtensionReach);
-  const crossTipInLengthAdjustment = layer.slotCrossTipInLengthAdjustment ?? 0;
+  const crossTipInLengthAdjustment = (layer.slotCrossTipInLengthAdjustment ?? 0) * diameterScale;
   const crossTipInLength = Math.max(0.01, Math.min(rearMateReach, baseCrossTipInLength + crossTipInLengthAdjustment));
+  const baseSlotLength = drawLength + mateOverlap;
+  const mainSlotLength = drawLength + mateOverlap;
 
   const bridgeGeometries: THREE_ACTUAL.BufferGeometry[] = [];
   const seenBridgePlanes = new Set<string>();
@@ -1742,15 +1910,16 @@ const createBakedBridgePlanesForLayer = (
     // In manual mode, honor the user-selected width directly (with only a tiny
     // safety floor so subtraction cannot completely erase the bridge).
     const selectedManualWidth = manualBridgeWidthOverride ?? layer.slotBridgeManualWidth;
-    const baseBridgeThickness = layer.slotBridgeManualWidthEnabled
+    const hasManualBridgeOverride = layer.slotBridgeManualWidthEnabled || manualBridgeWidthOverride != null;
+    const baseBridgeThickness = hasManualBridgeOverride
       ? Math.max(minManualBridgeThicknessForCut, selectedManualWidth ?? autoBridgeThickness)
       : Math.max(autoBridgeThickness, requestedBridgeThickness);
-    // Paired 240°/120° cutter regions remove more of the bridge silhouette than
+    // Paired 240Ã‚Â°/120Ã‚Â° cutter regions remove more of the bridge silhouette than
     // single-cutter regions. Add a small local thickness boost so visible bridge
     // width remains consistent (cross main vs cross tip-in, tilt main consistency).
     // Manual width should map directly to final bridge thickness instead of
     // being masked by auto paired-cut compensation.
-    const bridgeThicknessMargin = layer.slotBridgeManualWidthEnabled
+    const bridgeThicknessMargin = hasManualBridgeOverride
       ? Math.max(minManualBridgeThicknessForCut, baseBridgeThickness)
       : Math.max(
           minBridgeThicknessForCut,
@@ -1781,6 +1950,47 @@ const createBakedBridgePlanesForLayer = (
     bridgeGeometries.push(g);
   };
 
+  const configuredBridges = getClearanceProtectedBridges(layer, slotThickness)
+    .filter((bridge) => bridge.enabled);
+  if (configuredBridges.length > 0) {
+    const customProfiles = createSlotProfilesForLayer(
+      layer,
+      layerIndex,
+      enabledLayers,
+      config,
+      materialThickness,
+      modelDiameter
+    );
+
+    customProfiles.forEach((profile) => {
+      const profileLength = Math.max(0.01, profile.length ?? 0);
+      const profileStart = profile.xOffset ?? 0;
+      const profileRotation = profile.rotationDeg ?? 0;
+      configuredBridges.forEach((bridgeConfig) => {
+        const bridgeLength = Math.max(0.2, Math.min(profileLength, bridgeConfig.length * diameterScale));
+        const bridgeCenter = profileStart + (profileLength * bridgeConfig.positionPct) / 100;
+        addBridgePlane(
+          bridgeCenter - bridgeLength / 2,
+          bridgeLength,
+          bridgeConfig.width * diameterScale,
+          0,
+          profileRotation,
+          (profile.yOffset ?? 0) + bridgeConfig.edgeOffset,
+          false,
+          0,
+          0,
+          bridgeConfig.clearanceMargin,
+          false,
+          true,
+          profile.width ?? slotThickness,
+          widthAdjustmentPerSide,
+          bridgeConfig.width * diameterScale
+        );
+      });
+    });
+    return bridgeGeometries;
+  }
+
   if (config.slotMode === '2-plane') {
     if (layerIndex === 0) {
       addBridgePlane(0, drawLength, slotThickness, 90, -armAngle, 0);
@@ -1791,9 +2001,9 @@ const createBakedBridgePlanesForLayer = (
   }
 
   if (layerIndex === 0) {
-    addBridgePlane(-drawLength, drawLength, slotThickness, 240, -armAngle, 0);
+    addBridgePlane(-baseSlotLength, baseSlotLength, slotThickness, 240, -armAngle, 0);
     if (config.slotMode === '3-plane' && armCount % 2 !== 0) {
-      addBridgePlane(-rearMateReach, rearMateReach, slotThickness, 120, -armAngle, 0);
+      addBridgePlane(-rearMateReach - mateOverlap, rearMateReach + mateOverlap, slotThickness, 120, -armAngle, 0);
     }
     return bridgeGeometries;
   }
@@ -1814,7 +2024,7 @@ const createBakedBridgePlanesForLayer = (
 
     addBridgePlane(
       0,
-      drawLength,
+      mainSlotLength,
       crossMainSlotThickness,
       240,
       -armAngle,
@@ -1894,7 +2104,7 @@ const createBakedBridgePlanesForLayer = (
     const uniformTiltBoost = Math.max(1.25, tiltMainSlotThickness * 0.35);
     const uniformTiltAutoWidthExtra = 2.0;
     const uniformTiltSafetyMargin = 0.55;
-    // Tilt bridges face dual-angle X-cut (240° + 120°), so boost thickness to survive both cutters
+    // Tilt bridges face dual-angle X-cut (240Ã‚Â° + 120Ã‚Â°), so boost thickness to survive both cutters
     const tiltBridgeThicknessBoost = Math.max(1.8, tiltMainSlotThickness * 0.55);
     const tiltBridgeThickness = tiltMainSlotThickness + tiltBridgeThicknessBoost;
     // Center run is where the 240/120 cutters overlap the most, so bias extra there.
@@ -2081,7 +2291,13 @@ const applyWatertightSlotCuts = async (
   
   // Slotted planes are extruded to exactly extrusionDepth (bevel is carved inside it).
   const materialThickness = config.extrusionDepth;
-  const profiles = createSlotProfilesForLayer(layer, layerIndex, enabledLayers, config, materialThickness);
+  const modelDiameter = getGeometryDiameter(layerGeo);
+  const measuredRearReach = measureRearReach(
+    layerGeo,
+    -(layer.primary.rotationOffset ?? 0),
+    1e6
+  ) + 0.5;
+  const profiles = createSlotProfilesForLayer(layer, layerIndex, enabledLayers, config, materialThickness, modelDiameter, measuredRearReach);
   if (profiles.length === 0) {
     return ensureClosedPassthrough(layerGeo, `${layer.name} slot bypass base`);
   }
@@ -2101,19 +2317,38 @@ const applyWatertightSlotCuts = async (
         config,
         materialThickness,
         layerCenterZ,
-        fallbackDepth
+        fallbackDepth,
+        modelDiameter
       )
     : [];
 
   const cutters = angledCutters.length > 0
     ? angledCutters
     : profiles.map((p) => {
-        const g = new THREE_ACTUAL.BoxGeometry(
-          Math.max(0.01, p.length),
-          Math.max(0.01, p.width),
-          fallbackDepth
-        );
-        g.translate((p.length / 2) + (p.xOffset ?? 0), p.yOffset ?? 0, layerCenterZ);
+        const length = Math.max(0.01, p.length);
+        const width = Math.max(0.01, p.width);
+        const xStart = p.xOffset ?? 0;
+        const xEnd = xStart + length;
+        const centerY = (p.yOffset ?? 0) - (width / 2);
+        const startChamfer = Math.min(width / 2, Math.max(0, p.chamferStart ?? 0), length / 2);
+        const endChamfer = Math.min(width / 2, Math.max(0, p.chamferEnd ?? 0), length / 2);
+        const shape = new THREE_ACTUAL.Shape();
+        shape.moveTo(xStart + startChamfer, centerY + (width / 2));
+        shape.lineTo(xEnd - endChamfer, centerY + (width / 2));
+        shape.lineTo(xEnd, centerY + (width / 2) - endChamfer);
+        shape.lineTo(xEnd, centerY - (width / 2) + endChamfer);
+        shape.lineTo(xEnd - endChamfer, centerY - (width / 2));
+        shape.lineTo(xStart + startChamfer, centerY - (width / 2));
+        shape.lineTo(xStart, centerY - (width / 2) + startChamfer);
+        shape.lineTo(xStart, centerY + (width / 2) - startChamfer);
+        shape.closePath();
+        const g = new THREE_ACTUAL.ExtrudeGeometry(shape, {
+          depth: fallbackDepth,
+          bevelEnabled: false,
+          steps: 1,
+          curveSegments: 2,
+        });
+        g.translate(0, 0, layerCenterZ - (fallbackDepth / 2));
         g.rotateZ(((p.rotationDeg ?? 0) * Math.PI) / 180);
         return g;
       });
@@ -2137,7 +2372,8 @@ const applyWatertightSlotCuts = async (
       layerDepth,
       layerBounds ? layerBounds.min.x : Number.NEGATIVE_INFINITY,
       layerBounds ? layerBounds.max.x : Number.POSITIVE_INFINITY,
-      layerForCut
+      layerForCut,
+      modelDiameter
     );
 
     console.debug(
@@ -2398,8 +2634,27 @@ const applyWatertightSlotCuts = async (
         materialThickness
       );
 
+      let beveledBakedResult = bakedResult;
+      if (config.bevelEnabled && bevelPerSide > 1e-5) {
+        try {
+          beveledBakedResult = await manifoldSubtract(bakedResult, [], {
+            baseIsManifold: true,
+            filletRadius: bevelPerSide,
+            filletSegments: config.bevelType === 'chamfer' ? 1 : Math.min(config.bevelSegments, 5),
+            filletStyle: config.bevelType,
+            maxFilletBaseVertices: 200000,
+          });
+          bakedResult.dispose();
+        } catch (bevelErr) {
+          if (logTopologyWarnings) {
+            console.warn(`[slot-csg] Baked profile bevel failed for ${layer.name}; keeping flat baked result`, bevelErr);
+          }
+          beveledBakedResult = bakedResult;
+        }
+      }
+
       const validatedBaked = ensureClosedManifold(
-        bakedResult,
+        beveledBakedResult,
         `${layer.name} baked profile slot result`
       );
 
@@ -2413,6 +2668,9 @@ const applyWatertightSlotCuts = async (
 
       if (logTopologyWarnings) {
         console.warn(`[slot-csg] Baked profile slot path produced open geometry for ${layer.name}; retrying with fallback CSG`);
+      }
+      if (validatedBaked !== beveledBakedResult) {
+        beveledBakedResult.dispose();
       }
     } catch (bakedErr) {
       if (bakedErr instanceof DOMException && bakedErr.name === 'AbortError') {
@@ -2432,7 +2690,7 @@ const applyWatertightSlotCuts = async (
       return fallback;
     }
 
-    // Check topology BEFORE running surgical repair — surgical repair can break manifold
+    // Check topology BEFORE running surgical repair Ã¢â‚¬â€ surgical repair can break manifold
     // geometries (from manifoldUnion) by removing small triangles and creating new holes.
     const preCheckFailure = describeTopologyFailure(`${layer.name} fallback base`, layerForCut);
     if (!preCheckFailure) {
@@ -2588,17 +2846,17 @@ const applyWatertightSlotCuts = async (
 // //
 // //   net world angleX = localAngleX + layer.rotation3D.x
 // //
-// // For a slot to accept the Base plane (face normal = world-Z = 0°):
-// //   net world angleX must = 0°  →  localAngleX = -rx
+// // For a slot to accept the Base plane (face normal = world-Z = 0Ã‚Â°):
+// //   net world angleX must = 0Ã‚Â°  Ã¢â€ â€™  localAngleX = -rx
 // //
-// //   Base  (rx=  0°): local = 0°  but Base accepts Cross/Tilt, not itself.
-// //     blade at local 120° → net 120° → Cross face normal → accepts Cross ✓
-// //     blade at local 240° → net 240° → Tilt  face normal → accepts Tilt  ✓
-// //   Cross (rx=120°): local = -120° = 240° → net 360° = 0° → accepts Base ✓
-// //   Tilt  (rx=240°): local = -240° = 120° → net 360° = 0° → accepts Base ✓
+// //   Base  (rx=  0Ã‚Â°): local = 0Ã‚Â°  but Base accepts Cross/Tilt, not itself.
+// //     blade at local 120Ã‚Â° Ã¢â€ â€™ net 120Ã‚Â° Ã¢â€ â€™ Cross face normal Ã¢â€ â€™ accepts Cross Ã¢Å“â€œ
+// //     blade at local 240Ã‚Â° Ã¢â€ â€™ net 240Ã‚Â° Ã¢â€ â€™ Tilt  face normal Ã¢â€ â€™ accepts Tilt  Ã¢Å“â€œ
+// //   Cross (rx=120Ã‚Â°): local = -120Ã‚Â° = 240Ã‚Â° Ã¢â€ â€™ net 360Ã‚Â° = 0Ã‚Â° Ã¢â€ â€™ accepts Base Ã¢Å“â€œ
+// //   Tilt  (rx=240Ã‚Â°): local = -240Ã‚Â° = 120Ã‚Â° Ã¢â€ â€™ net 360Ã‚Â° = 0Ã‚Â° Ã¢â€ â€™ accepts Base Ã¢Å“â€œ
 // //
 // // CUT THICKNESS
-// //   materialThickness = extrusionDepth + (bevel ? bevelAmount×2 : 0)
+// //   materialThickness = extrusionDepth + (bevel ? bevelAmountÃƒâ€”2 : 0)
 // //   cutThickness      = materialThickness + boldness + 0.2 mm tolerance
 // // ============================================================
 
@@ -2635,14 +2893,14 @@ const applyWatertightSlotCuts = async (
 //   const drawLength    = Math.max(slotLength, (modelDiameter / 2) + 20);
 //   const FULL_PUNCH    = 500;
 
-//   // ── createBlade ──────────────────────────────────────────────────────
+//   // Ã¢â€â‚¬Ã¢â€â‚¬ createBlade Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 //   // Rectangular box cutter. Used for Base slots and Tilt main slot.
 //   // nearX    : X start of the blade (hub-relative)
 //   // length   : blade length along local X
 //   // thickness: slot opening width (= cutThickness), blade's thin Z axis
-//   // extent   : punch depth (blade's Y axis) — FULL_PUNCH for full-arm cuts
+//   // extent   : punch depth (blade's Y axis) Ã¢â‚¬â€ FULL_PUNCH for full-arm cuts
 //   // angleX   : local-space tilt around X axis (degrees)
-//   // angleZ   : azimuth — which arm the blade points along (degrees)
+//   // angleZ   : azimuth Ã¢â‚¬â€ which arm the blade points along (degrees)
 //   // yOffset  : optional offset in blade-local Y (= world-Y after all rotations)
 //   //            used to shift the blade to one side so it only cuts half the arm
 //   const createBlade = (
@@ -2663,14 +2921,14 @@ const applyWatertightSlotCuts = async (
 //     return geo;
 //   };
 
-//   // ── createTriangularBlade ─────────────────────────────────────────────
+//   // Ã¢â€â‚¬Ã¢â€â‚¬ createTriangularBlade Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 //   // Triangular-prism cutter. Used for the Cross main-slot V-notch.
 //   //
 //   // Cross-section in local XY:
-//   //   apex  at (nearX,  0)              ← hub end, zero width  = V tip
-//   //   base  at (nearX+length, ±halfY)   ← arm end, full width  = slot opens
+//   //   apex  at (nearX,  0)              Ã¢â€ Â hub end, zero width  = V tip
+//   //   base  at (nearX+length, Ã‚Â±halfY)   Ã¢â€ Â arm end, full width  = slot opens
 //   //
-//   // The prism is extruded along local Z by ±thickness/2 (= slot opening).
+//   // The prism is extruded along local Z by Ã‚Â±thickness/2 (= slot opening).
 //   //
 //   // After rotateX(angleX) + rotateZ(angleZ) and the worker's rotation,
 //   // this carves a slot that is zero-wide at the hub (leaving the triangular
@@ -2716,12 +2974,12 @@ const applyWatertightSlotCuts = async (
 //     return geo;
 //   };
 
-//   // ════════════════════════════════════════════════════════════════════
+//   // Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 //   // 2-PLANE ASSEMBLY
-//   // ════════════════════════════════════════════════════════════════════
+//   // Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 //   if (numPlanes === 2) {
 //     if (layer.slotType === 'half-back') {
-//       slots.push(createBlade(0, drawLength, cutThickness, FULL_PUNCH, 90, -angle));
+//       slots.push(createBlade(0, mainSlotLength, cutThickness, FULL_PUNCH, 90, -angle));
 //     } else if (layer.slotType === 'half-front') {
 //       slots.push(createBlade(0, drawLength, cutThickness, FULL_PUNCH, 90, -(angle + 180)));
 //     } else {
@@ -2730,33 +2988,33 @@ const applyWatertightSlotCuts = async (
 //     return slots;
 //   }
 
-//   // ════════════════════════════════════════════════════════════════════
+//   // Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 //   // 3-PLANE ASSEMBLY  (reference: App-Clean_slots.tsx)
-//   // ════════════════════════════════════════════════════════════════════
+//   // Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 //   if (numPlanes === 3) {
 //     const layerIndex = enabledLayers.findIndex(l => l.id === layer.id);
-//     console.log(`🔧 Slot gen: "${layer.name}" id="${layer.id}" slotType="${layer.slotType}" → layerIndex=${layerIndex} of ${numPlanes}`);
+//     console.log(`Ã°Å¸â€Â§ Slot gen: "${layer.name}" id="${layer.id}" slotType="${layer.slotType}" Ã¢â€ â€™ layerIndex=${layerIndex} of ${numPlanes}`);
 
-//     // ── L0: BASE PLANE ───────────────────────────────────────────────
-//     // Two angled blades: one at 120° accepts Cross, one at 240° accepts Tilt.
+//     // Ã¢â€â‚¬Ã¢â€â‚¬ L0: BASE PLANE Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+//     // Two angled blades: one at 120Ã‚Â° accepts Cross, one at 240Ã‚Â° accepts Tilt.
 //     if (layerIndex === 0) {
 //       slots.push(createBlade(0, drawLength, cutThickness, cutDepth, 120, -angle));
 //       slots.push(createBlade(0, drawLength, cutThickness, cutDepth, 240, -angle));
 //       return slots;
 //     }
 
-//     // ── L1: CROSS PLANE ──────────────────────────────────────────────
-//     // Triangular prism cutter — creates V-notch (triangular point at hub).
+//     // Ã¢â€â‚¬Ã¢â€â‚¬ L1: CROSS PLANE Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+//     // Triangular prism cutter Ã¢â‚¬â€ creates V-notch (triangular point at hub).
 //     //
 //     // The prism is WIDE at the hub (X=0) and TAPERS to an apex at slotLength.
 //     // This removes material from both sides of the arm near the center,
 //     // leaving the arm body as a triangular point at the hub. (yellow lines)
 //     //
 //     // Prism cross-section (local Y axis = arm height after rotations):
-//     //   hub end  (X=0):         ±halfY wide  → max cut, arm body = point
-//     //   slot end (X=slotLength): 0 wide       → no cut, arm body = full rect
+//     //   hub end  (X=0):         Ã‚Â±halfY wide  Ã¢â€ â€™ max cut, arm body = point
+//     //   slot end (X=slotLength): 0 wide       Ã¢â€ â€™ no cut, arm body = full rect
 //     //
-//     // local angleX=240° → worker +120° → net 0° = Base face normal ✓
+//     // local angleX=240Ã‚Â° Ã¢â€ â€™ worker +120Ã‚Â° Ã¢â€ â€™ net 0Ã‚Â° = Base face normal Ã¢Å“â€œ
 //     if (layerIndex === 1) {
 //       const H = FULL_PUNCH / 2;
 //       const X0 = 0;
@@ -2796,7 +3054,7 @@ const applyWatertightSlotCuts = async (
 //       return slots;
 //     }
 
-//     // ── L2: TILT PLANE ───────────────────────────────────────────────
+//     // Ã¢â€â‚¬Ã¢â€â‚¬ L2: TILT PLANE Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 //     // Single rectangular blade, shifted entirely to one Y side.
 //     // This creates a single clean diagonal face on the tilt arm. (red lines)
 //     //
@@ -2804,7 +3062,7 @@ const applyWatertightSlotCuts = async (
 //     // (the lower half of the arm when viewed in world space), leaving the
 //     // upper half intact and creating the angled face at the cut boundary.
 //     //
-//     // local angleX=120° → worker +240° → net 0° = Base face normal ✓
+//     // local angleX=120Ã‚Â° Ã¢â€ â€™ worker +240Ã‚Â° Ã¢â€ â€™ net 0Ã‚Â° = Base face normal Ã¢Å“â€œ
 //     if (layerIndex === 2) {
 //       slots.push(createBlade(
 //         0,
@@ -2818,12 +3076,12 @@ const applyWatertightSlotCuts = async (
 //       return slots;
 //     }
 
-//     console.warn(`  ⚠️ layerIndex=${layerIndex} unresolved for "${layer.name}", using fallback`);
+//     console.warn(`  Ã¢Å¡Â Ã¯Â¸Â layerIndex=${layerIndex} unresolved for "${layer.name}", using fallback`);
 //     slots.push(createBlade(0, drawLength, cutThickness, cutDepth, 120, -angle));
 //     return slots;
 //   }
 
-//   // ── 4+ planes fallback ───────────────────────────────────────────────────
+//   // Ã¢â€â‚¬Ã¢â€â‚¬ 4+ planes fallback Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 //   slots.push(createBlade(-drawLength / 2, drawLength, cutThickness, FULL_PUNCH, 90, -angle));
 //   return slots;
 // };
@@ -2894,7 +3152,7 @@ const applyWatertightSlotCuts = async (
 //     geo.computeVertexNormals();
 
 //     const r = getTopologyReport(geo);
-//     console.log(`✅ Post-process: boundary=${r.boundaryEdges} nonManifold=${r.nonManifoldEdges}`);
+//     console.log(`Ã¢Å“â€¦ Post-process: boundary=${r.boundaryEdges} nonManifold=${r.nonManifoldEdges}`);
 //     return geo;
 //   } catch (err) {
 //     console.warn('postProcessCutGeometry failed, returning raw cut geo:', err);
@@ -2914,7 +3172,7 @@ const applyWatertightSlotCuts = async (
 //   const idx = geometry.index;
 //   const pos = geometry.attributes.position as THREE_ACTUAL.BufferAttribute;
 
-//   // Build edge → face-count map
+//   // Build edge Ã¢â€ â€™ face-count map
 //   const edgeCount = new Map<string, number>();
 //   const edgeDir   = new Map<string, [number, number]>();
 //   for (let i = 0; i < idx.count; i += 3) {
@@ -2997,7 +3255,7 @@ const applyWatertightSlotCuts = async (
 // }
 
 
-// // ─── applySlotCuts ───────────────────────────────────────────────────────────
+// // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ applySlotCuts Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 // const applySlotCuts = async (
 //   layerGeo: THREE_ACTUAL.BufferGeometry,
@@ -3035,7 +3293,7 @@ const applyWatertightSlotCuts = async (
 //   );
 //   if (slotGeometries.length === 0) return layerGeo;
 
-//   // ── Serialise base with CORRECT plural key names ─────────────────────────
+//   // Ã¢â€â‚¬Ã¢â€â‚¬ Serialise base with CORRECT plural key names Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 //   const baseData = {
 //     positions: Array.from(layerGeo.attributes.position.array as Float32Array),
 //     indices:   layerGeo.index
@@ -3043,7 +3301,7 @@ const applyWatertightSlotCuts = async (
 //       : null,
 //   };
 
-//   // ── Helper: build result from worker response + run B+C repair ───────────
+//   // Ã¢â€â‚¬Ã¢â€â‚¬ Helper: build result from worker response + run B+C repair Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 //   const buildResult = async (
 //     e: any,
 //     usedSlots: THREE_ACTUAL.BufferGeometry[]
@@ -3055,16 +3313,16 @@ const applyWatertightSlotCuts = async (
 //     }
 
 //     const report = getTopologyReport(rawGeo);
-//     console.log(`📊 Post-CSG topology [${layer.name}]:`, report);
+//     console.log(`Ã°Å¸â€œÅ  Post-CSG topology [${layer.name}]:`, report);
 
-//     // Run B+C: fill holes → attempt Manifold with wider merge tolerance
+//     // Run B+C: fill holes Ã¢â€ â€™ attempt Manifold with wider merge tolerance
 //     const repairedGeo = await postProcessCutGeometry(rawGeo, usedSlots);
 
 //     usedSlots.forEach(g => g.dispose());
 //     return repairedGeo;
 //   };
 
-//   // ── Fast AABB filter ──────────────────────────────────────────────────────
+//   // Ã¢â€â‚¬Ã¢â€â‚¬ Fast AABB filter Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 //   try {
 //     if (!layerGeo.boundingBox) layerGeo.computeBoundingBox();
 //     const layerBB = layerGeo.boundingBox ? layerGeo.boundingBox.clone() : null;
@@ -3119,7 +3377,7 @@ const applyWatertightSlotCuts = async (
 //     console.warn('Slot AABB filtering failed, proceeding with full CSG', e);
 //   }
 
-//   // ── Fallback: send all slots ──────────────────────────────────────────────
+//   // Ã¢â€â‚¬Ã¢â€â‚¬ Fallback: send all slots Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 //   const allSlotsData = slotGeometries.map(g => ({
 //     positions: Array.from(g.attributes.position.array as Float32Array),
 //     indices:   g.index
@@ -3372,7 +3630,7 @@ const App: React.FC = () => {
   // Debug: Track app initialization only once
   useEffect(() => {
     const appStartTime = performance.now();
-    if (APP_DEBUG) console.log(`🚀 App Debug: App component starting initialization at ${appStartTime.toFixed(2)}ms`);
+    if (APP_DEBUG) console.log(`Ã°Å¸Å¡â‚¬ App Debug: App component starting initialization at ${appStartTime.toFixed(2)}ms`);
 
     // Auto-update functionality - Temporarily commented out due to rendering issues
     // const checkForUpdates = async () => {
@@ -3477,7 +3735,7 @@ const App: React.FC = () => {
     // setTimeout(checkForUpdates, 3000); // Check after 3 seconds
 
     return () => {
-      if (APP_DEBUG) console.log(`🚀 App Debug: App component unmounted after ${(performance.now() - appStartTime).toFixed(2)}ms`);
+      if (APP_DEBUG) console.log(`Ã°Å¸Å¡â‚¬ App Debug: App component unmounted after ${(performance.now() - appStartTime).toFixed(2)}ms`);
     };
   }, []);
 
@@ -3572,6 +3830,8 @@ const App: React.FC = () => {
     }
   })());
   const exportEstimateRunSeqRef = useRef(0);
+  const hubBevelLimitByLayerRef = useRef(new Map<string, { applied: number; requested: number; by: 'depth' | 'wall' } | null>());
+  const [hubBevelLimit, setHubBevelLimit] = useState<{ applied: number; requested: number; by: 'depth' | 'wall' } | null>(null);
 
   const initialState = useMemo(() => loadStartupState(), []);
 
@@ -3596,8 +3856,34 @@ const App: React.FC = () => {
   const [showTooltips, setShowTooltips] = useState<boolean>(true);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
   const [showAboutModal, setShowAboutModal] = useState(false);
+  const [tutorialDisabled, setTutorialDisabled] = useState<boolean>(() => loadTutorialDisabled());
+  const [showTutorial, setShowTutorial] = useState<boolean>(() => !loadTutorialDisabled());
+  const [tutorialAdvanced, setTutorialAdvanced] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('snowflake_tutorial_advanced') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const updateTutorialAdvanced = useCallback((advanced: boolean) => {
+    setTutorialAdvanced(advanced);
+    try {
+      localStorage.setItem('snowflake_tutorial_advanced', advanced ? '1' : '0');
+    } catch (error) {
+      console.warn('Failed to save tutorial mode', error);
+    }
+  }, []);
+  const updateTutorialDisabled = useCallback((disabled: boolean) => {
+    setTutorialDisabled(disabled);
+    try {
+      localStorage.setItem(TUTORIAL_DISABLED_STORAGE_KEY, disabled ? '1' : '0');
+    } catch (error) {
+      console.warn('Failed to save tutorial preference', error);
+    }
+  }, []);
+  const [appearance, setAppearance] = useState<AppearanceSettings>(() => loadAppearanceSettings());
   const [aboutUpdateCheckSignal, setAboutUpdateCheckSignal] = useState(0);
-  const [shortcutsModalTab, setShortcutsModalTab] = useState<'shortcuts' | 'apikey' | 'aiscope' | 'settings'>('shortcuts');
+  const [shortcutsModalTab, setShortcutsModalTab] = useState<'shortcuts' | 'apikey' | 'aiscope' | 'settings' | 'appearance'>('shortcuts');
   const [shortcutsModalMessage, setShortcutsModalMessage] = useState<string | null>(null);
 
   const [history, setHistory] = useState<SnowflakeConfig[]>([initialState]);
@@ -3622,6 +3908,22 @@ const App: React.FC = () => {
   const [dynamicFonts, setDynamicFonts] = useState<Record<string, string>>(FONT_TTF_URLS);
   const [fontsPreloaded, setFontsPreloaded] = useState(false);
 
+  const updateAppearance = useCallback((changes: Partial<AppearanceSettings>) => {
+    setAppearance((current) => ({ ...current, ...changes }));
+  }, []);
+
+  const resetAppearance = useCallback(() => {
+    setAppearance({ ...DEFAULT_APPEARANCE });
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify(appearance));
+    } catch (error) {
+      console.warn('Failed to save appearance settings', error);
+    }
+  }, [appearance]);
+
   // Font preloader hook
   const { preloadAllFonts, getFont, isFontLoaded } = useFontPreloader();
 
@@ -3635,14 +3937,24 @@ const App: React.FC = () => {
     window.electronAPI.onLoadProject?.(() => handleLoadProject());
 
     // Edit
-    window.electronAPI.onUndo?.(() => handleUndo());
-    window.electronAPI.onRedo?.(() => handleRedo());
+    window.electronAPI.onUndo?.(() => undo());
+    window.electronAPI.onRedo?.(() => redo());
     window.electronAPI.onResetApp?.(() => handleResetApp());
 
     // View
-    window.electronAPI.onToggleView?.(() => handleToggle2D3D?.());
-    window.electronAPI.onForceRegenerate?.(() => handleForceRegenerate?.());
-    window.electronAPI.onResetZoom?.(() => handleResetZoom?.());
+    window.electronAPI.onToggleView?.(() => {
+      setViewMode((mode) => mode === '2d' ? '3d' : '2d');
+    });
+    window.electronAPI.onForceRegenerate?.(() => {
+      clearGeometryCache();
+      clearSlotCutResultCache();
+      modelCache3D.clear();
+      setForceRefresh3DToken((prev) => prev + 1);
+      showNotification('Models Regenerated', 'info', 1000);
+    });
+    window.electronAPI.onResetZoom?.(() => {
+      showNotification('Zoom reset is available from the 3D view controls.', 'info', 1500);
+    });
 
     // Help
     window.electronAPI.onAbout?.(() => {
@@ -3737,7 +4049,7 @@ const App: React.FC = () => {
   const { exportWithProgress } = useExportManager();
   const { notifications, showNotification } = useUserFeedback();
 
-  // Stable debounced setters — backed by refs so they never change identity
+  // Stable debounced setters Ã¢â‚¬â€ backed by refs so they never change identity
   // and never reset their internal timer on re-render.
   const debounce150Timer = useRef<NodeJS.Timeout | null>(null);
   const debounce500Timer = useRef<NodeJS.Timeout | null>(null);
@@ -3781,7 +4093,7 @@ const App: React.FC = () => {
     cancelAllSlotCuts({ includePreview: true, terminateCSGWorker: true });
   }, [cancelAllSlotCuts]);
 
-  // Escape key handler to stop ongoing computation — placed after cancelAllSlotCuts is declared
+  // Escape key handler to stop ongoing computation Ã¢â‚¬â€ placed after cancelAllSlotCuts is declared
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && (isComputingSlots || isProcessing3D)) {
@@ -4060,7 +4372,7 @@ const App: React.FC = () => {
       return canonical.clone();
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
-        console.log(`🛑 Slot cut cancelled: ${key}`);
+        console.log(`Ã°Å¸â€ºâ€˜ Slot cut cancelled: ${key}`);
       }
       throw err;
     } finally {
@@ -4182,6 +4494,10 @@ const App: React.FC = () => {
       modelCache3D.clear();
       lastQuality.current = updates.quality!;
     }
+    if ('slotBridgesEnabled' in updates) {
+      clearSlotCutResultCache();
+      modelCache3D.clear();
+    }
     // if ('slotEnabled' in updates || 'slotLength' in updates || ...) {
     //   clearSlotCache(); slotCutCache.clear();
     // }
@@ -4224,18 +4540,6 @@ const App: React.FC = () => {
         };
       }
 
-      const hasExplicitGlobalBridgeToggle = Object.prototype.hasOwnProperty.call(updates, 'slotBridgesEnabled');
-      const slotWillBeEnabled = next.slotEnabled === true;
-
-      // Default behavior: when slot cutting is enabled, global slot bridging
-      // should come up enabled unless the current update explicitly toggles it.
-      if (slotWillBeEnabled && !hasExplicitGlobalBridgeToggle && next.slotBridgesEnabled === false) {
-        next = {
-          ...next,
-          slotBridgesEnabled: true,
-        };
-      }
-
       const prevGlobalBridgesEnabled = prev.slotBridgesEnabled !== false;
       const nextGlobalBridgesEnabled = next.slotBridgesEnabled !== false;
       const toggledGlobalBridgesWhileSlotting =
@@ -4244,9 +4548,12 @@ const App: React.FC = () => {
         prevGlobalBridgesEnabled !== nextGlobalBridgesEnabled;
 
       if (toggledGlobalBridgesWhileSlotting) {
-        const nextMeshKey = makeModelCacheKey(next, next.quality);
-        const hasCachedTargetMesh = modelCache3D.has(nextMeshKey);
-        needsHardRefreshAfterUpdate = !hasCachedTargetMesh;
+        // Always replace the rendered snapshot when bridge state changes.
+        // Reusing an existing opposite-state cache can leave the visible scene
+        // showing bridges until an unrelated setting triggers regeneration.
+        needsHardRefreshAfterUpdate = true;
+        setConfig3D(next);
+        setRendered3DIfChanged(next);
       }
 
       // Detect manual toggle-only changes at layer level BEFORE normalization
@@ -4633,7 +4940,7 @@ const App: React.FC = () => {
     };
     ensureNotStopped();
 
-    // Full-config cache key — any property change invalidates the cache.
+    // Full-config cache key Ã¢â‚¬â€ any property change invalidates the cache.
     // Previously used a partial key that missed hub/abstract parameters,
     // causing 3D to show stale mesh when those values changed.
     const meshKey = makeModelCacheKey(config, (overrideQuality || config.quality), targetLayerIds);
@@ -4667,7 +4974,7 @@ const App: React.FC = () => {
       && qualityToUse === 'low';
     
     // For preview + slots: aggressively reduce vertex count to prevent manifold crashes
-    // and lag. Font glyphs × curve segments × bevel segments = millions of verts; preview
+    // and lag. Font glyphs Ãƒâ€” curve segments Ãƒâ€” bevel segments = millions of verts; preview
     // doesn't need export-quality smoothness.
     let qMult = 1;
     let curveSeg = 12;
@@ -4944,28 +5251,27 @@ const App: React.FC = () => {
     const font = await loadFont(fontName, url);
     ensureNotStopped();
     if (font) {
-      const scale = textGroup.fontSize / font.unitsPerEm;
-      const glyphs = font.stringToGlyphs(textGroup.text);
-
       // BOLD FONT VARIANT FALLBACK (E part of B+E)
       // If high stroke weight and bold variant available, try loading it
-      const totalStrokeWeight = (rendered3DConfig.globalStrokeWeight || 0) + (textGroup.thickness || 0);
+      const totalStrokeWeight = (config.globalStrokeWeight || 0) + (textGroup.thickness || 0);
       const boldUrl = BOLD_FONT_URLS[fontName];
       let finalFont = font;
 
       if (totalStrokeWeight >= BOLD_FONT_THRESHOLD && boldUrl) {
         try {
-          console.log(`🎯 Attempting bold font variant for ${fontName}`);
+          console.log(`Ã°Å¸Å½Â¯ Attempting bold font variant for ${fontName}`);
           const boldFont = await loadFont(`${fontName}-Bold`, boldUrl);
           ensureNotStopped();
           if (boldFont) {
             finalFont = boldFont;
-            console.log(`✅ Using bold font variant for ${fontName}`);
+            console.log(`Ã¢Å“â€¦ Using bold font variant for ${fontName}`);
           }
         } catch (boldError) {
-          console.warn(`⚠️ Bold font variant failed for ${fontName}, using regular with path offsetting`);
+          console.warn(`Ã¢Å¡Â Ã¯Â¸Â Bold font variant failed for ${fontName}, using regular with path offsetting`);
         }
       }
+      const scale = textGroup.fontSize / finalFont.unitsPerEm;
+      const glyphs = finalFont.stringToGlyphs(textGroup.text);
       let textShapes: THREE_ACTUAL.Shape[] = [];
       let nonTextShapes: THREE_ACTUAL.Shape[] = [];
       let currentX = 0;
@@ -5010,8 +5316,8 @@ const App: React.FC = () => {
       };
 
       if (shouldApplyBoldness) {
-        console.log('🎨 Applying boldness via bevel expansion:', {
-          globalStrokeWeight: rendered3DConfig.globalStrokeWeight,
+        console.log('Ã°Å¸Å½Â¨ Applying boldness via bevel expansion:', {
+          globalStrokeWeight: config.globalStrokeWeight,
           textThickness: textGroup.thickness,
           total: totalStrokeWeight,
           boldnessBevel,
@@ -5027,11 +5333,11 @@ const App: React.FC = () => {
         textGroup,
         textGroup.fontSize,
         effectiveDepth,
-        rendered3DConfig.bevelEnabled,
+        config.bevelEnabled,
         bevelPerSide,
-        rendered3DConfig.globalStrokeWeight,
+        config.globalStrokeWeight,
         textGroup.thickness,
-        rendered3DConfig.bevelType,
+        config.bevelType,
         textExtrudeSettings.bevelSegments,
         textExtrudeSettings.curveSegments,
       );
@@ -5043,7 +5349,7 @@ const App: React.FC = () => {
             let underlineGeo = null;
 
             if (uConf && uConf.enabled) {
-              const t = uConf.thickness + (rendered3DConfig.globalStrokeWeight || 0);
+              const t = uConf.thickness + (config.globalStrokeWeight || 0);
                 const halfT = t / 2;
                 const startX = textGroup.textX + uConf.startXOffset;
                 const endX = startX + uConf.length;
@@ -5176,7 +5482,7 @@ const App: React.FC = () => {
                   effectiveDepth,
                   underlineExtrudeSettings.bevelEnabled,
                   underlineExtrudeSettings.bevelSize,
-                  rendered3DConfig.globalStrokeWeight || 0
+                  config.globalStrokeWeight || 0
                 );
                 underlineGeo = getOrCreateGeometry(geometryCache.text, underlineKey, () => new THREE_ACTUAL.ExtrudeGeometry(underlineShapes, underlineExtrudeSettings));
             }
@@ -5244,39 +5550,46 @@ const App: React.FC = () => {
         }
       };
 
-      const processHubs = (hubs: HubConfig[]) => {
+      const processHubs = async (hubs: HubConfig[]) => {
          // ... (Keep existing hub logic but ensure centerZOffset is correct)
          const centerZOffset = -extrudeSettings.depth / 2;
-         hubs.filter(h => h.enabled).forEach(hub => {
+         let layerHubLimit: { applied: number; requested: number; by: 'depth' | 'wall' } | null = null;
+         for (const hub of hubs.filter(h => h.enabled)) {
              // ... (Shape generation code - same as original) ...
              const shape = new THREE_ACTUAL.Shape();
              const radius = !isNaN(hub.outerRadius) ? hub.outerRadius : 20;
-             const wallT = (!isNaN(hub.wallThickness) ? hub.wallThickness : 2) + rendered3DConfig.globalStrokeWeight;
+             const hubBoldness = Math.max(0, config.globalStrokeWeight || 0);
+             const baseWallThickness = !isNaN(hub.wallThickness) ? hub.wallThickness : 2;
+             const wallT = baseWallThickness + hubBoldness;
+             const outerRadius = radius + (hub.hollow ? 0 : hubBoldness / 2);
              const sRatio = !isNaN(hub.starRatio) ? hub.starRatio : 0.5;
              const amp = !isNaN(hub.oscillationAmplitude) ? hub.oscillationAmplitude : 5;
 
              const sides = hub.shape === 'star' ? Math.floor(hub.sides * 2) : (hub.shape === 'polygon' ? Math.floor(hub.sides) : 64);
              const isOsc = hub.shape === 'circle' && hub.oscillationEnabled;
-
-             const baseRes = Math.ceil( (hub.shape === 'circle' ? 128 : 64) * qMult );
+             // Fillet: the hub keeps its original outline and total thickness; the
+             // top/bottom edges round inward, so the bevel never adds material.
+             // manifoldFilletPrism reports any reduction it had to make.
+             const hubBevelRequested = config.bevelEnabled ? config.bevelAmount : 0;             const baseRes = Math.ceil( (hub.shape === 'circle' ? 128 : 64) * qMult );
              const oscRes = Math.ceil( Math.max(baseRes, hub.oscillationFrequency * 48 * qMult) );
              const res = isOsc ? oscRes : (hub.shape === 'circle' ? baseRes : sides);
 
-             for(let i=0; i<=res; i++) {
+             for(let i=0; i<res; i++) {
                  const angle = (i/res) * Math.PI * 2;
-                 let r = radius;
+                 let r = outerRadius;
                  if (hub.shape === 'star') r = (i%2 === 0) ? r : r * sRatio;
                  if (isOsc) r += Math.sin(angle * hub.oscillationFrequency) * amp;
                  const x = Math.cos(angle) * r;
                  const y = Math.sin(angle) * r;
                  if (i===0) shape.moveTo(x,y); else shape.lineTo(x,y);
              }
+             shape.closePath();
 
              if (hub.hollow) {
                  const hole = new THREE_ACTUAL.Path();
-                 for(let i=0; i<=res; i++) {
+                 for(let i=0; i<res; i++) {
                      const angle = (i/res) * Math.PI * 2;
-                     let r = radius - wallT;
+                     let r = outerRadius - wallT;
                      if (r < 0) r = 0.1;
                      if (hub.shape === 'star') r = (i%2 === 0) ? r : r * sRatio;
                      if (isOsc) r += Math.sin(angle * hub.oscillationFrequency) * amp;
@@ -5284,38 +5597,74 @@ const App: React.FC = () => {
                      const y = Math.sin(angle) * r;
                      if (i===0) hole.moveTo(x,y); else hole.lineTo(x,y);
                  }
+                 hole.closePath();
                  shape.holes.push(hole);
              }
 
              // Apply boldness to hub shapes using same approach as text
-             const hubStrokeWeight = (rendered3DConfig.globalStrokeWeight || 0);
+             const hubStrokeWeight = hubBoldness;
              const hubShapes = [shape];
-             if (hubStrokeWeight > 0.1) {
-               const boldedShapes = applyBoldnessToShapes([shape], hubStrokeWeight);
-               if (boldedShapes.length > 0) {
-                 // Replace the original shape with the bolded version
-                 const tempGeo = new THREE_ACTUAL.ExtrudeGeometry(boldedShapes, extrudeSettings);
-                 // Note: Shape doesn't have dispose method, cleanup handled by garbage collection
-                 return tempGeo;
-               }
-             }
 
-             const hubKey = makeHubKey(layer.id, hub, effectiveDepth, rendered3DConfig.bevelEnabled, bevelPerSide, rendered3DConfig.globalStrokeWeight);
-             const geo = getOrCreateGeometry(geometryCache.hubs, hubKey, () => new THREE_ACTUAL.ExtrudeGeometry(shape, extrudeSettings));
+             const hubKey = makeHubKey(
+               layer.id,
+               hub,
+               effectiveDepth,
+               config.bevelEnabled,
+               hubBevelRequested,
+               config.globalStrokeWeight
+             ) + `::fillet2::${config.bevelType}::${config.bevelSegments}::${curveSeg}`;
+             let geo: THREE_ACTUAL.BufferGeometry;
+             if (geometryCache.hubs.has(hubKey)) {
+               geo = geometryCache.hubs.get(hubKey)!.clone();
+             } else {
+               let info: { applied: number; by: 'depth' | 'wall' | null } = { applied: 0, by: null };
+               try {
+                 const result = await manifoldFilletPrism(
+                   shape,
+                   effectiveDepth,
+                   hubBevelRequested,
+                   config.bevelSegments,
+                   config.bevelType === 'chamfer',
+                   curveSeg
+                 );
+                 geo = result.geometry;
+                 info = { applied: result.appliedBevel, by: result.limitedBy };
+               } catch (filletErr) {
+                 console.warn('Hub fillet failed; using flat extrusion', filletErr);
+                 geo = new THREE_ACTUAL.ExtrudeGeometry(shape, { depth: effectiveDepth, bevelEnabled: false, curveSegments: curveSeg });
+               }
+               geometryCache.hubs.set(hubKey, geo.clone());
+               hubFilletInfoCache.set(hubKey, info);
+             }
+             const hubInfo = hubFilletInfoCache.get(hubKey);
+             if (hubInfo?.by && (!layerHubLimit || hubInfo.applied < layerHubLimit.applied)) {
+               layerHubLimit = { applied: hubInfo.applied, requested: hubBevelRequested, by: hubInfo.by };
+             }
 
              // Only add to layer geometries if it has vertices
              if (geo.attributes.position?.count > 0) {
                geo.rotateZ(hub.rotationOffset * Math.PI / 180);
-               geo.translate(0, 0, centerZOffset);
+               geo.translate(0, 0, -effectiveDepth / 2);
                layerGeometries.push(geo);
 
                addShapeInstances(
                  hubShapes,
                  composeMatrix2D(makeRotationMatrix2D(hub.rotationOffset * Math.PI / 180)),
-                 hubStrokeWeight
+                 0
                );
              }
-         });
+         }
+         hubBevelLimitByLayerRef.current.set(layer.id, layerHubLimit);
+         type HubLimit = { applied: number; requested: number; by: 'depth' | 'wall' };
+         const limits: HubLimit[] = [];
+         hubBevelLimitByLayerRef.current.forEach((v) => { if (v) limits.push(v); });
+         const nextLimit = limits.length ? limits.reduce((a, b) => (b.applied < a.applied ? b : a)) : null;
+         setHubBevelLimit((prev) => (
+           prev === nextLimit || (prev && nextLimit && prev.by === nextLimit.by
+             && Math.abs(prev.applied - nextLimit.applied) < 1e-6 && Math.abs(prev.requested - nextLimit.requested) < 1e-6)
+             ? prev
+             : nextLimit
+         ));
       };
 
       const processAbstracts = (abstracts: AbstractConfig[]) => {
@@ -5323,7 +5672,7 @@ const App: React.FC = () => {
           const centerZOffset = -extrudeSettings.depth / 2;
           // ... (Abstract generation code - reuse logic) ...
           abstracts.filter(a => a.enabled).forEach(abs => {
-               const effectiveThickness = abs.thickness + rendered3DConfig.globalStrokeWeight;
+               const effectiveThickness = abs.thickness + (config.globalStrokeWeight || 0);
                // ... (Fractal and Shape logic - assume copied from previous context or reuse existing)
                // For brevity, using the same robust logic structure as App.tsx
                if (abs.type === 'fractal') {
@@ -5514,34 +5863,32 @@ const App: React.FC = () => {
                };
                const normalShape = createAbstractShape(shapePoints);
                const abstractKey = makeAbstractKey(layer.id, abs, effectiveDepth, config.bevelEnabled, bevelPerSide, config.globalStrokeWeight);
-               const normalGeo = getOrCreateGeometry(geometryCache.abstracts, abstractKey + '_normal', () => new THREE_ACTUAL.ExtrudeGeometry(normalShape as any, extrudeSettings));
                const mirroredPoints = shapePoints.map((pt) => new THREE_ACTUAL.Vector2(pt.x, -pt.y));
                const mirroredShape = createAbstractShape(mirroredPoints);
 
                // Apply boldness to abstract shapes using same approach as text
                const abstractStrokeWeight = (config.globalStrokeWeight || 0);
-               let finalNormalShape: THREE_ACTUAL.Shape | THREE_ACTUAL.ExtrudeGeometry = normalShape;
-               let finalMirroredShape: THREE_ACTUAL.Shape | THREE_ACTUAL.ExtrudeGeometry = mirroredShape;
+               let finalNormalShape: THREE_ACTUAL.Shape = normalShape;
+               let finalMirroredShape: THREE_ACTUAL.Shape = mirroredShape;
 
                if (abstractStrokeWeight > 0.1) {
                  const boldedNormalShapes = applyBoldnessToShapes([normalShape], abstractStrokeWeight);
                  if (boldedNormalShapes.length > 0) {
-                   const tempGeo = new THREE_ACTUAL.ExtrudeGeometry(boldedNormalShapes, extrudeSettings);
-                   finalNormalShape = tempGeo; // Replace with bolded version
+                   finalNormalShape = boldedNormalShapes[0];
                  }
 
                  if (mirroredShape) {
                    const boldedMirroredShapes = applyBoldnessToShapes([mirroredShape], abstractStrokeWeight);
                    if (boldedMirroredShapes.length > 0) {
-                     const tempGeo = new THREE_ACTUAL.ExtrudeGeometry(boldedMirroredShapes as any, extrudeSettings);
-                     finalMirroredShape = tempGeo; // Replace with bolded version
+                     finalMirroredShape = boldedMirroredShapes[0];
                    }
                  }
                }
 
-               const mirroredGeo = getOrCreateGeometry(geometryCache.abstracts, abstractKey + '_mirrored', () => new THREE_ACTUAL.ExtrudeGeometry(finalMirroredShape as any, extrudeSettings));
-               const unionNormalShapes = [normalShape];
-               const unionMirroredShapes = [mirroredShape];
+               const normalGeo = getOrCreateGeometry(geometryCache.abstracts, abstractKey + '_normal', () => new THREE_ACTUAL.ExtrudeGeometry(finalNormalShape, extrudeSettings));
+               const mirroredGeo = getOrCreateGeometry(geometryCache.abstracts, abstractKey + '_mirrored', () => new THREE_ACTUAL.ExtrudeGeometry(finalMirroredShape, extrudeSettings));
+               const unionNormalShapes = [finalNormalShape];
+               const unionMirroredShapes = [finalMirroredShape];
                const angleStep = (Math.PI * 2) / abs.arms;
 
                // Only push abstract geometries if they have vertices
@@ -5582,7 +5929,7 @@ const App: React.FC = () => {
           });
       };
 
-      // ── processImages: extrude imported SVG paths as arm instances ──────
+      // Ã¢â€â‚¬Ã¢â€â‚¬ processImages: extrude imported SVG paths as arm instances Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
       /*
       const processImages = (images: ImageConfig[]) => {
         if (!images || images.length === 0) return;
@@ -5594,7 +5941,7 @@ const App: React.FC = () => {
             const rawW = img.svgWidth || 100;
             const rawH = img.svgHeight || 100;
 
-            // Build SVG string — apply svgRotation and flip in SVG space first,
+            // Build SVG string Ã¢â‚¬â€ apply svgRotation and flip in SVG space first,
             // exactly mirroring what the 2D pipeline does inside its svgGroup transform.
             const svgRotDeg = img.svgRotation || 0;
             const cx = rawW / 2;
@@ -5623,18 +5970,18 @@ const App: React.FC = () => {
             if (rawShapes.length === 0) return;
 
             // bboxCenterY matches the 2D pipeline's bboxCenterY = rawH / 2
-            // (the 2D never computes actual bbox — it uses the declared SVG dimensions)
+            // (the 2D never computes actual bbox Ã¢â‚¬â€ it uses the declared SVG dimensions)
             const bboxCenterY = rawH / 2;
 
-            // Transform SVG space → arm space, matching the 2D pipeline exactly.
+            // Transform SVG space Ã¢â€ â€™ arm space, matching the 2D pipeline exactly.
             //
             // 2D applies: scale(s, -s) then translate(innerRadius, ty)
             // In SVG transform order (left-to-right = applied to coord system):
-            //   point (px, py) → (px*s + innerRadius,  -py*s + ty)
+            //   point (px, py) Ã¢â€ â€™ (px*s + innerRadius,  -py*s + ty)
             //   where ty = yOffset + bboxCenterY*s
             //
             // IMPORTANT: The 2D does NOT rebase X to minX. It scales raw SVG coords
-            // and then translates. So we must do the same — use raw px, not (px-minX).
+            // and then translates. So we must do the same Ã¢â‚¬â€ use raw px, not (px-minX).
             const s = img.scale;
             const ty3d = img.yOffset + bboxCenterY * s;
             const transformPt = (x: number, y: number): [number, number] => [
@@ -5664,18 +6011,18 @@ const App: React.FC = () => {
               : BufferGeometryUtils.mergeGeometries(shapeGeos);
             if (!combinedGeo) return;
 
-            // ── Match the 2D transform chain exactly ──────────────────────────
+            // Ã¢â€â‚¬Ã¢â€â‚¬ Match the 2D transform chain exactly Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
             // 2D per-arm (SVG transforms apply left-to-right to the coord system):
-            //   rotate(angle)  →  translate(innerRadius, ty)  →  scale(s, -s)
+            //   rotate(angle)  Ã¢â€ â€™  translate(innerRadius, ty)  Ã¢â€ â€™  scale(s, -s)
             // Then the layer group wraps everything in scale(1, -1).
             //
             // Working through the math for a point (px, py) in SVG space:
             //   after scale(s,-s):        (px*s,        -py*s)
             //   after translate(ir, ty):  (px*s + ir,   -py*s + ty)
             //   after rotate(angle):      rotate the above around origin
-            //   after layer scale(1,-1):  negate Y  →  equivalent to rotateZ(-angle)
+            //   after layer scale(1,-1):  negate Y  Ã¢â€ â€™  equivalent to rotateZ(-angle)
             //
-            // In 3D, transformPt already maps SVG→arm-space (X from minX, Y flipped).
+            // In 3D, transformPt already maps SVGÃ¢â€ â€™arm-space (X from minX, Y flipped).
             // The geometry is already at its correct XY position relative to origin.
             // We only need to rotate each arm copy by -angle (matching the 2D result
             // after the layer's scale(1,-1) flips the rotation direction).
@@ -5705,7 +6052,7 @@ const App: React.FC = () => {
       for (const textGroup of textGroups) {
         await processTextGroup(textGroup);
       }
-      processHubs(layer.hubs);
+      await processHubs(layer.hubs);
       processAbstracts(layer.abstracts);
 
       await updateProgress();
@@ -5719,7 +6066,7 @@ const App: React.FC = () => {
 
         const mergedLayerGeo = BufferGeometryUtils.mergeGeometries(layerGeometries, false);
         if (!mergedLayerGeo || !mergedLayerGeo.attributes.position || mergedLayerGeo.attributes.position.count === 0) {
-          console.warn(`⚠️ Skipping empty merged geometry for layer ${layer.name}`);
+          console.warn(`Ã¢Å¡Â Ã¯Â¸Â Skipping empty merged geometry for layer ${layer.name}`);
           layerGeometries.forEach(g => g.dispose());
           continue;
         }
@@ -5832,16 +6179,18 @@ const App: React.FC = () => {
               // Curve divisions per Bezier segment and bevel refinement length scale with quality.
               const slotUnionCurveSegments = qualityToUse === 'low' ? 12 : qualityToUse === 'med' ? 16 : 24;
               const minRefineEdgeLength = qualityToUse === 'low' ? 0.8 : qualityToUse === 'med' ? 0.55 : 0.35;
+              const hasSharpStarHub = layer.hubs.some((hub) => hub.enabled && hub.shape === 'star');
               unioned2DLayerGeo = await manifoldUnionAndExtrudeShapeInstances(
                 layerShapeInstances,
                 effectiveDepth,
                 slotUnionCurveSegments,
                 {
-                  // Preserve bevel appearance in 3D while keeping preview stable.
-                  bevelEnabled: config.bevelEnabled,
-                  bevelSize: config.bevelEnabled ? bevelPerSide : 0,
-                  bevelThickness: config.bevelEnabled ? bevelPerSide : 0,
-                  bevelSegments: config.bevelEnabled
+                  // Smoothing a sharp concave star after slot subtraction can
+                  // create stretched faces at its tips. Keep star profiles flat.
+                  bevelEnabled: config.bevelEnabled && !hasSharpStarHub,
+                  bevelSize: config.bevelEnabled && !hasSharpStarHub ? bevelPerSide : 0,
+                  bevelThickness: config.bevelEnabled && !hasSharpStarHub ? bevelPerSide : 0,
+                  bevelSegments: config.bevelEnabled && !hasSharpStarHub
                     ? ((interactiveSlotPreview || lowQualitySlotExport) && !config.manifoldExact
                         ? 1
                         : Math.max(1, config.bevelSegments))
@@ -5958,7 +6307,8 @@ const App: React.FC = () => {
               config,
               layerMaterialThickness,
               sourceCenterZ,
-              layerMaterialThickness
+              layerMaterialThickness,
+              getGeometryDiameter(cutSourceGeo)
             );
 
         if (slotBridgeGeometries.length > 0) {
@@ -5987,7 +6337,7 @@ const App: React.FC = () => {
             console.warn(`[slot-csg] ${layer.name} composed slot geometry exceeds fast repair budget; preserving geometry`);
           } else {
             try {
-              // Normalize (add index + weld) before surgical repair — surgicalSlotRepair bails
+              // Normalize (add index + weld) before surgical repair Ã¢â‚¬â€ surgicalSlotRepair bails
               // early on non-indexed geometry, doing nothing useful.
               const toRepairLayer = (() => {
                 const g = cutSourceGeo.clone();
@@ -6033,7 +6383,7 @@ const App: React.FC = () => {
             console.warn(`[slot-csg] ${layer.name} transformed display geometry exceeds fast repair budget; preserving geometry`);
           } else {
             try {
-              // Normalize (add index + weld) before surgical repair — surgicalSlotRepair bails
+              // Normalize (add index + weld) before surgical repair Ã¢â‚¬â€ surgicalSlotRepair bails
               // early on non-indexed geometry, doing nothing useful.
               const toRepairFinal = (() => {
                 const g = finalGeo.clone();
@@ -6087,10 +6437,10 @@ const App: React.FC = () => {
 
           // Layer geometry has already been added to the scene as a single merged mesh.
 
-          //           // ── SLOT CUTTER VISUALIZER ──────────────────────────────────────
+          //           // Ã¢â€â‚¬Ã¢â€â‚¬ SLOT CUTTER VISUALIZER Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
           //           // When slots are enabled, add each blade as a distinct semi-transparent
           //           // colored mesh so blade positions / angles can be inspected visually.
-          //           // Blades are world-space already — NO layer rotation applied here.
+          //           // Blades are world-space already Ã¢â‚¬â€ NO layer rotation applied here.
           //           // Set to false to disable; true to re-enable for debugging.
           //           if (false && config.slotEnabled) {
           //             const BLADE_COLORS = [
@@ -6127,7 +6477,7 @@ const App: React.FC = () => {
           //               group.add(bladeMesh);
           //             });
           //           }
-          //           // ── END SLOT CUTTER VISUALIZER ───────────────────────────────────
+          //           // Ã¢â€â‚¬Ã¢â€â‚¬ END SLOT CUTTER VISUALIZER Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
       }
       }
 
@@ -6174,7 +6524,7 @@ const App: React.FC = () => {
     };
   }, [generateMesh, rendered3DConfig]);
 
-  const downloadBlob = (blob: Blob, filename: string) => {
+  const downloadBlob = (blob: Blob, filename: string): Promise<void> => new Promise((resolve) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -6182,8 +6532,11 @@ const App: React.FC = () => {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
+    window.setTimeout(() => {
+      URL.revokeObjectURL(url);
+      resolve();
+    }, 250);
+  });
 
   const yieldToMainThread = () =>
     new Promise<void>((resolve) => {
@@ -6215,11 +6568,25 @@ const App: React.FC = () => {
     };
   };
 
-  // ── Diagnostic helper ────────────────────────────────────────────────────────
+  const normalizeExportObjectToBed = (source: THREE_ACTUAL.Object3D): THREE_ACTUAL.Object3D => {
+    const exportObject = source.clone(true);
+    exportObject.updateMatrixWorld(true);
+    const bounds = new THREE_ACTUAL.Box3().setFromObject(exportObject);
+
+    if (!Number.isFinite(bounds.min.z)) {
+      throw new Error('Cannot normalize STL export: generated mesh has no finite Z bounds');
+    }
+
+    exportObject.position.z += -bounds.min.z + 0.001;
+    exportObject.updateMatrixWorld(true);
+    return exportObject;
+  };
+
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Diagnostic helper Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   // Logs a 3-stage topology report to the browser console for each mesh found in
   // the export object so we can pinpoint exactly where topology defects are introduced.
   //   Stage 1 (pre-export): raw geometry as it arrives from the mesh/group
-  //   Stage 2 (normalized): after index + mergeVertices(1e-5) – what the export
+  //   Stage 2 (normalized): after index + mergeVertices(1e-5) Ã¢â‚¬â€œ what the export
   //            pipeline sees before any repair
   //   Stage 3 (post-Manifold): logged inside stlExporter.ts when ensureManifold=true
   const logPreExportTopology = (object: THREE_ACTUAL.Object3D, label: string = 'export') => {
@@ -6233,7 +6600,7 @@ const App: React.FC = () => {
     }
 
     if (meshes.length === 0) {
-      console.log(`🔍 [${label}] No meshes found for topology check`);
+      console.log(`Ã°Å¸â€Â [${label}] No meshes found for topology check`);
       return;
     }
 
@@ -6245,9 +6612,9 @@ const App: React.FC = () => {
       const rawVertices = geo.attributes.position?.count ?? 0;
       const rawTriangles = geo.index ? geo.index.count / 3 : rawVertices / 3;
       const rawReport = getTopologyReport(geo);
-      console.log(`🔍 [${meshLabel}] Stage 1 (raw): verts=${rawVertices}, tris=${Math.round(rawTriangles)}, boundary=${rawReport.boundaryEdges}, nonManifold=${rawReport.nonManifoldEdges}, manifold=${rawReport.isManifold}`);
+      console.log(`Ã°Å¸â€Â [${meshLabel}] Stage 1 (raw): verts=${rawVertices}, tris=${Math.round(rawTriangles)}, boundary=${rawReport.boundaryEdges}, nonManifold=${rawReport.nonManifoldEdges}, manifold=${rawReport.isManifold}`);
 
-      // Stage 2: welded (index + mergeVertices) — gives accurate topology for non-indexed geometry
+      // Stage 2: welded (index + mergeVertices) Ã¢â‚¬â€ gives accurate topology for non-indexed geometry
       try {
         const cloned = geo.clone();
         if (!cloned.index) {
@@ -6261,14 +6628,14 @@ const App: React.FC = () => {
         const weldedVertices = welded.attributes.position?.count ?? 0;
         const weldedTriangles = welded.index ? welded.index.count / 3 : weldedVertices / 3;
         const weldedReport = getTopologyReport(welded);
-        console.log(`🔍 [${meshLabel}] Stage 2 (welded): verts=${weldedVertices}, tris=${Math.round(weldedTriangles)}, boundary=${weldedReport.boundaryEdges}, nonManifold=${weldedReport.nonManifoldEdges}, manifold=${weldedReport.isManifold}`);
+        console.log(`Ã°Å¸â€Â [${meshLabel}] Stage 2 (welded): verts=${weldedVertices}, tris=${Math.round(weldedTriangles)}, boundary=${weldedReport.boundaryEdges}, nonManifold=${weldedReport.nonManifoldEdges}, manifold=${weldedReport.isManifold}`);
         welded.dispose();
       } catch (e) {
-        console.warn(`🔍 [${meshLabel}] Stage 2 welding failed:`, e);
+        console.warn(`Ã°Å¸â€Â [${meshLabel}] Stage 2 welding failed:`, e);
       }
     }
   };
-  // ─────────────────────────────────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
   const getCachedPreviewGroupForExport = useCallback((qualityToUse: DesignQuality) => {
     // Slot-enabled 3D preview uses BSP worker cuts (fast but can be non-manifold).
@@ -6689,7 +7056,7 @@ const App: React.FC = () => {
         await yieldToMainThread();
         logPreExportTopology(group, 'combined-stl');
         const exporter = new STLExporter();
-        const result = await exporter.parseAsync(group, getExportCleanupOptions(quality));
+        const result = await exporter.parseAsync(normalizeExportObjectToBed(group), getExportCleanupOptions(quality));
         const blob = new Blob([result], { type: 'application/octet-stream' });
         const actualTriangles = Math.max(0, Math.floor((blob.size - 84) / 50));
         const qLabel = quality ? `_${quality}` : '';
@@ -6768,18 +7135,19 @@ const App: React.FC = () => {
         await yieldToMainThread();
       const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode, { targetLayerIds: [layer.id] });
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
-        if (mesh) {
-            await yieldToMainThread();
-            logPreExportTopology(mesh, `layer-stl/${layer.name}`);
-            const exporter = new STLExporter();
-            const result = await exporter.parseAsync(mesh, getExportCleanupOptions(quality));
-            const blob = new Blob([result], { type: 'application/octet-stream' });
-            const actualTriangles = Math.max(0, Math.floor((blob.size - 84) / 50));
-            const qLabel = quality ? `_${quality}` : '';
-            downloadBlob(blob, `${config.projectName}_${layer.name.replace(/\s+/g, '_')}${qLabel}.stl`);
-            const actualSeconds = Math.max(0.1, (performance.now() - actionStart) / 1000);
-            updateEstimateCalibration('stl', qualityToUse, config.slotEnabled, [layer], actualTriangles, blob.size, actualSeconds);
+        if (!mesh) {
+          throw new Error(`Generated export mesh not found for layer "${layer.name}"`);
         }
+        await yieldToMainThread();
+        logPreExportTopology(mesh, `layer-stl/${layer.name}`);
+        const exporter = new STLExporter();
+        const result = await exporter.parseAsync(normalizeExportObjectToBed(mesh), getExportCleanupOptions(quality));
+        const blob = new Blob([result], { type: 'application/octet-stream' });
+        const actualTriangles = Math.max(0, Math.floor((blob.size - 84) / 50));
+        const qLabel = quality ? `_${quality}` : '';
+        await downloadBlob(blob, `${config.projectName}_${layer.name.replace(/\s+/g, '_')}${qLabel}.stl`);
+        const actualSeconds = Math.max(0.1, (performance.now() - actionStart) / 1000);
+        updateEstimateCalibration('stl', qualityToUse, config.slotEnabled, [layer], actualTriangles, blob.size, actualSeconds);
     } catch(e) {
       console.error(e);
       handleError(e, 'Layer STL Export');
@@ -6811,17 +7179,18 @@ const App: React.FC = () => {
       await yieldToMainThread();
       const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode, { targetLayerIds: [layer.id] });
       const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
-      if (mesh) {
-        await yieldToMainThread();
-        logPreExportTopology(mesh, `layer-3mf/${layer.name}`);
-        const exporter = new ThreeMFExporter();
-        const blob = await exporter.parse(mesh, getExportCleanupOptions(quality));
-        const actualTriangles = countTrianglesInObject(mesh);
-        const qLabel = quality ? `_${quality}` : '';
-        downloadBlob(blob, `${config.projectName}_${layer.name.replace(/\s+/g, '_')}${qLabel}.3mf`);
-        const actualSeconds = Math.max(0.1, (performance.now() - actionStart) / 1000);
-        updateEstimateCalibration('3mf', qualityToUse, config.slotEnabled, [layer], actualTriangles, blob.size, actualSeconds);
+      if (!mesh) {
+        throw new Error(`Generated export mesh not found for layer "${layer.name}"`);
       }
+      await yieldToMainThread();
+      logPreExportTopology(mesh, `layer-3mf/${layer.name}`);
+      const exporter = new ThreeMFExporter();
+      const blob = await exporter.parse(mesh, getExportCleanupOptions(quality));
+      const actualTriangles = countTrianglesInObject(mesh);
+      const qLabel = quality ? `_${quality}` : '';
+      await downloadBlob(blob, `${config.projectName}_${layer.name.replace(/\s+/g, '_')}${qLabel}.3mf`);
+      const actualSeconds = Math.max(0.1, (performance.now() - actionStart) / 1000);
+      updateEstimateCalibration('3mf', qualityToUse, config.slotEnabled, [layer], actualTriangles, blob.size, actualSeconds);
     } catch (e) {
       console.error(e);
       handleError(e, 'Layer 3MF Export');
@@ -6869,7 +7238,7 @@ const App: React.FC = () => {
                 await yieldToMainThread();
               }
               logPreExportTopology(child, `zip-stl/${child.name || i}`);
-              const result = await exporter.parseAsync(child, getExportCleanupOptions(quality));
+              const result = await exporter.parseAsync(normalizeExportObjectToBed(child), getExportCleanupOptions(quality));
               // STL ZIP remains binary STL files for slicer compatibility.
               const data = result as ArrayBuffer;
               const qLabel = quality ? `_${quality}` : '';
@@ -6921,17 +7290,19 @@ const App: React.FC = () => {
       for (let i = 0; i < selectedLayers.length; i++) {
         const { layer } = selectedLayers[i];
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
-        if (!mesh) continue;
+        if (!mesh) {
+          throw new Error(`Generated export mesh not found for layer "${layer.name}"`);
+        }
         if (i > 0) await yieldToMainThread();
         logPreExportTopology(mesh, `batch-stl/${layer.name}`);
-        const result = await exporter.parseAsync(mesh, getExportCleanupOptions(quality));
+        const result = await exporter.parseAsync(normalizeExportObjectToBed(mesh), getExportCleanupOptions(quality));
         const blob = new Blob([result], { type: 'application/octet-stream' });
         const actualTriangles = Math.max(0, Math.floor((blob.size - 84) / 50));
         totalTriangles += actualTriangles;
         totalBytes += blob.size;
         exportedAny = true;
         const qLabel = quality ? `_${quality}` : '';
-        downloadBlob(blob, `${config.projectName}_${layer.name.replace(/\s+/g, '_')}${qLabel}.stl`);
+        await downloadBlob(blob, `${config.projectName}_${layer.name.replace(/\s+/g, '_')}${qLabel}.stl`);
       }
 
       if (exportedAny) {
@@ -6980,7 +7351,9 @@ const App: React.FC = () => {
       for (let i = 0; i < selectedLayers.length; i++) {
         const { layer } = selectedLayers[i];
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
-        if (!mesh) continue;
+        if (!mesh) {
+          throw new Error(`Generated export mesh not found for layer "${layer.name}"`);
+        }
         if (i > 0) await yieldToMainThread();
         logPreExportTopology(mesh, `batch-3mf/${layer.name}`);
         const blob = await exporter.parse(mesh, getExportCleanupOptions(quality));
@@ -6989,7 +7362,7 @@ const App: React.FC = () => {
         totalBytes += blob.size;
         exportedAny = true;
         const qLabel = quality ? `_${quality}` : '';
-        downloadBlob(blob, `${config.projectName}_${layer.name.replace(/\s+/g, '_')}${qLabel}.3mf`);
+        await downloadBlob(blob, `${config.projectName}_${layer.name.replace(/\s+/g, '_')}${qLabel}.3mf`);
       }
 
       if (exportedAny) {
@@ -7169,8 +7542,24 @@ const App: React.FC = () => {
     }
   };
 
-  const handleLoadProject = () => {
-    fileInputRef.current?.click();
+  const handleLoadProject = async () => {
+    try {
+      if (window.electronAPI?.loadProject) {
+        const result = await window.electronAPI.loadProject();
+        if (result.canceled) return;
+        if (result.error) {
+          handleError(new Error(result.error), 'Load Project');
+          return;
+        }
+        if (result.text) {
+          handleLoadedProjectText(result.text);
+        }
+        return;
+      }
+      fileInputRef.current?.click();
+    } catch (error) {
+      handleError(error, 'Load Project');
+    }
   };
 
   const saveCurrentAsDefaults = useCallback(() => {
@@ -7352,6 +7741,25 @@ const App: React.FC = () => {
     e.target.value = '';
   };
 
+  const handleLoadedProjectText = (text: string) => {
+    const file = new File([text], 'project.json', { type: 'application/json' });
+    handleFileLoad({
+      target: { files: [file], value: '' },
+    } as React.ChangeEvent<HTMLInputElement>);
+  };
+
+  const resetAllAppearance = () => {
+    resetAppearance();
+    handleUpdateConfig({ color: '#38bdf8' }, true);
+  };
+
+  const examplePresets = EXAMPLE_ENTRIES.map((entry) => ({
+    id: entry.id,
+    label: entry.label,
+    group: entry.group,
+    onSelect: () => handleLoadedProjectText(entry.text),
+  }));
+
   const handleFetchFont = async (name: string) => {
     return true;
   };
@@ -7412,7 +7820,7 @@ const App: React.FC = () => {
 
   // Load AI scope preferences
   const aiScope = loadAiScope();
-  if (APP_DEBUG) console.log('🔧 AI Scope loaded:', aiScope);
+  if (APP_DEBUG) console.log('Ã°Å¸â€Â§ AI Scope loaded:', aiScope);
 
   // Feature switch guard: do not start fractal mode when fractals are disabled.
   if (mode === 'fractal' && !aiScope.abstractFractalsTabEnabled) {
@@ -7568,11 +7976,11 @@ const App: React.FC = () => {
       scopeLines.push('- Do NOT generate any hubs or abstract shapes.');
     }
     const scopeConstraints = scopeLines.length > 0
-      ? `\n      **USER SCOPE RESTRICTIONS — YOU MUST FOLLOW THESE EXACTLY:**\n${scopeLines.map(l => `      ${l}`).join('\n')}\n`
+      ? `\n      **USER SCOPE RESTRICTIONS Ã¢â‚¬â€ YOU MUST FOLLOW THESE EXACTLY:**\n${scopeLines.map(l => `      ${l}`).join('\n')}\n`
       : '';
     if (APP_DEBUG) {
-      console.log('🔧 AI Scope constraints built:', scopeLines);
-      console.log('🔧 Feature toggles: enableShape=', aiScope.abstractShapesTabEnabled, 'enableFractals=', aiScope.abstractFractalsTabEnabled);
+      console.log('Ã°Å¸â€Â§ AI Scope constraints built:', scopeLines);
+      console.log('Ã°Å¸â€Â§ Feature toggles: enableShape=', aiScope.abstractShapesTabEnabled, 'enableFractals=', aiScope.abstractFractalsTabEnabled);
     }
 
     const prompt = `
@@ -7656,7 +8064,7 @@ const App: React.FC = () => {
 
       Return **ONLY** valid JSON matching the 'SnowflakeConfig' schema.
     `;
-    if (APP_DEBUG) console.log('🤖 AI Prompt (first 500 chars):', prompt.substring(0, 500) + '...');
+    if (APP_DEBUG) console.log('Ã°Å¸Â¤â€“ AI Prompt (first 500 chars):', prompt.substring(0, 500) + '...');
 
     const response = await ai.models.generateContent({
       model,
@@ -7922,8 +8330,8 @@ const App: React.FC = () => {
         }
 
         if (APP_DEBUG) {
-          console.log('🔍 AI scope debug: allowed fields', allowedFields);
-          console.log('🔍 AI scope debug: changed fields', changedFields);
+          console.log('Ã°Å¸â€Â AI scope debug: allowed fields', allowedFields);
+          console.log('Ã°Å¸â€Â AI scope debug: changed fields', changedFields);
         }
 
         // Handle Fractal specific: Force disable text/hubs if mode is fractal
@@ -7972,7 +8380,7 @@ const App: React.FC = () => {
     
     // Invalid API Key
     if (errorText.includes('invalid') || errorText.includes('unauthorized') || errorText.includes('unauthenticated') || errorText.includes('api_key')) {
-      errorMessage = "❌ Invalid API Key";
+      errorMessage = "Ã¢ÂÅ’ Invalid API Key";
       errorDetails = "Your Gemini API key is invalid or expired. Please update it in Settings > API Key tab.";
       setShortcutsModalTab('apikey');
       setShortcutsModalMessage('The API key you provided is invalid or expired. Please update it.');
@@ -7980,17 +8388,17 @@ const App: React.FC = () => {
     }
     // API Usage / Quota Exceeded
     else if (errorText.includes('quota') || errorText.includes('limit') || errorText.includes('rate') || errorText.includes('usage')) {
-      errorMessage = "⚠️ API Limit Reached";
+      errorMessage = "Ã¢Å¡Â Ã¯Â¸Â API Limit Reached";
       errorDetails = "You've used up your free Gemini API quota for today. Try again tomorrow or upgrade your plan.";
     }
     // Timeout / Network Error
     else if (errorText.includes('timeout') || errorText.includes('deadline') || errorText.includes('network') || errorText.includes('econnrefused') || errorText.includes('enotfound')) {
-      errorMessage = "⏱️ Connection Failed";
+      errorMessage = "Ã¢ÂÂ±Ã¯Â¸Â Connection Failed";
       errorDetails = "The AI service took too long to respond or your internet connection is unstable. Check your connection and try again.";
     }
     // Leaked or compromised API key
     else if (errorText.includes('leaked') || errorText.includes('compromised') || errorText.includes('exposed')) {
-      errorMessage = "🔒 Security Alert";
+      errorMessage = "Ã°Å¸â€â€™ Security Alert";
       errorDetails = "Your API key appears to be compromised. Please regenerate it immediately from Google Cloud Console.";
       setShortcutsModalTab('apikey');
       setShortcutsModalMessage('Your API key has been flagged as compromised. You must regenerate it immediately.');
@@ -7998,17 +8406,17 @@ const App: React.FC = () => {
     }
     // API Error / Service Issue
     else if (errorText.includes('error') && (errorText.includes('server') || errorText.includes('internal') || errorText.includes('api'))) {
-      errorMessage = "🔧 AI Service Error";
+      errorMessage = "Ã°Å¸â€Â§ AI Service Error";
       errorDetails = "The Gemini AI service is experiencing issues. This isn't your fault - try again in a few moments.";
     }
     // JSON parsing / Invalid response
     else if (errorText.includes('json') || errorText.includes('parse') || errorText.includes('unexpected') || errorText.includes('syntaxerror')) {
-      errorMessage = "⚠️ Invalid AI Response";
+      errorMessage = "Ã¢Å¡Â Ã¯Â¸Â Invalid AI Response";
       errorDetails = "The AI generated content that wasn't properly formatted. This happens sometimes - just try generating again.";
     }
     // No API key at all
     else if (errorText.includes('no api') || errorText.includes('missing api')) {
-      errorMessage = "🔑 No API Key";
+      errorMessage = "Ã°Å¸â€â€˜ No API Key";
       errorDetails = "You need to add your Gemini API key to use AI features. Get one free from Google AI Studio.";
       setShortcutsModalTab('apikey');
       setShortcutsModalMessage('You need to add your Gemini API key to use AI randomization.');
@@ -8016,25 +8424,25 @@ const App: React.FC = () => {
     }
     // Content policy violation
     else if (errorText.includes('policy') || errorText.includes('blocked') || errorText.includes('safety') || errorText.includes('inappropriate')) {
-      errorMessage = "🚫 Content Blocked";
+      errorMessage = "Ã°Å¸Å¡Â« Content Blocked";
       errorDetails = "The AI couldn't generate content due to safety policies. Try different parameters or wording.";
     }
     // Model unavailable
     else if (errorText.includes('model') || errorText.includes('unavailable') || errorText.includes('deprecated')) {
-      errorMessage = "🤖 AI Model Unavailable";
+      errorMessage = "Ã°Å¸Â¤â€“ AI Model Unavailable";
       errorDetails = "The AI model is temporarily unavailable or being updated. Try again in a few minutes.";
     }
     // Generic API errors
     else if (errorText.includes('400') || errorText.includes('bad request')) {
-      errorMessage = "📝 Invalid Request";
+      errorMessage = "Ã°Å¸â€œÂ Invalid Request";
       errorDetails = "The AI received an invalid request. This might be a bug - try different settings.";
     }
     else if (errorText.includes('500') || errorText.includes('internal server')) {
-      errorMessage = "💥 Server Error";
+      errorMessage = "Ã°Å¸â€™Â¥ Server Error";
       errorDetails = "The AI servers are having problems. This isn't your fault - try again later.";
     }
     else if (errorText.includes('503') || errorText.includes('service unavailable')) {
-      errorMessage = "⚠️ Service Busy";
+      errorMessage = "Ã¢Å¡Â Ã¯Â¸Â Service Busy";
       errorDetails = "The AI service is overloaded with requests. Wait a moment and try again.";
     }
     
@@ -8084,7 +8492,8 @@ const App: React.FC = () => {
     },
     forceRegenerate: () => {
         clearGeometryCache();
-      clearSlotCutResultCache();
+        clearSlotCutResultCache();
+        modelCache3D.clear();
         setForceRefresh3DToken((prev) => prev + 1);
         showNotification("Models Regenerated", "info", 1000);
     },
@@ -8108,12 +8517,18 @@ const App: React.FC = () => {
   });
 
   // Debug: Track render completion
-  // (render logging removed — was calling performance.now() + console.log on every render)
+  // (render logging removed Ã¢â‚¬â€ was calling performance.now() + console.log on every render)
 
   return (
-        <div className="flex flex-col h-screen bg-slate-950 text-white overflow-hidden font-sans selection:bg-sky-500/30">
+        <div
+          className={`flex flex-col h-screen text-white overflow-hidden font-sans selection:bg-sky-500/30 ${appearance.reduceMotion ? 'appearance-reduce-motion' : ''} ${appearance.highContrast ? 'appearance-high-contrast' : ''}`}
+          style={{
+            backgroundColor: appearance.backgroundColor,
+            '--app-panel-color': appearance.panelColor,
+          } as React.CSSProperties}
+        >
             {/* Header */}
-            <div className="h-14 border-b border-white/10 bg-slate-900/50 backdrop-blur-md shrink-0 z-50 relative">
+            <div className="appearance-panel h-14 border-b border-white/10 backdrop-blur-md shrink-0 z-50 relative">
                 <div className="h-full max-w-[1920px] mx-auto px-4 flex items-center justify-center">
                     <div className="w-full">
                         <Header
@@ -8133,6 +8548,17 @@ const App: React.FC = () => {
                             onTooltipsChange={(show) => setShowTooltips(show)}
                             onSaveAsDefault={saveCurrentAsDefaults}
                             onRestoreFactoryDefaults={restoreFactoryDefaults}
+                            appearance={appearance}
+                            onAppearanceChange={updateAppearance}
+                            onResetAppearance={resetAllAppearance}
+                            examplePresets={examplePresets}
+                            modelColor={config.color}
+                            onModelColorChange={(color) => handleUpdateConfig({ color }, true)}
+                            tutorialEnabled={!tutorialDisabled}
+                            onTutorialEnabledChange={(enabled) => updateTutorialDisabled(!enabled)}
+                            onShowTutorial={() => setShowTutorial(true)}
+                            tutorialAdvanced={tutorialAdvanced}
+                            onTutorialAdvancedChange={updateTutorialAdvanced}
                         />
                     </div>
                 </div>
@@ -8140,8 +8566,9 @@ const App: React.FC = () => {
 
             <div className="flex-1 flex overflow-hidden">
                 {/* Control Panel */}
-                <div className="w-[420px] flex flex-col border-r border-white/10 bg-slate-900/30 backdrop-blur-sm shrink-0 z-40">
+                <div data-tutorial="panel" className="appearance-panel w-[420px] flex flex-col border-r border-white/10 backdrop-blur-sm shrink-0 z-40">
                     <ControlPanel
+                        hubBevelLimit={hubBevelLimit}
                         config={config}
                         onUpdate={handleUpdateConfig}
                         updateGroup={updateGroup}
@@ -8193,7 +8620,7 @@ const App: React.FC = () => {
                 </div>
 
                 {/* Preview Area */}
-                <div className="flex-1 relative bg-slate-950 overflow-hidden">
+                <div data-tutorial="preview" className="flex-1 relative overflow-hidden" style={{ backgroundColor: appearance.backgroundColor }}>
                     <div className={`absolute inset-0 w-full h-full transition-opacity duration-300 ${viewMode === '2d' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
                         <SnowflakePreview
                             config={config}
@@ -8202,7 +8629,7 @@ const App: React.FC = () => {
                             globalBevelAmount={config.bevelAmount}
                             globalThickness={config.extrusionDepth}
                             slotEnabled={config.slotEnabled}
-                            slotLength={config.slotLength}
+                            slotLength={config.automaticSlotLength !== false ? Math.max(2, designDiameter / 2) : config.slotLength}
                             slotWidth={config.slotWidth}
                             svgRef={svgRef}
                             dynamicFonts={dynamicFonts}
@@ -8216,6 +8643,7 @@ const App: React.FC = () => {
                             activeLayerId={config.layers[config.activeLayerIndex]?.id}
                             syncAllLayers={config.syncAllLayers}
                             highlightActivePlaneOnly={config.highlightActivePlaneOnly}
+                            backgroundColor={appearance.backgroundColor}
                         />
                     </div>
                     <div className={`absolute inset-0 w-full h-full transition-opacity duration-300 ${viewMode === '3d' ? 'opacity-100 z-10' : 'opacity-0 z-0'}`}>
@@ -8238,6 +8666,7 @@ const App: React.FC = () => {
                             activeLayerId={rendered3DConfig.layers[rendered3DConfig.activeLayerIndex]?.id}
                             syncAllLayers={rendered3DConfig.syncAllLayers}
                             highlightActivePlaneOnly={rendered3DConfig.highlightActivePlaneOnly}
+                            backgroundColor={appearance.backgroundColor}
                         />
                     </div>
 
@@ -8274,12 +8703,14 @@ const App: React.FC = () => {
                           </button>
                         )}
                         <button
+                            data-tutorial="view-2d"
                             onClick={() => setViewMode('2d')}
                             className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${viewMode === '2d' ? 'bg-sky-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
                         >
                             2D
                         </button>
                         <button
+                            data-tutorial="view-3d"
                             onClick={() => {
                               enter3DView();
                             }}
@@ -8288,7 +8719,7 @@ const App: React.FC = () => {
                             3D
                         </button>
                     </div>
-                    <div className="absolute top-[3.9rem] right-4 z-50 bg-slate-900/80 rounded-lg p-1.5 border border-white/10 shadow-lg backdrop-blur flex items-center gap-2">
+                    <div data-tutorial="auto-regen" className="absolute top-[3.9rem] right-4 z-50 bg-slate-900/80 rounded-lg p-1.5 border border-white/10 shadow-lg backdrop-blur flex items-center gap-2">
                         <span className="text-[10px] font-bold uppercase text-slate-300">{t('autoRegenerate')}</span>
                         <button
                           onClick={() => setAutoRegenerate3D((prev) => !prev)}
@@ -8332,6 +8763,28 @@ const App: React.FC = () => {
                 onResetEstimateCalibration={resetEstimateCalibration}
                 estimateCalibrationReadout={estimateCalibrationReadout}
                 estimateCalibrationLastUpdatedLabel={estimateCalibrationLastUpdatedLabel}
+                appearance={appearance}
+                onAppearanceChange={updateAppearance}
+                onResetAppearance={resetAllAppearance}
+                modelColor={config.color}
+                onModelColorChange={(color) => handleUpdateConfig({ color }, true)}
+                tutorialEnabled={!tutorialDisabled}
+                onTutorialEnabledChange={(enabled) => updateTutorialDisabled(!enabled)}
+                onShowTutorial={() => {
+                  setShowShortcutsModal(false);
+                  setShowTutorial(true);
+                }}
+                tutorialAdvanced={tutorialAdvanced}
+                onTutorialAdvancedChange={updateTutorialAdvanced}
+            />
+
+            <TutorialModal
+              isOpen={showTutorial}
+              onClose={() => setShowTutorial(false)}
+              disableAtStartup={tutorialDisabled}
+              onDisableAtStartupChange={updateTutorialDisabled}
+              advanced={tutorialAdvanced}
+              onAdvancedChange={updateTutorialAdvanced}
             />
 
               <AboutModal

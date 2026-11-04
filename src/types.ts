@@ -210,6 +210,8 @@ export interface SnowflakeConfig {
   manifoldExact?: boolean;
   slotBridgesEnabled: boolean;
   slotLength: number;
+  /** When enabled, derive the base slot reach from the generated model diameter. */
+  automaticSlotLength?: boolean;
   slotWidth: number;
   slotMode: '2-plane' | '3-plane';
   quality: DesignQuality;
@@ -250,4 +252,11 @@ export interface ShortcutConfig {
   switchToAbstractTab: ShortcutDef;
   switchToPlanesTab: ShortcutDef;
   resetApp: ShortcutDef;
+}
+
+export interface AppearanceSettings {
+  backgroundColor: string;
+  panelColor: string;
+  reduceMotion: boolean;
+  highContrast: boolean;
 }

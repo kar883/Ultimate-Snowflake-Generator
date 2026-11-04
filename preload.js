@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // App utilities
   checkForUpdates: () => ipcRenderer.invoke('app:check-for-updates'),
   openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
+  loadProject: () => ipcRenderer.invoke('project:load'),
   
   // Remove all listeners
   removeAllListeners: () => {

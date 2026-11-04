@@ -868,6 +868,7 @@ interface Snowflake3DProps {
   canRedo?: boolean;
   initialDiameter?: number;
   shortcuts?: ShortcutConfig;
+  backgroundColor?: string;
   isVisible: boolean;
   identifyBodiesMode?: boolean;
   onFloatingBodiesChange?: (floatingByLayer: Record<string, boolean>) => void;
@@ -1180,6 +1181,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   activeLayerId,
   syncAllLayers = true,
   highlightActivePlaneOnly = false,
+  backgroundColor = '#020617',
 }) => {
   const generateMeshRef = useRef(generateMesh);
   const containerRef  = useRef<HTMLDivElement>(null);
@@ -1921,7 +1923,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     const h = containerRef.current.clientHeight;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x020617);
+    scene.background = new THREE.Color(backgroundColor);
     sceneRef.current = scene;
 
     const camera = new THREE.PerspectiveCamera(40, w / h, 0.1, 2000);
@@ -1934,7 +1936,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 0.78;
-    renderer.setClearColor(0x020617, 1);
+    renderer.setClearColor(backgroundColor, 1);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     rendererRef.current = renderer;
@@ -2018,6 +2020,11 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
       containerRef.current?.removeChild(renderer.domElement);
     };
   }, []);
+
+  useEffect(() => {
+    if (sceneRef.current) sceneRef.current.background = new THREE.Color(backgroundColor);
+    rendererRef.current?.setClearColor(backgroundColor, 1);
+  }, [backgroundColor]);
 
   // ── Mesh loading (re-runs when config or generateMesh changes) ────────────
   const LAYER_BASE_COLORS = ['#38bdf8', '#a78bfa', '#34d399'];
@@ -2205,7 +2212,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
 
   return (
     <div className="relative w-full h-full">
-      <div ref={containerRef} className="w-full h-full bg-slate-950 rounded-xl overflow-hidden" />
+      <div ref={containerRef} className="w-full h-full rounded-xl overflow-hidden" style={{ backgroundColor }} />
 
       {/* Loading overlay */}
       {loading && (
@@ -2242,7 +2249,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
         )}
 
         {viewportLayers.length > 0 && (
-          <div className="bg-slate-900/85 backdrop-blur px-3 py-2.5 rounded-lg border border-white/10 shadow-xl min-w-[220px]">
+          <div data-tutorial="planes-panel" className="bg-slate-900/85 backdrop-blur px-3 py-2.5 rounded-lg border border-white/10 shadow-xl min-w-[220px]">
             <div className="text-[9px] font-extrabold uppercase tracking-widest text-slate-500 mb-2">Planes</div>
             <div className="space-y-1.5">
               {viewportLayers.map((layer) => {
@@ -2306,7 +2313,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
       {/* ── BOTTOM-RIGHT: gizmo + home + ID Bodies ────────────────────────
            All placed bottom-right, well clear of the 2D/3D toggle
            which lives top-right of the parent container. */}
-      <div className="absolute bottom-4 right-4 z-40 flex flex-col items-end gap-2">
+      <div data-tutorial="camera-controls" className="absolute bottom-4 right-4 z-40 flex flex-col items-end gap-2">
 
         {/* Dynamic orientation gizmo */}
         <div

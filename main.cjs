@@ -1,5 +1,6 @@
 const { app, BrowserWindow, Menu, shell, ipcMain, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs/promises');
 const https = require('https');
 
 // Keep a global reference of the window object
@@ -138,13 +139,36 @@ ipcMain.handle('app:open-external', async (_event, url) => {
   return { ok: false, error: 'Invalid URL' };
 });
 
+// IPC: open a project file using the native desktop file picker.
+ipcMain.handle('project:load', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Load Project',
+      properties: ['openFile'],
+      filters: [{ name: 'Snowflake Project', extensions: ['json'] }],
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true };
+    }
+
+    const text = await fs.readFile(result.filePaths[0], 'utf8');
+    return { canceled: false, text };
+  } catch (error) {
+    return {
+      canceled: false,
+      error: error?.message || 'Failed to read project file',
+    };
+  }
+});
+
 // Helper function to show About dialog
 function showAbout() {
   dialog.showMessageBox(mainWindow, {
     type: 'info',
     title: 'About Ultimate Snowflake Generator',
     message: 'Ultimate Snowflake Generator',
-    detail: 'Version 1.1.1\nCreated by Kyle Russell\n\nA beautiful 3D snowflake design generator for art and 3D printing.\n\nVisit the GitHub repository for more information and to report issues.',
+    detail: 'Version 1.1.2\nCreated by Kyle Russell\n\nA beautiful 3D snowflake design generator for art and 3D printing.\n\nVisit the GitHub repository for more information and to report issues.',
     buttons: ['GitHub Repository', 'OK'],
     defaultId: 1,
     cancelId: 1

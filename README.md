@@ -3,11 +3,11 @@
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
 
 ## Download
-- Windows Installer: [Snowflake.Generator.Setup.1.1.1.exe](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.1/Snowflake.Generator.Setup.1.1.1.exe)
-- Windows ZIP: [Snowflake.Generator-1.1.1-win.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.1/Snowflake.Generator-1.1.1-win.zip)
-- macOS DMG: [Snowflake.Generator-1.1.1-arm64.dmg](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.1/Snowflake.Generator-1.1.1-arm64.dmg)
-- macOS ZIP: [Snowflake.Generator-1.1.1-arm64-mac.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.1/Snowflake.Generator-1.1.1-arm64-mac.zip)
-- Linux AppImage: [Snowflake.Generator-1.1.1.AppImage](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.1/Snowflake.Generator-1.1.1.AppImage)
+- Windows Installer: [Snowflake.Generator.Setup.1.1.2.exe](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.2/Snowflake.Generator.Setup.1.1.2.exe)
+- Windows ZIP: [Snowflake.Generator-1.1.2-win.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.2/Snowflake.Generator-1.1.2-win.zip)
+- macOS DMG: [Snowflake.Generator-1.1.2-arm64.dmg](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.2/Snowflake.Generator-1.1.2-arm64.dmg)
+- macOS ZIP: [Snowflake.Generator-1.1.2-arm64-mac.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.2/Snowflake.Generator-1.1.2-arm64-mac.zip)
+- Linux AppImage: [Snowflake.Generator-1.1.2.AppImage](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.2/Snowflake.Generator-1.1.2.AppImage)
 - All release assets: [GitHub Releases](https://github.com/kar883/Ultimate-Snowflake-Generator/releases)
 
 ### Windows security warning
@@ -15,8 +15,7 @@ The installer isn't code-signed, so Windows SmartScreen may show "Windows protec
 
 Inspired by Jexom https://www.thingiverse.com/thing:2702278 I quickly found the limits of OpenSCAD and wanted to see if I could improve on that program.  
 Design complex 2D and 3D snowflakes from text, hubs, abstracts, and multi-plane controls, then export for 3D printing or vector workflows.
-  Inspired by Jexom https://www.thingiverse.com/thing:2702278 I quickly found the limits of OpenSCAD and wanted to see if I could improve on that program.  
-
+ 
 ## What You Can Do
 - Create your own unique snowflakes by customizing text, individual letter behavior, central hubs, abstract designs, fractals, and images (svg). 
 - Build across 1, 2 or 3 planes (Base, Cross, and Tilt planes) and have each plane interlock when assembled.
@@ -61,5 +60,4 @@ Design complex 2D and 3D snowflakes from text, hubs, abstracts, and multi-plane 
 
 This project is licensed under
 [Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/).
-
 

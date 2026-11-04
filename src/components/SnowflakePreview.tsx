@@ -45,6 +45,7 @@ interface SnowflakePreviewProps {
   activeLayerId?: string;
   syncAllLayers?: boolean;
   highlightActivePlaneOnly?: boolean;
+  backgroundColor?: string;
 }
 
 const seededRandom = (seed: number) => {
@@ -65,7 +66,7 @@ const getLayerTextGroups = (layer: LayerConfig): TextGroupConfig[] => {
 };
 
 const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
-  config, globalColor, globalBevel, globalBevelAmount, slotEnabled, slotLength, slotWidth, svgRef, dynamicFonts, undo, redo, canUndo, canRedo, calculatedDiameter, shortcuts, fontsPreloaded, activeLayerId, syncAllLayers = true, highlightActivePlaneOnly = false
+  config, globalColor, globalBevel, globalBevelAmount, globalThickness, slotEnabled, slotLength, slotWidth, svgRef, dynamicFonts, undo, redo, canUndo, canRedo, calculatedDiameter, shortcuts, fontsPreloaded, activeLayerId, syncAllLayers = true, highlightActivePlaneOnly = false, backgroundColor = '#020617'
 }) => {
   const { t } = useTranslation(config.language || 'en');
   // Use a ref for the font cache so loading a font never triggers an infinite
@@ -469,7 +470,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
         const res = isCircleWithOsc ? Math.max(256, hub.oscillationFrequency * 32) : 64;
         const finalSides = isCircleWithOsc ? res : baseSides;
         let d = "";
-        for (let i = 0; i <= finalSides; i++) {
+        for (let i = 0; i < finalSides; i++) {
             const angle = (i / finalSides) * Math.PI * 2;
             let r = hub.outerRadius;
             if (hub.shape === 'star') r = (i % 2 === 0) ? r : r * hub.starRatio;
@@ -480,13 +481,13 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
         d += "Z";
         if (hub.hollow) {
             let holeD = "";
-            for (let i = finalSides; i >= 0; i--) {
+            for (let i = finalSides - 1; i >= 0; i--) {
                 const angle = (i / finalSides) * Math.PI * 2;
                 let r = hub.outerRadius - hub.wallThickness;
                 if (hub.shape === 'star') r = (i % 2 === 0) ? r : r * hub.starRatio;
                 if (isCircleWithOsc) r += Math.sin(angle * hub.oscillationFrequency) * hub.oscillationAmplitude;
                 const x = Math.cos(angle) * r; const y = Math.sin(angle) * r;
-                holeD += (i === finalSides ? "M" : "L") + ` ${x} ${y} `;
+                holeD += (i === finalSides - 1 ? "M" : "L") + ` ${x} ${y} `;
             }
             holeD += "Z"; d += " " + holeD;
         }
@@ -720,8 +721,11 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
     const widthAdjustmentPerSide = layer.slotWidthOffset ?? 0;
     const adjLength = Math.max(2, slotLength + (lengthAdjustmentPerSide * 2));
     const adjWidth = Math.max(0.1, slotWidth + widthAdjustmentPerSide);
-    const visualExtension = (modelDiameter / 2) + 20;
-    const drawLength = Math.max(adjLength, visualExtension);
+    const drawLength = adjLength;
+    const slotThickness = Math.max(0.1, globalThickness + adjWidth);
+    const mateOverlap = Math.min(1.5, Math.max(0.35, slotThickness * 0.4));
+    const baseSlotLength = drawLength + mateOverlap;
+    const mainSlotLength = drawLength + mateOverlap;
     const rearReach = (numPlanes === 3 && armCount % 2 !== 0)
       ? Math.max(0.01, drawLength * Math.cos(Math.PI / armCount))
       : drawLength;
@@ -759,7 +763,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
       const crossColor = '#facc15'; // bright amber for strong contrast
       const tiltColor = '#f97316'; // vivid orange for strong contrast
       if (slotType === 'third-back') {
-        const x2 = Math.cos(angleRad) * drawLength; const y2 = Math.sin(angleRad) * drawLength;
+        const x2 = Math.cos(angleRad) * baseSlotLength; const y2 = Math.sin(angleRad) * baseSlotLength;
         return (
           <g data-slot-preview="true">
             <line x1={0} y1={0} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="3" opacity="0.8" />
@@ -769,7 +773,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
           </g>
         );
       } else if (slotType === 'third-middle') {
-        const x2Main = Math.cos(angleRad) * drawLength; const y2Main = Math.sin(angleRad) * drawLength;
+        const x2Main = Math.cos(angleRad) * mainSlotLength; const y2Main = Math.sin(angleRad) * mainSlotLength;
         const xStart = Math.cos(angleRad + Math.PI) * rearReach; const yStart = Math.sin(angleRad + Math.PI) * rearReach;
         const xEnd = Math.cos(angleRad + Math.PI) * Math.max(0.01, rearReach - crossTipInLength); const yEnd = Math.sin(angleRad + Math.PI) * Math.max(0.01, rearReach - crossTipInLength);
         return (
@@ -781,7 +785,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
           </g>
         );
       } else if (slotType === 'third-front') {
-        const x2 = Math.cos(angleRad) * drawLength; const y2 = Math.sin(angleRad) * drawLength;
+        const x2 = Math.cos(angleRad) * mainSlotLength; const y2 = Math.sin(angleRad) * mainSlotLength;
         const x1 = Math.cos(angleRad + Math.PI) * rearExtensionReach; const y1 = Math.sin(angleRad + Math.PI) * rearExtensionReach;
         return (
           <g data-slot-preview="true">
@@ -809,7 +813,8 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
 
   return (
     <div
-      className="relative w-full h-full bg-slate-900/40 overflow-hidden select-none"
+      className="relative w-full h-full overflow-hidden select-none"
+      style={{ backgroundColor }}
       onWheel={handleWheel}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}

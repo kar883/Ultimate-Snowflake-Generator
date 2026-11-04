@@ -1,7 +1,14 @@
 
 import React, { useState, useEffect } from 'react';
 import ShortcutsModal from './ShortcutsModal';
-import { ShortcutConfig } from '../types';
+import { AppearanceSettings, ShortcutConfig } from '../types';
+
+export interface ExamplePreset {
+  id: string;
+  label: string;
+  group?: string | null;
+  onSelect: () => void;
+}
 
 interface HeaderProps {
   projectName?: string;
@@ -23,6 +30,17 @@ interface HeaderProps {
   onLanguageChange?: (lang: string) => void;
   showTooltips?: boolean;
   onTooltipsChange?: (show: boolean) => void;
+  appearance?: AppearanceSettings;
+  onAppearanceChange?: (changes: Partial<AppearanceSettings>) => void;
+  onResetAppearance?: () => void;
+  modelColor?: string;
+  onModelColorChange?: (color: string) => void;
+  tutorialEnabled?: boolean;
+  onTutorialEnabledChange?: (enabled: boolean) => void;
+  onShowTutorial?: () => void;
+  tutorialAdvanced?: boolean;
+  onTutorialAdvancedChange?: (advanced: boolean) => void;
+  examplePresets?: ExamplePreset[];
 }
 
 const Header: React.FC<HeaderProps> = ({
@@ -39,14 +57,26 @@ const Header: React.FC<HeaderProps> = ({
   onResetShortcuts,
   onSaveAsDefault,
   onRestoreFactoryDefaults,
-  appVersion = '1.1.1',
+  appVersion = '1.1.2',
   language = 'en',
   onLanguageChange,
   showTooltips,
-  onTooltipsChange
+  onTooltipsChange,
+  appearance,
+  onAppearanceChange,
+  onResetAppearance,
+  modelColor,
+  onModelColorChange,
+  tutorialEnabled,
+  onTutorialEnabledChange,
+  onShowTutorial,
+  tutorialAdvanced,
+  onTutorialAdvancedChange,
+  examplePresets = []
 }) => {
   const [localName, setLocalName] = useState(projectName);
   const [showSettings, setShowSettings] = useState(false);
+  const [showExamples, setShowExamples] = useState(false);
 
   useEffect(() => {
     setLocalName(projectName);
@@ -121,9 +151,9 @@ const Header: React.FC<HeaderProps> = ({
             </svg>
           </button>
 
-          
           {/* Settings Button */}
           <button
+            data-tutorial="settings"
             onClick={() => setShowSettings(true)}
             className="w-9 h-9 flex items-center justify-center rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white border border-white/5 transition-all"
             title="Settings & Shortcuts"
@@ -132,6 +162,51 @@ const Header: React.FC<HeaderProps> = ({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
             </svg>
           </button>
+
+          {/* Example Presets */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowExamples((current) => !current)}
+              className="h-9 px-3 flex items-center gap-1.5 rounded-lg bg-sky-600/20 hover:bg-sky-600/30 text-sky-300 hover:text-sky-200 border border-sky-500/20 transition-all text-[10px] font-black uppercase tracking-wider"
+              title="Load an example preset"
+              aria-haspopup="menu"
+              aria-expanded={showExamples}
+            >
+              Examples
+              <svg className={`w-3.5 h-3.5 transition-transform ${showExamples ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m6 9 6 6 6-6" />
+              </svg>
+            </button>
+            {showExamples && (
+              <div role="menu" className="absolute right-0 top-11 z-[70] min-w-56 rounded-lg border border-white/10 bg-slate-900 p-1.5 shadow-2xl">
+                {examplePresets.length > 0 ? examplePresets.map((preset, i) => (
+                  <React.Fragment key={preset.id}>
+                    {preset.group && preset.group !== examplePresets[i - 1]?.group && (
+                      <div className="px-3 pt-2 pb-1 text-[9px] font-black uppercase tracking-wider text-slate-500">
+                        {preset.group}
+                      </div>
+                    )}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      preset.onSelect();
+                      setShowExamples(false);
+                    }}
+                    className="w-full rounded-md px-3 py-2 text-left text-[10px] font-bold text-slate-300 hover:bg-sky-500/20 hover:text-white transition-colors"
+                  >
+                    {preset.label}
+                  </button>
+                  </React.Fragment>
+                )) : (
+                  <div className="px-3 py-2 text-[10px] font-semibold text-slate-500 whitespace-nowrap">
+                    No example presets available yet
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* Project Name Input */}
           <div className="relative group w-48 h-9">
@@ -161,12 +236,14 @@ const Header: React.FC<HeaderProps> = ({
             </button>
           )}
           <button
+            data-tutorial="save"
             onClick={onSaveConfig}
             className="h-9 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-[10px] font-black uppercase tracking-wider border border-white/5 transition-all"
           >
             Save
           </button>
           <button
+            data-tutorial="load"
             onClick={onLoadConfig}
             className="h-9 px-4 bg-slate-800 hover:bg-slate-700 text-sky-400 hover:text-sky-300 rounded-lg text-[10px] font-black uppercase tracking-wider border border-white/5 transition-all"
           >
@@ -192,6 +269,19 @@ const Header: React.FC<HeaderProps> = ({
             onTooltipsChange={onTooltipsChange}
             onSaveAsDefault={onSaveAsDefault}
             onRestoreFactoryDefaults={onRestoreFactoryDefaults}
+            appearance={appearance}
+            onAppearanceChange={onAppearanceChange}
+            onResetAppearance={onResetAppearance}
+            modelColor={modelColor}
+            onModelColorChange={onModelColorChange}
+            tutorialEnabled={tutorialEnabled}
+            onTutorialEnabledChange={onTutorialEnabledChange}
+            onShowTutorial={() => {
+              setShowSettings(false);
+              onShowTutorial?.();
+            }}
+            tutorialAdvanced={tutorialAdvanced}
+            onTutorialAdvancedChange={onTutorialAdvancedChange}
           />
       )}
 

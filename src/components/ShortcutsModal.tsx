@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { ShortcutConfig, ShortcutDef } from '../types';
+import { AppearanceSettings, ShortcutConfig, ShortcutDef } from '../types';
 import { formatShortcut } from './Tooltip';
 import { useTranslation } from '../translations';
 
@@ -289,9 +289,19 @@ interface ShortcutsModalProps {
   onSaveAsDefault?: () => void;
   onRestoreFactoryDefaults?: () => void;
   onResetEstimateCalibration?: () => void;
+  appearance?: AppearanceSettings;
+  onAppearanceChange?: (changes: Partial<AppearanceSettings>) => void;
+  onResetAppearance?: () => void;
+  modelColor?: string;
+  onModelColorChange?: (color: string) => void;
+  tutorialEnabled?: boolean;
+  onTutorialEnabledChange?: (enabled: boolean) => void;
+  onShowTutorial?: () => void;
+  tutorialAdvanced?: boolean;
+  onTutorialAdvancedChange?: (advanced: boolean) => void;
   estimateCalibrationReadout?: Array<{ bucket: string; samples: number; lastUpdatedAt: number | null }>;
   estimateCalibrationLastUpdatedLabel?: string | null;
-  activeTab?: 'shortcuts' | 'apikey' | 'aiscope' | 'settings';
+  activeTab?: 'shortcuts' | 'apikey' | 'aiscope' | 'settings' | 'appearance';
   message?: string | null;
 }
 
@@ -328,11 +338,21 @@ const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
   isOpen, onClose, onAbout, config, onSave, onReset,
   language = 'en', onLanguageChange, showTooltips, onTooltipsChange,
   onSaveAsDefault, onRestoreFactoryDefaults, onResetEstimateCalibration, estimateCalibrationReadout, estimateCalibrationLastUpdatedLabel,
+  appearance = { backgroundColor: '#020617', panelColor: '#0f172a', reduceMotion: false, highContrast: false },
+  onAppearanceChange = (_changes: Partial<AppearanceSettings>) => undefined,
+  onResetAppearance = () => undefined,
+  modelColor = '#38bdf8',
+  onModelColorChange,
+  tutorialEnabled = true,
+  onTutorialEnabledChange,
+  onShowTutorial,
+  tutorialAdvanced = false,
+  onTutorialAdvancedChange,
   activeTab: initialTab = 'shortcuts', message
 }) => {
   const { t } = useTranslation(language);
 
-  type TabId = 'shortcuts' | 'apikey' | 'aiscope' | 'settings';
+  type TabId = 'shortcuts' | 'apikey' | 'aiscope' | 'settings' | 'appearance';
   const [activeTab, setActiveTab] = useState<TabId>(initialTab);
 
   // ── Shortcuts state ──────────────────────────────────────────────────────
@@ -583,6 +603,7 @@ const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
           {tabBtn('apikey',    '🔑', t('API Key'))}
           {tabBtn('aiscope',   '🎲', t('AI Controls'))}
           {tabBtn('settings',  '⚙', t('settings'))}
+          {tabBtn('appearance', '◐', 'Appearance')}
         </div>
 
         {/* ── Scrollable content ───────────────────────────────────────── */}
@@ -1013,6 +1034,32 @@ const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
                 </button>
               </div>
 
+              <div className="p-3 bg-sky-900/20 rounded-xl border border-sky-500/20 space-y-3">
+                <div className="text-[10px] font-black uppercase tracking-wider text-sky-300">Getting Started Tutorial</div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Show the walkthrough when the app starts.
+                </p>
+                <Toggle
+                  label={tutorialEnabled ? 'ON' : 'OFF'}
+                  checked={tutorialEnabled}
+                  onChange={(enabled) => onTutorialEnabledChange?.(enabled)}
+                />
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Advanced mode explains the individual variables on each tab.
+                </p>
+                <Toggle
+                  label={tutorialAdvanced ? 'ADVANCED' : 'BASIC'}
+                  checked={tutorialAdvanced}
+                  onChange={(advanced) => onTutorialAdvancedChange?.(advanced)}
+                />
+                <button
+                  onClick={() => onShowTutorial?.()}
+                  className="w-full h-9 rounded-lg bg-sky-600/20 text-sky-200 border border-sky-500/30 text-xs font-black uppercase tracking-wider hover:bg-sky-500 hover:text-white transition-all"
+                >
+                  Open Tutorial Now
+                </button>
+              </div>
+
               <div className="p-3 bg-rose-900/20 rounded-xl border border-rose-500/20 space-y-3">
                 <div className="text-[10px] font-black uppercase tracking-wider text-rose-300">{t('Factory Reset')}</div>
                 <p className="text-[11px] text-rose-200/80 leading-relaxed">
@@ -1048,6 +1095,7 @@ const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
                   ) : (
                     <div className="text-[10px] text-amber-100/70">No calibration samples yet.</div>
                   )}
+
                 </div>
                 <button
                   onClick={() => onResetEstimateCalibration?.()}
@@ -1056,6 +1104,84 @@ const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
                   Reset Estimate Learning
                 </button>
               </div>
+            </div>
+          )}
+
+          {activeTab === 'appearance' && (
+            <div className="space-y-4">
+              <div className="p-3 bg-slate-800/30 rounded-xl border border-white/5 space-y-3">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">Application Colors</div>
+                  <p className="text-[11px] text-slate-500 mt-1">Customize the application chrome without changing the snowflake design color.</p>
+                </div>
+
+                <label className="flex items-center justify-between gap-3">
+                  <span className="text-[11px] font-semibold text-slate-300">App background</span>
+                  <span className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={appearance.backgroundColor}
+                      onChange={(event) => onAppearanceChange({ backgroundColor: event.target.value })}
+                      className="w-9 h-7 rounded border border-white/15 bg-transparent cursor-pointer"
+                      aria-label="App background color"
+                    />
+                    <span className="w-20 text-[10px] font-mono text-slate-500 uppercase">{appearance.backgroundColor}</span>
+                  </span>
+                </label>
+
+                <label className="flex items-center justify-between gap-3">
+                  <span className="text-[11px] font-semibold text-slate-300">Panel color</span>
+                  <span className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={appearance.panelColor}
+                      onChange={(event) => onAppearanceChange({ panelColor: event.target.value })}
+                      className="w-9 h-7 rounded border border-white/15 bg-transparent cursor-pointer"
+                      aria-label="Panel color"
+                    />
+                    <span className="w-20 text-[10px] font-mono text-slate-500 uppercase">{appearance.panelColor}</span>
+                  </span>
+                </label>
+
+                {onModelColorChange && (
+                  <label className="flex items-center justify-between gap-3">
+                    <span className="text-[11px] font-semibold text-slate-300">Model color</span>
+                    <span className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={modelColor}
+                        onChange={(event) => onModelColorChange(event.target.value)}
+                        className="w-9 h-7 rounded border border-white/15 bg-transparent cursor-pointer"
+                        aria-label="Model color"
+                      />
+                      <span className="w-20 text-[10px] font-mono text-slate-500 uppercase">{modelColor}</span>
+                    </span>
+                  </label>
+                )}
+              </div>
+
+              <div className="p-3 bg-slate-800/30 rounded-xl border border-white/5 space-y-3">
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">Accessibility and Motion</div>
+                <Toggle
+                  label={appearance.reduceMotion ? 'ON' : 'OFF'}
+                  checked={appearance.reduceMotion}
+                  onChange={(reduceMotion) => onAppearanceChange({ reduceMotion })}
+                />
+                <div className="text-[11px] text-slate-300 -mt-2">Reduce interface animations</div>
+                <Toggle
+                  label={appearance.highContrast ? 'ON' : 'OFF'}
+                  checked={appearance.highContrast}
+                  onChange={(highContrast) => onAppearanceChange({ highContrast })}
+                />
+                <div className="text-[11px] text-slate-300 -mt-2">Increase interface contrast</div>
+              </div>
+
+              <button
+                onClick={onResetAppearance}
+                className="w-full h-9 rounded-lg bg-slate-800 text-slate-300 border border-white/10 text-xs font-black uppercase tracking-wider hover:bg-slate-700 hover:text-white transition-all"
+              >
+                Reset Appearance
+              </button>
             </div>
           )}
 

@@ -119,6 +119,7 @@ export const createDefaultGlobalConfig = (): Omit<SnowflakeConfig, 'projectName'
   slotEnabled: false,
   slotBridgesEnabled: true,
   slotLength: 95,
+  automaticSlotLength: true,
   slotWidth: 4.0,
   slotMode: '3-plane',
   quality: 'low',
