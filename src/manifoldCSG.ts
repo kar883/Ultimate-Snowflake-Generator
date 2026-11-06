@@ -264,45 +264,51 @@ export async function manifoldUnionGeometries(
       : new Error('Failed to create manifold operand for union');
   };
 
-  for (let i = 0; i < geometries.length; i++) {
-    let operand: ReturnType<typeof makeOperandManifold>;
-    try {
-      operand = makeOperandManifold(geometries[i]);
-    } catch (err: any) {
-      const diag = describeOperand(geometries[i]);
-      throw new Error(
-        `manifoldUnionGeometries operand ${i}/${geometries.length} is not a valid solid (${diag}): ${err?.message ?? err}`
-      );
-    }
-    const { piece, clean, meshObj } = operand;
-
-    try {
-      if (!unionResult) {
-        unionResult = piece;
-      } else {
-        const next = manifoldUnionOp(unionResult, piece);
-        unionResult.delete?.();
-        piece.delete?.();
-        unionResult = next;
+  try {
+    for (let i = 0; i < geometries.length; i++) {
+      let operand: ReturnType<typeof makeOperandManifold>;
+      try {
+        operand = makeOperandManifold(geometries[i]);
+      } catch (err: any) {
+        const diag = describeOperand(geometries[i]);
+        throw new Error(
+          `manifoldUnionGeometries operand ${i}/${geometries.length} is not a valid solid (${diag}): ${err?.message ?? err}`
+        );
       }
-    } finally {
-      meshObj.delete?.();
-      clean.dispose();
+      const { piece, clean, meshObj } = operand;
+
+      try {
+        if (!unionResult) {
+          unionResult = piece;
+        } else {
+          try {
+            const next = manifoldUnionOp(unionResult, piece);
+            unionResult.delete?.();
+            unionResult = next;
+          } finally {
+            piece.delete?.();
+          }
+        }
+      } finally {
+        meshObj.delete?.();
+        clean.dispose();
+      }
     }
+
+    if (!unionResult) {
+      throw new Error('Manifold union failed to produce output');
+    }
+
+    const finalMesh = unionResult.getMesh();
+
+    const out = meshToBufferGeometry(finalMesh);
+    const posCount = out.attributes.position?.count ?? 0;
+    const faceCount = out.index ? out.index.count / 3 : 0;
+    if (MANIFOLD_DEBUG) console.log(`✅ Manifold union: ${posCount} verts, ${faceCount} faces (watertight)`);
+    return out;
+  } finally {
+    unionResult?.delete?.();
   }
-
-  if (!unionResult) {
-    throw new Error('Manifold union failed to produce output');
-  }
-
-  const finalMesh = unionResult.getMesh();
-  unionResult.delete?.();
-
-  const out = meshToBufferGeometry(finalMesh);
-  const posCount = out.attributes.position?.count ?? 0;
-  const faceCount = out.index ? out.index.count / 3 : 0;
-  if (MANIFOLD_DEBUG) console.log(`✅ Manifold union: ${posCount} verts, ${faceCount} faces (watertight)`);
-  return out;
 }
 
 export async function manifoldProfileCutAndExtrude(
@@ -857,6 +863,13 @@ function meshToBufferGeometry(finalMesh: any): THREE.BufferGeometry {
   out.computeVertexNormals();
   out.computeBoundingBox();
   return out;
+}
+
+export function normalizeManifoldGeometry(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
+  const result = prepare(geometry, { weld: true, tolerance: 1e-5 });
+  result.computeVertexNormals();
+  result.computeBoundingBox();
+  return result;
 }
 
 /**

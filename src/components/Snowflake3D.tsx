@@ -875,6 +875,7 @@ interface Snowflake3DProps {
   onProcessingChange?: (isProcessing: boolean) => void;
   emergencyStopSeq?: number;
   forceRefreshToken?: number;
+  onForceRefresh: () => void;
   activeLayerId?: string;
   syncAllLayers?: boolean;
   highlightActivePlaneOnly?: boolean;
@@ -1178,6 +1179,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   onProcessingChange,
   emergencyStopSeq = 0,
   forceRefreshToken = 0,
+  onForceRefresh,
   activeLayerId,
   syncAllLayers = true,
   highlightActivePlaneOnly = false,
@@ -1223,17 +1225,20 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   const gizmoLastDragAtRef = useRef(0);
 
   const [loading, setLoading]   = useState(false);
+  const [generationError, setGenerationError] = useState<string | null>(null);
   const [camQ, setCamQ]         = useState<THREE.Quaternion | null>(null);
   const [isGizmoDragging, setIsGizmoDragging] = useState(false);
   const [conflictCount, setConflictCount] = useState(0);
   const [showSlotDebug, setShowSlotDebug] = useState(true);
   const [isAnalyzingBodies, setIsAnalyzingBodies] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const prevRefreshKeyRef = useRef(0);
+  const [slotDisconnectedLayers, setSlotDisconnectedLayers] = useState<string[]>([]);
+  const [slotAnalysisError, setSlotAnalysisError] = useState<string | null>(null);
+  const [slotWarningDismissed, setSlotWarningDismissed] = useState(false);
   const prevForceRefreshTokenRef = useRef(forceRefreshToken);
   const hardStopTokenRef = useRef(0);
-  const bodiesWorkersRef = useRef<Worker[]>([]);
+  const bodiesWorkersRef = useRef(new Map<Worker, string>());
   const bodiesAnalysisTokenRef = useRef(0);
+  const completedConfigKeyRef = useRef<string | null>(null);
   const runBodiesAnalysisRef = useRef<() => void>(() => {});
   // Bump this counter to trigger applyAppearance after worker completes
   // const [bodyResultKey, setBodyResultKey] = useState(0);
@@ -1738,8 +1743,11 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   }, [applyAppearance]);
 
   const terminateBodiesWorkers = useCallback(() => {
-    bodiesWorkersRef.current.forEach((worker) => worker.terminate());
-    bodiesWorkersRef.current = [];
+    bodiesWorkersRef.current.forEach((url, worker) => {
+      worker.terminate();
+      URL.revokeObjectURL(url);
+    });
+    bodiesWorkersRef.current.clear();
   }, []);
 
   const clearFloatingBodyHighlights = useCallback((notify = true) => {
@@ -1761,7 +1769,8 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   }, [onFloatingBodiesChange]);
 
   const runBodiesAnalysis = useCallback(() => {
-    if (!meshGroupRef.current) {
+    const automaticSlotCheck = isVisible && config.slotEnabled;
+    if (!meshGroupRef.current || completedConfigKeyRef.current !== configKey || (!identifyBodiesMode && !automaticSlotCheck)) {
       onFloatingBodiesChange?.({});
       return;
     }
@@ -1776,7 +1785,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
       if (!layerId || child.userData.slotDebug) return;
 
       const isLayerVisible = planeVisibility[layerId] ?? true;
-      if (!isLayerVisible) {
+      if (!isLayerVisible && !automaticSlotCheck) {
         const geo = child.geometry as THREE.BufferGeometry;
         if (geo.getAttribute('color')) {
           geo.deleteAttribute('color');
@@ -1796,12 +1805,15 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
 
     setIsAnalyzingBodies(true);
     const floatingByLayer: Record<string, boolean> = {};
+    const disconnectedLayers = new Set<string>();
+    const analysisErrors: string[] = [];
 
     const jobs = meshes.map((mesh) => new Promise<void>((resolve) => {
       const geo = mesh.geometry as THREE.BufferGeometry;
       const posAttr = geo.attributes.position as THREE.BufferAttribute | undefined;
       if (!posAttr) {
         mesh.userData.hasFloatingBodies = false;
+        analysisErrors.push(`${mesh.name || 'Plane'}: missing geometry positions`);
         resolve();
         return;
       }
@@ -1812,13 +1824,21 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
 
       const blob = new Blob([BODIES_WORKER_CODE], { type: 'application/javascript' });
       const url = URL.createObjectURL(blob);
-      const worker = new Worker(url);
-      bodiesWorkersRef.current.push(worker);
+      let worker: Worker;
+      try {
+        worker = new Worker(url);
+      } catch (error) {
+        URL.revokeObjectURL(url);
+        analysisErrors.push(`${mesh.name || 'Plane'}: ${error instanceof Error ? error.message : String(error)}`);
+        resolve();
+        return;
+      }
+      bodiesWorkersRef.current.set(worker, url);
 
       const cleanup = () => {
         URL.revokeObjectURL(url);
         worker.terminate();
-        bodiesWorkersRef.current = bodiesWorkersRef.current.filter((w) => w !== worker);
+        bodiesWorkersRef.current.delete(worker);
       };
 
       worker.onmessage = (ev) => {
@@ -1828,16 +1848,23 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
           return;
         }
 
-        const { success, bodyCount, colorArr } = ev.data || {};
+        const { success, bodyCount, colorArr, error } = ev.data || {};
         const layerId = String(mesh.userData.layerId ?? '');
-        const isFloating = !!success && typeof bodyCount === 'number' && bodyCount > 1;
+        if (!success || typeof bodyCount !== 'number') {
+          analysisErrors.push(`${mesh.name || 'Plane'}: ${error || 'body analysis returned no result'}`);
+          resolve();
+          return;
+        }
+        const isFloating = bodyCount > 1;
+        if (isFloating && automaticSlotCheck) disconnectedLayers.add(layerId);
 
-        mesh.userData.hasFloatingBodies = isFloating;
-        if (layerId) {
+        const visibleForIdentification = identifyBodiesMode && (planeVisibility[layerId] ?? true);
+        mesh.userData.hasFloatingBodies = isFloating && visibleForIdentification;
+        if (layerId && visibleForIdentification) {
           floatingByLayer[layerId] = (floatingByLayer[layerId] ?? false) || isFloating;
         }
 
-        if (isFloating && colorArr?.length === posAttr.count * 3) {
+        if (isFloating && visibleForIdentification && colorArr?.length === posAttr.count * 3) {
           geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colorArr), 3));
           geo.attributes.color.needsUpdate = true;
         } else if (geo.getAttribute('color')) {
@@ -1847,9 +1874,10 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
         resolve();
       };
 
-      worker.onerror = () => {
+      worker.onerror = (event) => {
         cleanup();
         if (token === bodiesAnalysisTokenRef.current) {
+          analysisErrors.push(`${mesh.name || 'Plane'}: ${event.message || 'body analysis worker failed'}`);
           mesh.userData.hasFloatingBodies = false;
           if ((mesh.geometry as THREE.BufferGeometry).getAttribute('color')) {
             (mesh.geometry as THREE.BufferGeometry).deleteAttribute('color');
@@ -1860,16 +1888,30 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
 
       const transferList: Transferable[] = [positions.buffer];
       if (indices) transferList.push(indices.buffer);
-      worker.postMessage({ positions, indices, designColor: color || '#38bdf8' }, transferList);
+      try {
+        worker.postMessage({ positions, indices, designColor: color || '#38bdf8' }, transferList);
+      } catch (error) {
+        cleanup();
+        analysisErrors.push(`${mesh.name || 'Plane'}: ${error instanceof Error ? error.message : String(error)}`);
+        resolve();
+      }
     }));
 
-    Promise.allSettled(jobs).then(() => {
+    Promise.allSettled(jobs).then((results) => {
       if (token !== bodiesAnalysisTokenRef.current) return;
+      results.forEach((result) => {
+        if (result.status === 'rejected') {
+          analysisErrors.push(result.reason instanceof Error ? result.reason.message : String(result.reason));
+        }
+      });
       setIsAnalyzingBodies(false);
       onFloatingBodiesChange?.(floatingByLayer);
+      setSlotDisconnectedLayers(automaticSlotCheck ? [...disconnectedLayers] : []);
+      setSlotAnalysisError(automaticSlotCheck && analysisErrors.length ? analysisErrors.join('; ') : null);
+      if (analysisErrors.length) console.error('Disconnected-body analysis failed:', analysisErrors.join('; '));
       applyAppearanceRef.current();
     });
-  }, [color, onFloatingBodiesChange, planeVisibility, terminateBodiesWorkers]);
+  }, [color, config.slotEnabled, configKey, identifyBodiesMode, isVisible, onFloatingBodiesChange, planeVisibility, terminateBodiesWorkers]);
 
   useEffect(() => {
     runBodiesAnalysisRef.current = runBodiesAnalysis;
@@ -1886,20 +1928,19 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   }, [onProcessingChange]);
 
   useEffect(() => {
-    if (identifyBodiesMode) {
-      runBodiesAnalysisRef.current();
-    } else {
-      bodiesAnalysisTokenRef.current += 1;
-      terminateBodiesWorkers();
-      setIsAnalyzingBodies(false);
+    bodiesAnalysisTokenRef.current += 1;
+    terminateBodiesWorkers();
+    setIsAnalyzingBodies(false);
+    if (!identifyBodiesMode) {
       clearFloatingBodyHighlights();
     }
-  }, [identifyBodiesMode, terminateBodiesWorkers, clearFloatingBodyHighlights]);
-
-  useEffect(() => {
-    if (!identifyBodiesMode) return;
-    runBodiesAnalysisRef.current();
-  }, [identifyBodiesMode, planeVisibility]);
+    if (identifyBodiesMode || (isVisible && config.slotEnabled)) {
+      runBodiesAnalysisRef.current();
+    } else {
+      setSlotDisconnectedLayers([]);
+      setSlotAnalysisError(null);
+    }
+  }, [identifyBodiesMode, isVisible, config.slotEnabled, configKey, planeVisibility, terminateBodiesWorkers, clearFloatingBodyHighlights]);
 
   useEffect(() => {
     return () => {
@@ -2031,17 +2072,21 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   
   useEffect(() => {
     let cancelled = false;
+    completedConfigKeyRef.current = null;
+    bodiesAnalysisTokenRef.current += 1;
+    terminateBodiesWorkers();
+    setIsAnalyzingBodies(false);
+    setSlotDisconnectedLayers([]);
+    setSlotAnalysisError(null);
+    setSlotWarningDismissed(false);
     const load = async () => {
       const loadToken = hardStopTokenRef.current;
-      const isForcedByButton = refreshKey !== prevRefreshKeyRef.current;
       const isForcedByExternalToken = forceRefreshToken !== prevForceRefreshTokenRef.current;
-      const isForcedRefresh = isForcedByButton || isForcedByExternalToken;
-      prevRefreshKeyRef.current = refreshKey;
       prevForceRefreshTokenRef.current = forceRefreshToken;
       setLoading(true);
       setConflictCount(0);
       try {
-        const mode: 'preview' | 'refresh' = isForcedRefresh ? 'refresh' : 'preview';
+        const mode: 'preview' | 'refresh' = isForcedByExternalToken ? 'refresh' : 'preview';
         const generatedGroup = await generateMeshRef.current(() => {}, undefined, config, mode);
         // Keep cached/export geometry immutable by operating on a preview clone.
         const groupFromGenerator = generatedGroup.clone(true);
@@ -2187,26 +2232,30 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
 
         sceneRef.current.add(groupFromGenerator);
         meshGroupRef.current = groupFromGenerator;
+        completedConfigKeyRef.current = configKey;
+        setGenerationError(null);
         // Apply the latest appearance state (not a stale closure captured at
         // effect start) so plane visibility remains accurate after regen.
         applyAppearanceRef.current();
-        if (identifyBodiesMode) {
-          runBodiesAnalysisRef.current();
-        }
+        runBodiesAnalysisRef.current();
         // If body mode is already on, re-run analysis against the new mesh
         // if (bodyMode) launchBodiesWorkerRef.current?.();
       } catch (err) {
-        if ((err as any)?.name === 'AbortError') {
+        if (cancelled || loadToken !== hardStopTokenRef.current) return;
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          console.info('Snowflake3D: mesh generation cancelled', err);
           return;
         }
         console.error('Snowflake3D: mesh gen failed', err);
+        const message = err instanceof Error ? err.message : String(err);
+        setGenerationError(message);
       } finally {
         if (!cancelled) setLoading(false);
       }
     };
     const t = setTimeout(load, 100);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [configKey, refreshKey, forceRefreshToken]);
+  }, [configKey, forceRefreshToken, terminateBodiesWorkers]);
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -2220,6 +2269,83 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
           <div className="text-white text-center">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-sky-400 mx-auto mb-2" />
             <div className="text-sm text-slate-300">Generating…</div>
+          </div>
+        </div>
+      )}
+      {!loading && generationError && (
+        <div className="absolute bottom-4 left-4 z-50 max-w-[min(32rem,calc(100%-2rem))]">
+          <div role="alert" className="rounded-lg border border-red-400/50 bg-red-950/95 p-3 text-sm text-red-100 shadow-xl">
+            <div className="flex items-start gap-3">
+              <div className="min-w-0 flex-1">
+                <p>3D generation failed. The displayed model may be out of date; check it before exporting.</p>
+                <p className="mt-1 max-h-24 overflow-auto break-words text-xs text-red-200">{generationError}</p>
+              </div>
+              <button
+                type="button"
+                aria-label="Dismiss 3D generation error"
+                onClick={() => setGenerationError(null)}
+                className="rounded px-2 py-1 text-red-100 hover:bg-red-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
+              >
+                &times;
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setGenerationError(null);
+                onForceRefresh();
+              }}
+              className="mt-2 rounded border border-red-300/50 px-3 py-1 text-xs font-semibold hover:bg-red-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
+            >
+              Retry 3D generation
+            </button>
+          </div>
+        </div>
+      )}
+      {!loading && !generationError && config.slotEnabled && !slotWarningDismissed
+        && (slotDisconnectedLayers.length > 0 || slotAnalysisError) && (
+        <div className="absolute bottom-16 left-4 z-40 max-w-[min(30rem,calc(100%-2rem))]">
+          <div role="status" className="rounded-lg border border-amber-400/50 bg-slate-950/95 p-3 text-sm text-amber-100 shadow-xl">
+            <div className="flex items-start gap-3">
+              <div className="min-w-0 flex-1">
+                {slotDisconnectedLayers.length > 0 && (
+                  <>
+                    <p className="font-semibold">
+                      Disconnected pieces detected with slots enabled: {slotDisconnectedLayers.map(
+                        (id) => config.layers.find((layer) => layer.id === id)?.name || id
+                      ).join(', ')}.
+                    </p>
+                    <p className="mt-1 text-xs text-amber-100/90">
+                      Slots may separate a plane. Consider rotating the design elements relative to the slot direction
+                      so the cuts follow a longer arm, then check the pieces and fit again. Camera rotation does not change the cuts.
+                      Pieces may also have been disconnected before slotting.
+                    </p>
+                  </>
+                )}
+                {slotAnalysisError && (
+                  <p className="mt-1 text-xs text-amber-100/90">
+                    Could not check every plane for disconnected pieces: {slotAnalysisError}. Try the check again.
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                aria-label="Dismiss slot connectivity warning"
+                onClick={() => setSlotWarningDismissed(true)}
+                className="rounded px-2 py-1 hover:bg-amber-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
+              >
+                &times;
+              </button>
+            </div>
+            {slotAnalysisError && (
+              <button
+                type="button"
+                onClick={() => runBodiesAnalysisRef.current()}
+                className="mt-2 rounded border border-amber-300/50 px-3 py-1 text-xs font-semibold hover:bg-amber-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
+              >
+                Retry connectivity check
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -2349,7 +2475,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
           </button>
 
           <button
-            onClick={() => setRefreshKey(k => k + 1)}
+            onClick={onForceRefresh}
             title="Force refresh 3D model"
             className="p-2.5 bg-slate-900/85 backdrop-blur hover:bg-emerald-500 text-slate-300 hover:text-white rounded-xl border border-white/10 shadow-xl transition-all active:scale-90"
           >

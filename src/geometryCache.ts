@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { AbstractConfig } from './types';
 
 export interface GeometryCache {
   text: Map<string, THREE.BufferGeometry>;
@@ -100,8 +101,8 @@ export function makeHubKey(layerId: string, hub: any, extrusionDepth: number, be
 }
 
 // Helper to generate cache key for abstract geometries
-export function makeAbstractKey(layerId: string, abstract: any, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, globalStrokeWeight: number): string {
-  return `${layerId}::abstract::${abstract.enabled}::${abstract.type}::${abstract.size}::${abstract.recursionDepth}::${abstract.lengthDecay}::${abstract.trunkLength}::${abstract.initialLength}::${abstract.randomSeed}::${extrusionDepth}::${bevelEnabled}::${bevelAmount}::${globalStrokeWeight}`;
+export function makeAbstractKey(layerId: string, abstract: AbstractConfig, extrusionDepth: number, bevelEnabled: boolean, bevelAmount: number, globalStrokeWeight: number): string {
+  return `${layerId}::abstract::${JSON.stringify([abstract, extrusionDepth, bevelEnabled, bevelAmount, globalStrokeWeight])}`;
 }
 
 // Helper to generate cache key for slot geometries (already have makeCacheKey in slotGeometryCache.ts, but for consistency)

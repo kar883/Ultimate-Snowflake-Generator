@@ -30,28 +30,30 @@ import { getApiKey, loadAiScope, type AiScopeConfig } from './components/Shortcu
 import {
   type ShapeInstance2D,
   type SlotProfile2D,
+  manifoldFilletPrism,
   manifoldProfileCutAndExtrude,
   manifoldSubtract,
   manifoldUnionAndExtrudeShapeInstances,
   manifoldUnionGeometries,
+  normalizeManifoldGeometry,
 } from './manifoldCSG';
 import { getTopologyReport, surgicalSlotRepair } from './surgicalSlotRepair';
 import { fillSlotHoles } from './slotHoleFiller';
 import { postCSGJob, terminateWorker } from './csgWorkerManager';
 import { useTranslation } from './translations';
 import { getAdjustedGlyphPathCommands, getPathCommandBounds, makePathFromCommands } from './utils/textControl';
+import { simplifyStraightSegments } from './utils/simplifyStraightSegments';
 // @ts-ignore
 // import { fillHolesManifold } from './holeFillingRepair'; // Temporarily commented
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, /*makeSlotKey,*/ getOrCreateGeometry, clearGeometryCache, modelCache3D, hashConfig, /*slotCutCache,*/ makeUnderlineKey } from './geometryCache';
 
 const MAX_HISTORY = 50;
-const APP_VERSION = '1.1.2';
-import { manifoldFilletPrism } from './manifoldCSG';
+const APP_VERSION = '1.1.3';
 const hubFilletInfoCache = new Map<string, { applied: number; by: 'depth' | 'wall' | null }>();
 const APP_DEBUG = false;
 // Bump when mesh generation logic changes (slot geometry, CSG sequencing, etc.)
 // so cached groups from older algorithms are not reused.
-const GEOMETRY_ALGO_VERSION = 'slot-2026-11-04-hub-fillet-loft-j';
+const GEOMETRY_ALGO_VERSION = 'slot-2026-11-06-profiled-solids-l';
 // Feature-flagged slot strategy: build slot openings in profile space and extrude once.
 const ENABLE_BAKED_PROFILE_SLOT_PATH = true;
 const DEFAULT_BAKED_PROFILE_SLOT_ENABLED = true;
@@ -2445,11 +2447,16 @@ const applyWatertightSlotCuts = async (
   if (config.manifoldExact) {
     // Manifold-exact: one boolean on Manifold operands, validated, no worker/repair/fallback.
     try {
-      const exactOut = await manifoldSubtract(layerForCut, cutters, {
+      let exactOut = await manifoldSubtract(layerForCut, cutters, {
         baseIsManifold: true,
         strict: true,
         filletRadius: 0,
       });
+      if (config.bevelEnabled && bevelPerSide > 1e-5) {
+        const normalized = normalizeManifoldGeometry(exactOut);
+        exactOut.dispose();
+        exactOut = normalized;
+      }
       const exactFailure = describeTopologyFailure(`${layer.name} manifold-exact slot result`, exactOut);
       if (exactFailure) {
         exactOut.dispose();
@@ -3898,6 +3905,7 @@ const App: React.FC = () => {
   const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d');
   const [autoRegenerate3D, setAutoRegenerate3D] = useState(false);
   const [forceRefresh3DToken, setForceRefresh3DToken] = useState(0);
+  const forceRegenerateRef = useRef<() => void>(() => {});
   const [identifyBodiesMode, setIdentifyBodiesMode] = useState(false);
   const [floatingBodiesByLayer, setFloatingBodiesByLayer] = useState<Record<string, boolean>>({});
   const [isProcessing3D, setIsProcessing3D] = useState(false);
@@ -3946,11 +3954,7 @@ const App: React.FC = () => {
       setViewMode((mode) => mode === '2d' ? '3d' : '2d');
     });
     window.electronAPI.onForceRegenerate?.(() => {
-      clearGeometryCache();
-      clearSlotCutResultCache();
-      modelCache3D.clear();
-      setForceRefresh3DToken((prev) => prev + 1);
-      showNotification('Models Regenerated', 'info', 1000);
+      forceRegenerateRef.current();
     });
     window.electronAPI.onResetZoom?.(() => {
       showNotification('Zoom reset is available from the 3D view controls.', 'info', 1500);
@@ -4053,6 +4057,12 @@ const App: React.FC = () => {
   // and never reset their internal timer on re-render.
   const debounce150Timer = useRef<NodeJS.Timeout | null>(null);
   const debounce500Timer = useRef<NodeJS.Timeout | null>(null);
+  const cancelPending3DUpdates = useCallback(() => {
+    for (const timer of [debounceTimer, debounce150Timer, debounce500Timer]) {
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = null;
+    }
+  }, []);
   const slotCutResultCacheRef = useRef<Map<string, THREE_ACTUAL.BufferGeometry>>(new Map());
   const slotCutInFlightRef = useRef<Map<string, Promise<THREE_ACTUAL.BufferGeometry>>>(new Map());
   const slotCutAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
@@ -4066,7 +4076,6 @@ const App: React.FC = () => {
       geo.dispose();
     }
     slotCutResultCacheRef.current.clear();
-    slotCutInFlightRef.current.clear();
   }, []);
 
   const cancelAllSlotCuts = useCallback((options?: { includePreview?: boolean; terminateCSGWorker?: boolean }) => {
@@ -4075,15 +4084,15 @@ const App: React.FC = () => {
       const isPreview = slotCutIsPreviewRef.current.get(key);
       if (includePreview || !isPreview) {
         controller.abort();
+        slotCutInFlightRef.current.delete(key);
+        slotCutAbortControllersRef.current.delete(key);
+        slotCutIsPreviewRef.current.delete(key);
       }
     }
     if (options?.terminateCSGWorker) {
       terminateWorker();
     }
-    slotCutInFlightRef.current.clear();
-    slotCutAbortControllersRef.current.clear();
-    slotCutIsPreviewRef.current.clear();
-    setIsComputingSlots(false);
+    setIsComputingSlots(slotCutInFlightRef.current.size > 0);
   }, []);
 
   const emergencyStopAllProcessing = useCallback(() => {
@@ -4357,10 +4366,9 @@ const App: React.FC = () => {
           slotCutResultCacheRef.current.set(key, produced);
           return produced;
         } finally {
-          slotCutAbortControllersRef.current.delete(key);
-          slotCutIsPreviewRef.current.delete(key);
-          if (slotCutInFlightRef.current.size === 1) {
-            setIsComputingSlots(false);
+          if (slotCutAbortControllersRef.current.get(key) === abortController) {
+            slotCutAbortControllersRef.current.delete(key);
+            slotCutIsPreviewRef.current.delete(key);
           }
         }
       })();
@@ -4378,6 +4386,7 @@ const App: React.FC = () => {
     } finally {
       if (slotCutInFlightRef.current.get(key) === inflight) {
         slotCutInFlightRef.current.delete(key);
+        setIsComputingSlots(slotCutInFlightRef.current.size > 0);
       }
     }
   }, []);
@@ -4737,19 +4746,7 @@ const App: React.FC = () => {
 
       // IMPORTANT: cancel any queued background 3D updates so an older
       // snapshot cannot overwrite a newer visibility toggle (layer.enabled).
-      if (debounce150Timer.current) {
-        clearTimeout(debounce150Timer.current);
-        debounce150Timer.current = null;
-      }
-      if (debounce500Timer.current) {
-        clearTimeout(debounce500Timer.current);
-        debounce500Timer.current = null;
-      }
-
-      if (debounceTimer.current) {
-          clearTimeout(debounceTimer.current);
-          debounceTimer.current = null;
-      }
+      cancelPending3DUpdates();
 
       const skipAutoRegenerateForManualBridgeToggle =
         !commitTo3D &&
@@ -4802,13 +4799,13 @@ const App: React.FC = () => {
       // no cached 3D model available.
       cancelAllSlotCuts({ includePreview: true, terminateCSGWorker: true });
     }
-  }, [historyIndex, viewMode, autoRegenerate3D, makeModelCacheKey]);
+  }, [historyIndex, viewMode, autoRegenerate3D, makeModelCacheKey, cancelPending3DUpdates]);
 
   useEffect(() => {
       return () => {
-          if (debounceTimer.current) clearTimeout(debounceTimer.current);
+          cancelPending3DUpdates();
       }
-  }, []);
+  }, [cancelPending3DUpdates]);
 
 
   const updateGroup = useCallback((group: 'primary' | 'secondary', updates: Partial<TextGroupConfig>, commitTo3D: boolean = false) => {
@@ -5076,7 +5073,7 @@ const App: React.FC = () => {
     const bevelPerSide = config.bevelEnabled ? Math.min(config.bevelAmount, config.extrusionDepth / 2) : 0;
     const effectiveDepth = Math.max(0.001, config.extrusionDepth);
 
-    const extrudeSettings = {
+    const baseExtrudeSettings = {
       depth: effectiveDepth,
       bevelEnabled: config.bevelEnabled,
       bevelThickness: bevelPerSide,
@@ -5155,13 +5152,24 @@ const App: React.FC = () => {
     const applyLayerDisplayTransform = (
       sourceGeo: THREE_ACTUAL.BufferGeometry,
       rotationXDeg: number,
-      rotationYDeg: number
+      rotationYDeg: number,
+      normalizeSlotOutput = false
     ): THREE_ACTUAL.BufferGeometry => {
       let finalGeo = sourceGeo.clone();
       finalGeo.rotateX((rotationXDeg * Math.PI) / 180);
       finalGeo.rotateY((rotationYDeg * Math.PI) / 180);
 
       if (config.slotEnabled) {
+        if (normalizeSlotOutput) {
+          const normalized = normalizeManifoldGeometry(finalGeo);
+          finalGeo.dispose();
+          finalGeo = normalized;
+          const topology = getTopologyReport(finalGeo);
+          if (!topology.isManifold) {
+            finalGeo.dispose();
+            throw new Error(`Transformed slot geometry is not a closed manifold (boundary=${topology.boundaryEdges}, nonManifold=${topology.nonManifoldEdges})`);
+          }
+        }
         // Preserve watertight slot topology: creased-normal conversion can
         // split seam vertices and reintroduce open edges on dense CSG results.
         finalGeo.deleteAttribute('normal');
@@ -5192,6 +5200,8 @@ const App: React.FC = () => {
       return finalGeo;
     };
 
+    let generationSucceeded = false;
+    try {
     for (let lIdx = 0; lIdx < layersToGenerate.length; lIdx++) {
       ensureNotStopped();
       const layer = layersToGenerate[lIdx];
@@ -5227,6 +5237,13 @@ const App: React.FC = () => {
         continue;
       }
 
+      // Cutting the union of already-profiled solids preserves their edges and
+      // keeps the slot cutters exact instead of flattening the plane to 2D.
+      const slotUsesBeveledSolids = config.slotEnabled && config.manifoldExact && bevelPerSide > 1e-5;
+      const slotBevelThickness = Math.min(bevelPerSide, Math.max(0, (effectiveDepth - 0.001) / 2));
+      const extrudeSettings = slotUsesBeveledSolids
+        ? { ...baseExtrudeSettings, depth: effectiveDepth - 2 * slotBevelThickness, bevelThickness: slotBevelThickness }
+        : baseExtrudeSettings;
       const layerGeometries: THREE_ACTUAL.BufferGeometry[] = [];
       const layerShapeInstances: ShapeInstance2D[] = [];
       const addShapeInstances = (
@@ -5310,10 +5327,17 @@ const App: React.FC = () => {
       const textExtrudeSettings = {
         ...extrudeSettings,
         bevelEnabled: true, // Always enable when boldness is applied
-        bevelThickness: bevelPerSide + boldnessBevel,
+        bevelThickness: slotUsesBeveledSolids
+          ? Math.min(bevelPerSide + boldnessBevel, Math.max(0, (effectiveDepth - 0.001) / 2))
+          : bevelPerSide + boldnessBevel,
         bevelSize: bevelPerSide + boldnessBevel,
-        bevelSegments: Math.min(3, Math.max(2, bevelSegCap)),
+        bevelSegments: slotUsesBeveledSolids && config.bevelType === 'chamfer'
+          ? 1
+          : Math.min(3, Math.max(2, bevelSegCap)),
       };
+      if (slotUsesBeveledSolids) {
+        textExtrudeSettings.depth = effectiveDepth - 2 * textExtrudeSettings.bevelThickness;
+      }
 
       if (shouldApplyBoldness) {
         console.log('Ã°Å¸Å½Â¨ Applying boldness via bevel expansion:', {
@@ -5340,7 +5364,7 @@ const App: React.FC = () => {
         config.bevelType,
         textExtrudeSettings.bevelSegments,
         textExtrudeSettings.curveSegments,
-      );
+      ) + (slotUsesBeveledSolids ? '::slotted-depth' : '');
       const groupGeo = getOrCreateGeometry(geometryCache.text, textKey, () => new THREE_ACTUAL.ExtrudeGeometry(shapes, textExtrudeSettings));
 
             // Underline Logic
@@ -5483,14 +5507,14 @@ const App: React.FC = () => {
                   underlineExtrudeSettings.bevelEnabled,
                   underlineExtrudeSettings.bevelSize,
                   config.globalStrokeWeight || 0
-                );
+                ) + (slotUsesBeveledSolids ? '::slotted-depth' : '');
                 underlineGeo = getOrCreateGeometry(geometryCache.text, underlineKey, () => new THREE_ACTUAL.ExtrudeGeometry(underlineShapes, underlineExtrudeSettings));
             }
 
             const angleStep = (Math.PI * 2) / textGroup.arms;
 
             // Center the extrusion on Z-axis
-            const centerZOffset = -extrudeSettings.depth / 2;
+            const centerZOffset = -textExtrudeSettings.depth / 2;
 
             // Only push geometry if it has vertices
             if (groupGeo.attributes.position?.count > 0) {
@@ -5861,9 +5885,13 @@ const App: React.FC = () => {
                    s.lineTo(pts[0].x, pts[0].y + halfThick);
                    return s;
                };
-               const normalShape = createAbstractShape(shapePoints);
-               const abstractKey = makeAbstractKey(layer.id, abs, effectiveDepth, config.bevelEnabled, bevelPerSide, config.globalStrokeWeight);
-               const mirroredPoints = shapePoints.map((pt) => new THREE_ACTUAL.Vector2(pt.x, -pt.y));
+               // Collinear zigzag samples can be dropped by cap triangulation
+               // while remaining in bevel side walls, leaving open T-junctions.
+               const profilePoints = abs.type === 'zigzag' ? simplifyStraightSegments(shapePoints) : shapePoints;
+               const normalShape = createAbstractShape(profilePoints);
+               const abstractKey = makeAbstractKey(layer.id, abs, effectiveDepth, config.bevelEnabled, bevelPerSide, config.globalStrokeWeight)
+                 + `::${JSON.stringify([qMult, extrudeSettings])}`;
+               const mirroredPoints = profilePoints.map((pt) => new THREE_ACTUAL.Vector2(pt.x, -pt.y));
                const mirroredShape = createAbstractShape(mirroredPoints);
 
                // Apply boldness to abstract shapes using same approach as text
@@ -6175,11 +6203,11 @@ const App: React.FC = () => {
             if (config.manifoldExact && layerShapeInstances.length === 0) {
               throw new Error(`Manifold-exact: no 2D shapes available for ${layer.name}`);
             }
-            if (canUseFlat2DPreUnion && layerShapeInstances.length > 0) {
+            const hasSharpStarHub = layer.hubs.some((hub) => hub.enabled && hub.shape === 'star');
+            if (canUseFlat2DPreUnion && layerShapeInstances.length > 0 && !slotUsesBeveledSolids) {
               // Curve divisions per Bezier segment and bevel refinement length scale with quality.
               const slotUnionCurveSegments = qualityToUse === 'low' ? 12 : qualityToUse === 'med' ? 16 : 24;
               const minRefineEdgeLength = qualityToUse === 'low' ? 0.8 : qualityToUse === 'med' ? 0.55 : 0.35;
-              const hasSharpStarHub = layer.hubs.some((hub) => hub.enabled && hub.shape === 'star');
               unioned2DLayerGeo = await manifoldUnionAndExtrudeShapeInstances(
                 layerShapeInstances,
                 effectiveDepth,
@@ -6202,17 +6230,26 @@ const App: React.FC = () => {
               );
             }
           } catch (shapeUnionErr) {
-            if (config.manifoldExact) throw shapeUnionErr;
+            if (config.manifoldExact) {
+              layerGeometries.forEach((g) => g.dispose());
+              mergedLayerGeo.dispose();
+              throw shapeUnionErr;
+            }
             console.warn(`2D pre-union/extrude failed for ${layer.name}, using 3D fallback path`, shapeUnionErr);
           }
 
           let unionedLayerGeo: THREE_ACTUAL.BufferGeometry | null = null;
           if (!unioned2DLayerGeo) {
             try {
-              // Legacy 3D manifold pre-union remains as a fallback when the new
-              // 2D-first path cannot produce a valid single profile.
+              // Preserve existing bevels when the profiled-solid path is selected.
               unionedLayerGeo = await manifoldUnionGeometries(layerGeometries);
             } catch (unionErr) {
+              if (config.manifoldExact) {
+                layerGeometries.forEach((g) => g.dispose());
+                mergedLayerGeo.dispose();
+                const detail = unionErr instanceof Error ? unionErr.message : String(unionErr);
+                throw new Error(`Could not prepare ${layer.name} for slot cutting: ${detail}`);
+              }
               console.warn(`Manifold pre-union failed for ${layer.name}, using merged geometry`, unionErr);
             }
           }
@@ -6245,6 +6282,7 @@ const App: React.FC = () => {
                 preferWorker: preferWorkerPreviewCut,
               });
             } catch (unionCutErr) {
+              if (config.manifoldExact) throw unionCutErr;
               console.warn(`Manifold slot cut on pre-unioned base failed for ${layer.name}; retrying with merged base`, unionCutErr);
             }
           }
@@ -6256,7 +6294,7 @@ const App: React.FC = () => {
                 preferWorker: preferWorkerPreviewCut,
               });
             } catch (mergedCutErr) {
-              if (generationMode === 'export') throw mergedCutErr;
+              if (config.manifoldExact || generationMode === 'export') throw mergedCutErr;
               console.warn(`Manifold slot cut failed for ${layer.name}; keeping uncut geometry`, mergedCutErr);
               // Normalize the fallback geometry so downstream repair (which requires indexed geometry) can work.
               // Non-indexed geometry (3 unique verts per triangle) makes surgicalSlotRepair a no-op.
@@ -6372,7 +6410,7 @@ const App: React.FC = () => {
           syncedTemplateGeo = cutSourceGeo.clone();
         }
 
-        let finalGeo = applyLayerDisplayTransform(cutSourceGeo, effectiveRotationX, effectiveRotationY);
+        let finalGeo = applyLayerDisplayTransform(cutSourceGeo, effectiveRotationX, effectiveRotationY, slotUsesBeveledSolids);
 
         const transformedTopologyFailure = repairSlotOutputs
           ? describeTopologyFailure(`${layer.name} transformed display geometry`, finalGeo)
@@ -6481,16 +6519,16 @@ const App: React.FC = () => {
       }
       }
 
-    if (syncedTemplateGeo) {
-      syncedTemplateGeo.dispose();
-      syncedTemplateGeo = null;
-    }
-
     onProgress(1);
 
     // Cache the result before returning
     modelCache3D.set(meshKey, group);
+    generationSucceeded = true;
     return group;
+    } finally {
+      syncedTemplateGeo?.dispose();
+      if (!generationSucceeded) disposeGroupResources(group);
+    }
   }, [config, rendered3DConfig, dynamicFonts, loadFont, viewMode, makeModelCacheKey]);
 
   useEffect(() => {
@@ -7604,9 +7642,10 @@ const App: React.FC = () => {
     }
     setStartupVisibility(readStartupVisibility(3));
 
+    cancelPending3DUpdates();
     setConfig(factoryConfig);
     setConfig3D(factoryConfig);
-    setRendered3DConfig(factoryConfig);
+    setRendered3DIfChanged(factoryConfig);
     setHistory([factoryConfig]);
     setHistoryIndex(0);
     setActiveTab('text');
@@ -7617,7 +7656,7 @@ const App: React.FC = () => {
     setLanguage(currentLanguage);
     setShowTooltips(currentShowTooltips);
     showNotification(t('factoryDefaultsRestoredNotice'), 'success');
-  }, [shortcuts, language, showTooltips, clearSlotCutResultCache, showNotification, t]);
+  }, [shortcuts, language, showTooltips, clearSlotCutResultCache, showNotification, t, cancelPending3DUpdates, setRendered3DIfChanged]);
 
   const handleResetApp = () => {
     // Show confirmation dialog
@@ -7629,9 +7668,10 @@ const App: React.FC = () => {
       
       // Reset all configs to initial state
       const freshConfig = loadStartupState();
+      cancelPending3DUpdates();
       setConfig(freshConfig);
       setConfig3D(freshConfig);
-      setRendered3DConfig(freshConfig);
+      setRendered3DIfChanged(freshConfig);
       
       // Reset history
       setHistory([freshConfig]);
@@ -7725,6 +7765,9 @@ const App: React.FC = () => {
             ? loaded.highlightActivePlaneOnly
             : false,
         };
+        cancelPending3DUpdates();
+        tiltAutoManagedRef.current = false;
+        tiltLayerSnapshotRef.current = null;
         setConfig(normalizedLoaded);
         setConfig3D(normalizedLoaded);
         setRendered3DIfChanged(normalizedLoaded);
@@ -8469,10 +8512,23 @@ const App: React.FC = () => {
 };
 
   const enter3DView = useCallback(() => {
-    // Only updates the 3D snapshot when the serialized config changed.
+    cancelPending3DUpdates();
+    setConfig3D(config);
     setRendered3DIfChanged(config);
     setViewMode('3d');
-  }, [config, setRendered3DIfChanged]);
+  }, [config, setRendered3DIfChanged, cancelPending3DUpdates]);
+
+  const forceRegenerate3D = useCallback(() => {
+    cancelPending3DUpdates();
+    cancelAllSlotCuts({ includePreview: true });
+    clearGeometryCache();
+    clearSlotCutResultCache();
+    modelCache3D.clear();
+    setConfig3D(config);
+    setRendered3DIfChanged(config);
+    setForceRefresh3DToken((prev) => prev + 1);
+  }, [config, cancelPending3DUpdates, cancelAllSlotCuts, clearSlotCutResultCache, setRendered3DIfChanged]);
+  forceRegenerateRef.current = forceRegenerate3D;
 
   useKeyboardShortcuts(shortcuts, {
     undo,
@@ -8491,11 +8547,7 @@ const App: React.FC = () => {
       setViewMode(newMode);
     },
     forceRegenerate: () => {
-        clearGeometryCache();
-        clearSlotCutResultCache();
-        modelCache3D.clear();
-        setForceRefresh3DToken((prev) => prev + 1);
-        showNotification("Models Regenerated", "info", 1000);
+        forceRegenerate3D();
     },
     exportCombinedSTL: () => handleExportSTL(),
     exportBasePlaneSTL: () => handleExportLayerSTL(0),
@@ -8511,6 +8563,8 @@ const App: React.FC = () => {
     // switchToImagesTab is not defined in ShortcutConfig
     resetApp: handleResetApp,
     forceUpdate3D: () => {
+        cancelPending3DUpdates();
+        setConfig3D(config);
         setRendered3DIfChanged(config);
         showNotification("3D Model Updated", "info", 1000);
     }
@@ -8663,6 +8717,7 @@ const App: React.FC = () => {
                             onProcessingChange={setIsProcessing3D}
                             emergencyStopSeq={emergencyStopSeq}
                             forceRefreshToken={forceRefresh3DToken}
+                            onForceRefresh={forceRegenerate3D}
                             activeLayerId={rendered3DConfig.layers[rendered3DConfig.activeLayerIndex]?.id}
                             syncAllLayers={rendered3DConfig.syncAllLayers}
                             highlightActivePlaneOnly={rendered3DConfig.highlightActivePlaneOnly}
