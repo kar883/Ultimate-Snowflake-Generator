@@ -1,0 +1,558 @@
+{
+  "projectName": "Abstract Snowflake",
+  "layers": [
+    {
+      "id": "layer-1",
+      "name": "Base Plane",
+      "enabled": true,
+      "rotation3D": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "primary": {
+        "id": "text-qeox55kz",
+        "enabled": false,
+        "text": "Snow",
+        "fontFamily": "Great Vibes",
+        "arms": 6,
+        "textX": 20,
+        "letterSpacing": 0,
+        "thickness": 0,
+        "fontSize": 36.7,
+        "mirrorEnabled": true,
+        "mirrorOffset": 0,
+        "rotationOffset": 0,
+        "charOffsets": [
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "underline": {
+          "enabled": false,
+          "thickness": 1.5,
+          "startXOffset": 0,
+          "length": 50,
+          "yOffset": -5,
+          "capType": "none",
+          "capWidth": 10
+        }
+      },
+      "secondary": {
+        "id": "text-tk1dspdq",
+        "enabled": false,
+        "text": "",
+        "fontFamily": "Great Vibes",
+        "arms": 6,
+        "textX": 10,
+        "letterSpacing": 0,
+        "thickness": 0,
+        "fontSize": 20,
+        "mirrorEnabled": true,
+        "mirrorOffset": 0,
+        "rotationOffset": 30,
+        "charOffsets": [],
+        "underline": {
+          "enabled": false,
+          "thickness": 1.5,
+          "startXOffset": 0,
+          "length": 50,
+          "yOffset": -5,
+          "capType": "none",
+          "capWidth": 10
+        }
+      },
+      "secondaryEnabled": false,
+      "textGroups": [
+        {
+          "id": "text-qeox55kz",
+          "enabled": false,
+          "text": "Snow",
+          "fontFamily": "Great Vibes",
+          "arms": 6,
+          "textX": 20,
+          "letterSpacing": 0,
+          "thickness": 0,
+          "fontSize": 36.7,
+          "mirrorEnabled": true,
+          "mirrorOffset": 0,
+          "rotationOffset": 0,
+          "charOffsets": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0,
+              "y": 0
+            }
+          ],
+          "underline": {
+            "enabled": false,
+            "thickness": 1.5,
+            "startXOffset": 0,
+            "length": 50,
+            "yOffset": -5,
+            "capType": "none",
+            "capWidth": 10
+          }
+        }
+      ],
+      "abstracts": [
+        {
+          "id": "abs-1793978778925",
+          "enabled": true,
+          "type": "sine",
+          "arms": 6,
+          "rotationOffset": 30,
+          "innerRadius": 2.7,
+          "outerRadius": 31.3,
+          "amplitude": 5,
+          "frequency": 0.4,
+          "thickness": 0.6,
+          "mirrorEnabled": true,
+          "mirrorOffset": 0
+        },
+        {
+          "id": "abs-1793978781340",
+          "enabled": true,
+          "type": "zigzag",
+          "arms": 6,
+          "rotationOffset": 0,
+          "innerRadius": 16.5,
+          "outerRadius": 48.8,
+          "amplitude": 6.1,
+          "frequency": 0.57,
+          "thickness": 0.7,
+          "mirrorEnabled": true,
+          "mirrorOffset": 0
+        }
+      ],
+      "hubs": [],
+      "slotType": "third-back",
+      "slotLengthAdjustment": 0,
+      "slotWidthOffset": 0,
+      "slotCrossTipInLengthAdjustment": 0,
+      "slotTiltExtensionLengthAdjustment": 0,
+      "slotBridgeEnabled": true,
+      "slotBridgeManualWidthEnabled": false,
+      "slotBridgeManualWidth": 6,
+      "slotManualWidthEnabled": false,
+      "slotBridgeCrossMainManualWidthEnabled": false,
+      "slotBridgeCrossMainManualWidth": 6,
+      "slotBridgeCrossTipInManualWidthEnabled": false,
+      "slotBridgeCrossTipInManualWidth": 6,
+      "slotBridgeTiltMainManualWidthEnabled": false,
+      "slotBridgeTiltMainManualWidth": 6,
+      "slotBridgeTiltExtensionManualWidthEnabled": false,
+      "slotBridgeTiltExtensionManualWidth": 6,
+      "slotWidthCrossMainOffsetEnabled": false,
+      "slotWidthCrossMainOffset": 0,
+      "slotWidthCrossTipInOffsetEnabled": false,
+      "slotWidthCrossTipInOffset": 0,
+      "slotWidthTiltMainOffsetEnabled": false,
+      "slotWidthTiltMainOffset": 0,
+      "slotWidthTiltExtensionOffsetEnabled": false,
+      "slotWidthTiltExtensionOffset": 0,
+      "protectMatingClearance": true,
+      "slotBridges": [],
+      "images": []
+    },
+    {
+      "id": "layer-2",
+      "name": "Cross Plane",
+      "enabled": true,
+      "rotation3D": {
+        "x": 120,
+        "y": 0,
+        "z": 0
+      },
+      "primary": {
+        "id": "text-qeox55kz",
+        "enabled": false,
+        "text": "Snow",
+        "fontFamily": "Great Vibes",
+        "arms": 6,
+        "textX": 20,
+        "letterSpacing": 0,
+        "thickness": 0,
+        "fontSize": 36.7,
+        "mirrorEnabled": true,
+        "mirrorOffset": 0,
+        "rotationOffset": 0,
+        "charOffsets": [
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "underline": {
+          "enabled": false,
+          "thickness": 1.5,
+          "startXOffset": 0,
+          "length": 50,
+          "yOffset": -5,
+          "capType": "none",
+          "capWidth": 10
+        }
+      },
+      "secondary": {
+        "id": "text-6kxd5n0j",
+        "enabled": false,
+        "text": "",
+        "fontFamily": "Great Vibes",
+        "arms": 6,
+        "textX": 10,
+        "letterSpacing": 0,
+        "thickness": 0,
+        "fontSize": 20,
+        "mirrorEnabled": true,
+        "mirrorOffset": 0,
+        "rotationOffset": 30,
+        "charOffsets": [],
+        "underline": {
+          "enabled": false,
+          "thickness": 1.5,
+          "startXOffset": 0,
+          "length": 50,
+          "yOffset": -5,
+          "capType": "none",
+          "capWidth": 10
+        }
+      },
+      "secondaryEnabled": false,
+      "textGroups": [
+        {
+          "id": "text-qeox55kz",
+          "enabled": false,
+          "text": "Snow",
+          "fontFamily": "Great Vibes",
+          "arms": 6,
+          "textX": 20,
+          "letterSpacing": 0,
+          "thickness": 0,
+          "fontSize": 36.7,
+          "mirrorEnabled": true,
+          "mirrorOffset": 0,
+          "rotationOffset": 0,
+          "charOffsets": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0,
+              "y": 0
+            }
+          ],
+          "underline": {
+            "enabled": false,
+            "thickness": 1.5,
+            "startXOffset": 0,
+            "length": 50,
+            "yOffset": -5,
+            "capType": "none",
+            "capWidth": 10
+          }
+        }
+      ],
+      "abstracts": [
+        {
+          "id": "abs-1793978778925",
+          "enabled": true,
+          "type": "sine",
+          "arms": 6,
+          "rotationOffset": 30,
+          "innerRadius": 2.7,
+          "outerRadius": 31.3,
+          "amplitude": 5,
+          "frequency": 0.4,
+          "thickness": 0.6,
+          "mirrorEnabled": true,
+          "mirrorOffset": 0
+        },
+        {
+          "id": "abs-1793978781340",
+          "enabled": true,
+          "type": "zigzag",
+          "arms": 6,
+          "rotationOffset": 0,
+          "innerRadius": 16.5,
+          "outerRadius": 48.8,
+          "amplitude": 6.1,
+          "frequency": 0.57,
+          "thickness": 0.7,
+          "mirrorEnabled": true,
+          "mirrorOffset": 0
+        }
+      ],
+      "hubs": [],
+      "slotType": "third-middle",
+      "slotLengthAdjustment": 0,
+      "slotWidthOffset": 0,
+      "slotCrossTipInLengthAdjustment": 0,
+      "slotTiltExtensionLengthAdjustment": 0,
+      "slotBridgeEnabled": true,
+      "slotBridgeManualWidthEnabled": false,
+      "slotBridgeManualWidth": 6,
+      "slotManualWidthEnabled": false,
+      "slotBridgeCrossMainManualWidthEnabled": false,
+      "slotBridgeCrossMainManualWidth": 6,
+      "slotBridgeCrossTipInManualWidthEnabled": false,
+      "slotBridgeCrossTipInManualWidth": 6,
+      "slotBridgeTiltMainManualWidthEnabled": false,
+      "slotBridgeTiltMainManualWidth": 6,
+      "slotBridgeTiltExtensionManualWidthEnabled": false,
+      "slotBridgeTiltExtensionManualWidth": 6,
+      "slotWidthCrossMainOffsetEnabled": false,
+      "slotWidthCrossMainOffset": 0,
+      "slotWidthCrossTipInOffsetEnabled": false,
+      "slotWidthCrossTipInOffset": 0,
+      "slotWidthTiltMainOffsetEnabled": false,
+      "slotWidthTiltMainOffset": 0,
+      "slotWidthTiltExtensionOffsetEnabled": false,
+      "slotWidthTiltExtensionOffset": 0,
+      "protectMatingClearance": true,
+      "slotBridges": [],
+      "images": []
+    },
+    {
+      "id": "layer-4",
+      "name": "Tilt Plane",
+      "enabled": true,
+      "rotation3D": {
+        "x": 240,
+        "y": 0,
+        "z": 0
+      },
+      "primary": {
+        "id": "text-qeox55kz",
+        "enabled": false,
+        "text": "Snow",
+        "fontFamily": "Great Vibes",
+        "arms": 6,
+        "textX": 20,
+        "letterSpacing": 0,
+        "thickness": 0,
+        "fontSize": 36.7,
+        "mirrorEnabled": true,
+        "mirrorOffset": 0,
+        "rotationOffset": 0,
+        "charOffsets": [
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "underline": {
+          "enabled": false,
+          "thickness": 1.5,
+          "startXOffset": 0,
+          "length": 50,
+          "yOffset": -5,
+          "capType": "none",
+          "capWidth": 10
+        }
+      },
+      "secondary": {
+        "id": "text-yns8bksx",
+        "enabled": false,
+        "text": "",
+        "fontFamily": "Great Vibes",
+        "arms": 6,
+        "textX": 10,
+        "letterSpacing": 0,
+        "thickness": 0,
+        "fontSize": 20,
+        "mirrorEnabled": true,
+        "mirrorOffset": 0,
+        "rotationOffset": 30,
+        "charOffsets": [],
+        "underline": {
+          "enabled": false,
+          "thickness": 1.5,
+          "startXOffset": 0,
+          "length": 50,
+          "yOffset": -5,
+          "capType": "none",
+          "capWidth": 10
+        }
+      },
+      "secondaryEnabled": false,
+      "textGroups": [
+        {
+          "id": "text-qeox55kz",
+          "enabled": false,
+          "text": "Snow",
+          "fontFamily": "Great Vibes",
+          "arms": 6,
+          "textX": 20,
+          "letterSpacing": 0,
+          "thickness": 0,
+          "fontSize": 36.7,
+          "mirrorEnabled": true,
+          "mirrorOffset": 0,
+          "rotationOffset": 0,
+          "charOffsets": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0,
+              "y": 0
+            }
+          ],
+          "underline": {
+            "enabled": false,
+            "thickness": 1.5,
+            "startXOffset": 0,
+            "length": 50,
+            "yOffset": -5,
+            "capType": "none",
+            "capWidth": 10
+          }
+        }
+      ],
+      "abstracts": [
+        {
+          "id": "abs-1793978778925",
+          "enabled": true,
+          "type": "sine",
+          "arms": 6,
+          "rotationOffset": 30,
+          "innerRadius": 2.7,
+          "outerRadius": 31.3,
+          "amplitude": 5,
+          "frequency": 0.4,
+          "thickness": 0.6,
+          "mirrorEnabled": true,
+          "mirrorOffset": 0
+        },
+        {
+          "id": "abs-1793978781340",
+          "enabled": true,
+          "type": "zigzag",
+          "arms": 6,
+          "rotationOffset": 0,
+          "innerRadius": 16.5,
+          "outerRadius": 48.8,
+          "amplitude": 6.1,
+          "frequency": 0.57,
+          "thickness": 0.7,
+          "mirrorEnabled": true,
+          "mirrorOffset": 0
+        }
+      ],
+      "hubs": [],
+      "slotType": "third-front",
+      "slotLengthAdjustment": 0,
+      "slotWidthOffset": 0,
+      "slotCrossTipInLengthAdjustment": 0,
+      "slotTiltExtensionLengthAdjustment": 0,
+      "slotBridgeEnabled": true,
+      "slotBridgeManualWidthEnabled": false,
+      "slotBridgeManualWidth": 6,
+      "slotManualWidthEnabled": false,
+      "slotBridgeCrossMainManualWidthEnabled": false,
+      "slotBridgeCrossMainManualWidth": 6,
+      "slotBridgeCrossTipInManualWidthEnabled": false,
+      "slotBridgeCrossTipInManualWidth": 6,
+      "slotBridgeTiltMainManualWidthEnabled": false,
+      "slotBridgeTiltMainManualWidth": 6,
+      "slotBridgeTiltExtensionManualWidthEnabled": false,
+      "slotBridgeTiltExtensionManualWidth": 6,
+      "slotWidthCrossMainOffsetEnabled": false,
+      "slotWidthCrossMainOffset": 0,
+      "slotWidthCrossTipInOffsetEnabled": false,
+      "slotWidthCrossTipInOffset": 0,
+      "slotWidthTiltMainOffsetEnabled": false,
+      "slotWidthTiltMainOffset": 0,
+      "slotWidthTiltExtensionOffsetEnabled": false,
+      "slotWidthTiltExtensionOffset": 0,
+      "protectMatingClearance": true,
+      "slotBridges": [],
+      "images": []
+    }
+  ],
+  "activeLayerIndex": 0,
+  "color": "#38bdf8",
+  "extrusionDepth": 3,
+  "bevelEnabled": true,
+  "bevelType": "fillet",
+  "bevelAmount": 0.4,
+  "bevelSegments": 5,
+  "slotEnabled": true,
+  "slotBakedProfileEnabled": true,
+  "manifoldExact": true,
+  "slotBridgesEnabled": true,
+  "slotLength": 95,
+  "slotWidth": 0.2,
+  "slotMode": "3-plane",
+  "quality": "low",
+  "syncAllLayers": true,
+  "highlightActivePlaneOnly": false,
+  "globalStrokeWeight": 0,
+  "freeFloatingCheck": true
+}

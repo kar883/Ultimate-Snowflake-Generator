@@ -11,6 +11,7 @@
         "z": 0
       },
       "primary": {
+        "id": "text-qnc6brke",
         "enabled": true,
         "text": "Snow",
         "fontFamily": "Great Vibes",
@@ -24,19 +25,19 @@
         "rotationOffset": 0,
         "charOffsets": [
           {
-            "x": 4.2,
-            "y": 0
-          },
-          {
             "x": 0,
             "y": 0
           },
           {
-            "x": 0,
+            "x": -3,
             "y": 0
           },
           {
-            "x": 0,
+            "x": -3.7,
+            "y": 0
+          },
+          {
+            "x": -3.9,
             "y": 0
           }
         ],
@@ -51,7 +52,7 @@
         }
       },
       "secondary": {
-        "enabled": true,
+        "enabled": false,
         "text": "",
         "fontFamily": "Great Vibes",
         "arms": 6,
@@ -71,9 +72,53 @@
           "yOffset": -5,
           "capType": "none",
           "capWidth": 10
-        }
+        },
+        "id": "text-6b8fte57"
       },
-      "secondaryEnabled": true,
+      "secondaryEnabled": false,
+      "textGroups": [
+        {
+          "id": "text-qnc6brke",
+          "enabled": true,
+          "text": "Snow",
+          "fontFamily": "Great Vibes",
+          "arms": 6,
+          "textX": 20,
+          "letterSpacing": 0,
+          "thickness": 0,
+          "fontSize": 36.7,
+          "mirrorEnabled": true,
+          "mirrorOffset": 0,
+          "rotationOffset": 0,
+          "charOffsets": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": -3,
+              "y": 0
+            },
+            {
+              "x": -3.7,
+              "y": 0
+            },
+            {
+              "x": -3.9,
+              "y": 0
+            }
+          ],
+          "underline": {
+            "enabled": false,
+            "thickness": 1.5,
+            "startXOffset": 0,
+            "length": 50,
+            "yOffset": -5,
+            "capType": "none",
+            "capWidth": 10
+          }
+        }
+      ],
       "abstracts": [],
       "hubs": [
         {
@@ -158,6 +203,7 @@
         "z": 0
       },
       "primary": {
+        "id": "text-qnc6brke",
         "enabled": true,
         "text": "Snow",
         "fontFamily": "Great Vibes",
@@ -171,19 +217,19 @@
         "rotationOffset": 0,
         "charOffsets": [
           {
-            "x": 4.2,
-            "y": 0
-          },
-          {
             "x": 0,
             "y": 0
           },
           {
-            "x": 0,
+            "x": -3,
             "y": 0
           },
           {
-            "x": 0,
+            "x": -3.7,
+            "y": 0
+          },
+          {
+            "x": -3.9,
             "y": 0
           }
         ],
@@ -198,7 +244,7 @@
         }
       },
       "secondary": {
-        "enabled": true,
+        "enabled": false,
         "text": "",
         "fontFamily": "Great Vibes",
         "arms": 6,
@@ -218,9 +264,53 @@
           "yOffset": -5,
           "capType": "none",
           "capWidth": 10
-        }
+        },
+        "id": "text-0uo24cj9"
       },
-      "secondaryEnabled": true,
+      "secondaryEnabled": false,
+      "textGroups": [
+        {
+          "id": "text-qnc6brke",
+          "enabled": true,
+          "text": "Snow",
+          "fontFamily": "Great Vibes",
+          "arms": 6,
+          "textX": 20,
+          "letterSpacing": 0,
+          "thickness": 0,
+          "fontSize": 36.7,
+          "mirrorEnabled": true,
+          "mirrorOffset": 0,
+          "rotationOffset": 0,
+          "charOffsets": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": -3,
+              "y": 0
+            },
+            {
+              "x": -3.7,
+              "y": 0
+            },
+            {
+              "x": -3.9,
+              "y": 0
+            }
+          ],
+          "underline": {
+            "enabled": false,
+            "thickness": 1.5,
+            "startXOffset": 0,
+            "length": 50,
+            "yOffset": -5,
+            "capType": "none",
+            "capWidth": 10
+          }
+        }
+      ],
       "abstracts": [],
       "hubs": [
         {
@@ -305,6 +395,7 @@
         "z": 0
       },
       "primary": {
+        "id": "text-qnc6brke",
         "enabled": true,
         "text": "Snow",
         "fontFamily": "Great Vibes",
@@ -318,19 +409,19 @@
         "rotationOffset": 0,
         "charOffsets": [
           {
-            "x": 4.2,
-            "y": 0
-          },
-          {
             "x": 0,
             "y": 0
           },
           {
-            "x": 0,
+            "x": -3,
             "y": 0
           },
           {
-            "x": 0,
+            "x": -3.7,
+            "y": 0
+          },
+          {
+            "x": -3.9,
             "y": 0
           }
         ],
@@ -345,7 +436,7 @@
         }
       },
       "secondary": {
-        "enabled": true,
+        "enabled": false,
         "text": "",
         "fontFamily": "Great Vibes",
         "arms": 6,
@@ -365,9 +456,53 @@
           "yOffset": -5,
           "capType": "none",
           "capWidth": 10
-        }
+        },
+        "id": "text-hu3ol5eo"
       },
-      "secondaryEnabled": true,
+      "secondaryEnabled": false,
+      "textGroups": [
+        {
+          "id": "text-qnc6brke",
+          "enabled": true,
+          "text": "Snow",
+          "fontFamily": "Great Vibes",
+          "arms": 6,
+          "textX": 20,
+          "letterSpacing": 0,
+          "thickness": 0,
+          "fontSize": 36.7,
+          "mirrorEnabled": true,
+          "mirrorOffset": 0,
+          "rotationOffset": 0,
+          "charOffsets": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": -3,
+              "y": 0
+            },
+            {
+              "x": -3.7,
+              "y": 0
+            },
+            {
+              "x": -3.9,
+              "y": 0
+            }
+          ],
+          "underline": {
+            "enabled": false,
+            "thickness": 1.5,
+            "startXOffset": 0,
+            "length": 50,
+            "yOffset": -5,
+            "capType": "none",
+            "capWidth": 10
+          }
+        }
+      ],
       "abstracts": [],
       "hubs": [
         {
@@ -451,6 +586,8 @@
   "bevelAmount": 0.4,
   "bevelSegments": 5,
   "slotEnabled": false,
+  "slotBakedProfileEnabled": true,
+  "manifoldExact": true,
   "slotBridgesEnabled": true,
   "slotLength": 95,
   "slotWidth": 0.2,
