@@ -2,6 +2,7 @@
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { SnowflakeConfig, LayerConfig, TextGroupConfig, HubConfig, AbstractConfig, ShortcutConfig, ImageConfig } from '../types';
 import { FONT_TTF_URLS } from '../constants';
+import { getHubOutlinePoints } from '../utils/hubGeometry';
 import opentype from 'opentype.js';
 import { InfoTooltip } from './Tooltip';
 import { modelCache2D, hashConfig } from '../geometryCache';
@@ -97,11 +98,18 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   const [cachedSvgContent, setCachedSvgContent] = useState<string | null>(null);
   const [isGeneratingSvg, setIsGeneratingSvg] = useState(false);
   const [initialPreviewReady, setInitialPreviewReady] = useState(false);
+  const [measurementsVisible, setMeasurementsVisible] = useState(true);
 
   // SVG rotation worker disabled for performance - using simple CSS transform instead
   // const { rotatedPaths, isRotating, rotateSvg } = useSvgRotationWorker();
 
   const modelDiameter = calculatedDiameter || 200;
+  const inPlaneScale = typeof config.inPlaneScale === 'number' && Number.isFinite(config.inPlaneScale)
+    ? Math.max(0.1, Math.min(2, config.inPlaneScale))
+    : 1;
+  const annotationScale = Math.max(0.001, viewTransform.scale * inPlaneScale);
+  const annotationInverseScale = 1 / annotationScale;
+  const previewSlotLength = slotLength * (config.automaticSlotLength === false ? inPlaneScale : 1);
 
   const isDragging = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
@@ -109,6 +117,17 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   const hasUserInteracted = useRef(false);
 
   const enabledLayers = useMemo(() => config.layers.filter(l => l.enabled), [config.layers]);
+  const planeGeometryRefs = useRef(new Map<string, SVGGElement>());
+  const [planeBounds, setPlaneBounds] = useState<Record<string, { x: number; y: number; width: number; height: number }>>({});
+
+  useEffect(() => {
+    const nextBounds: Record<string, { x: number; y: number; width: number; height: number }> = {};
+    enabledLayers.forEach((layer) => {
+      const geometry = planeGeometryRefs.current.get(layer.id);
+      if (geometry) nextBounds[layer.id] = geometry.getBBox();
+    });
+    setPlaneBounds(nextBounds);
+  }, [enabledLayers, inPlaneScale, config.globalStrokeWeight, fontLoadCount]);
 
   const requiredInitialFonts = useMemo(() => {
     const required = new Set<string>();
@@ -137,10 +156,11 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   }, [initialPreviewReady, fontsPreloaded, allInitialFontsLoaded]);
 
   const layerSpacing = useMemo(() => {
-      const slotRequirement = slotEnabled ? (slotLength + (modelDiameter / 2) + 150) : 0;
-      const diameterRequirement = modelDiameter + 100;
-      return Math.max(400, diameterRequirement, slotRequirement);
-  }, [modelDiameter, slotEnabled, slotLength]);
+      const gap = Math.max(48, modelDiameter * 0.12, 70 / inPlaneScale);
+      const diameterRequirement = modelDiameter + gap;
+      const slotRequirement = slotEnabled ? previewSlotLength + (modelDiameter / 2) + gap : 0;
+      return Math.max(diameterRequirement, slotRequirement);
+  }, [modelDiameter, inPlaneScale, slotEnabled, previewSlotLength]);
 
   const fitView = useCallback(() => {
     if (containerSize.width === 0 || containerSize.height === 0) return;
@@ -148,7 +168,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
     const count = enabledLayers.length;
     const effectiveCount = Math.max(1, count);
 
-    const totalWidth = (Math.max(0, effectiveCount - 1) * layerSpacing) + Math.max(300, modelDiameter);
+    const totalWidth = (Math.max(0, effectiveCount - 1) * layerSpacing) + modelDiameter + 100;
     const totalHeight = Math.max(350, modelDiameter + 100);
 
     const fitScaleX = (containerSize.width * 0.9) / totalWidth;
@@ -465,31 +485,16 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
 
   const renderHubs = (hubs: HubConfig[], color: string) => {
     return hubs.filter(h => h.enabled).map((hub, idx) => {
-        const baseSides = hub.shape === 'star' ? hub.sides * 2 : (hub.shape === 'polygon' ? hub.sides : 64);
-        const isCircleWithOsc = hub.shape === 'circle' && hub.oscillationEnabled;
-        const res = isCircleWithOsc ? Math.max(256, hub.oscillationFrequency * 32) : 64;
-        const finalSides = isCircleWithOsc ? res : baseSides;
-        let d = "";
-        for (let i = 0; i < finalSides; i++) {
-            const angle = (i / finalSides) * Math.PI * 2;
-            let r = hub.outerRadius;
-            if (hub.shape === 'star') r = (i % 2 === 0) ? r : r * hub.starRatio;
-            if (isCircleWithOsc) r += Math.sin(angle * hub.oscillationFrequency) * hub.oscillationAmplitude;
-            const x = Math.cos(angle) * r; const y = Math.sin(angle) * r;
-            d += (i === 0 ? "M" : "L") + ` ${x} ${y} `;
-        }
-        d += "Z";
+        const baseResolution = hub.shape === 'circle' ? 64 : hub.shape === 'star' ? hub.sides * 2 : hub.sides;
+        const resolution = hub.oscillationEnabled
+          ? Math.max(hub.shape === 'circle' ? 256 : baseResolution, hub.oscillationFrequency * 32)
+          : baseResolution;
+        const outerPoints = getHubOutlinePoints(hub, hub.outerRadius, resolution);
+        let d = `${outerPoints.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')} Z`;
         if (hub.hollow) {
-            let holeD = "";
-            for (let i = finalSides - 1; i >= 0; i--) {
-                const angle = (i / finalSides) * Math.PI * 2;
-                let r = hub.outerRadius - hub.wallThickness;
-                if (hub.shape === 'star') r = (i % 2 === 0) ? r : r * hub.starRatio;
-                if (isCircleWithOsc) r += Math.sin(angle * hub.oscillationFrequency) * hub.oscillationAmplitude;
-                const x = Math.cos(angle) * r; const y = Math.sin(angle) * r;
-                holeD += (i === finalSides - 1 ? "M" : "L") + ` ${x} ${y} `;
-            }
-            holeD += "Z"; d += " " + holeD;
+            const innerPoints = getHubOutlinePoints(hub, Math.max(0.1, hub.outerRadius - hub.wallThickness), resolution).reverse();
+            const holeD = `${innerPoints.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')} Z`;
+            d += ` ${holeD}`;
         }
         return <g key={`hub-${idx}`} transform={`rotate(${hub.rotationOffset})`}><path d={d} fill={color} fillRule="evenodd" stroke={color} strokeWidth={config.globalStrokeWeight} /></g>;
     });
@@ -712,14 +717,16 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
 
   const renderSlotPreview = (layer: LayerConfig, layerIndex: number, enabledLayers: LayerConfig[], slotLength: number, slotWidth: number) => {
     if (!slotEnabled) return null;
+    const slotLabelScale = inPlaneScale;
     const layerTextGroups = getLayerTextGroups(layer);
     const firstEnabledTextGroup = layerTextGroups.find(g => g.enabled && (g.arms || 0) > 0);
     const rotationOffset = ((firstEnabledTextGroup?.rotationOffset ?? 0)) + (layer.rotation3D?.y ?? 0);
     const armCount = firstEnabledTextGroup ? Math.max(1, firstEnabledTextGroup.arms || 0) : 12;
     const numPlanes = enabledLayers.length;
-    const lengthAdjustmentPerSide = layer.slotLengthAdjustment ?? 0;
+    const lengthAdjustmentPerSide = (layer.slotLengthAdjustment ?? 0) * inPlaneScale;
     const widthAdjustmentPerSide = layer.slotWidthOffset ?? 0;
-    const adjLength = Math.max(2, slotLength + (lengthAdjustmentPerSide * 2));
+    const planeSlotLength = slotLength * (config.automaticSlotLength === false ? inPlaneScale : 1);
+    const adjLength = Math.max(2, planeSlotLength + (lengthAdjustmentPerSide * 2));
     const adjWidth = Math.max(0.1, slotWidth + widthAdjustmentPerSide);
     const drawLength = adjLength;
     const slotThickness = Math.max(0.1, globalThickness + adjWidth);
@@ -730,11 +737,11 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
       ? Math.max(0.01, drawLength * Math.cos(Math.PI / armCount))
       : drawLength;
     const baseTiltExtensionLength = Math.max(0.01, Math.max(2, adjLength) * 0.6);
-    const tiltExtensionLengthAdjustment = layer.slotTiltExtensionLengthAdjustment ?? 0;
+    const tiltExtensionLengthAdjustment = (layer.slotTiltExtensionLengthAdjustment ?? 0) * inPlaneScale;
     const tiltExtensionLength = Math.max(0.01, baseTiltExtensionLength + tiltExtensionLengthAdjustment);
     const rearExtensionReach = Math.min(tiltExtensionLength, rearReach);
     const baseCrossTipInLength = Math.max(0.01, rearReach - rearExtensionReach);
-    const crossTipInLengthAdjustment = layer.slotCrossTipInLengthAdjustment ?? 0;
+    const crossTipInLengthAdjustment = (layer.slotCrossTipInLengthAdjustment ?? 0) * inPlaneScale;
     const crossTipInLength = Math.max(0.01, Math.min(rearReach, baseCrossTipInLength + crossTipInLengthAdjustment));
 
     const rx = ((layer.rotation3D?.x ?? 0) % 360 + 360) % 360;
@@ -754,7 +761,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
       return (
         <g data-slot-preview="true">
           <line x1={0} y1={0} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="3" opacity="0.8" />
-          <text x={x2 * 0.6} y={y2 * 0.6 - 15} fill="#ef4444" fontSize="12" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">SLOT</text>
+          <text x={x2 * 0.6} y={y2 * 0.6 - 15 * slotLabelScale} fill="#ef4444" fontSize={12 * slotLabelScale} fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">SLOT</text>
         </g>
       );
     }
@@ -767,7 +774,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
         return (
           <g data-slot-preview="true">
             <line x1={0} y1={0} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="3" opacity="0.8" />
-            <text x={x2 * 0.5} y={y2 * 0.5 - 15} fill="#ef4444" fontSize="10" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">
+            <text x={x2 * 0.5} y={y2 * 0.5 - 15 * slotLabelScale} fill="#ef4444" fontSize={10 * slotLabelScale} fontWeight="bold" textAnchor="middle" transform={`translate(${x2}, 0) scale(-1, 1)`}>
               BASE SLOT
             </text>
           </g>
@@ -780,8 +787,8 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
           <g data-slot-preview="true">
             <line x1={0} y1={0} x2={x2Main} y2={y2Main} stroke={crossColor} strokeWidth="3" opacity="0.92" />
             <line x1={xStart} y1={yStart} x2={xEnd} y2={yEnd} stroke={crossColor} strokeWidth="3" opacity="0.92" strokeDasharray="5,3" />
-            <text x={x2Main * 0.5} y={y2Main * 0.5 - 15} fill={crossColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">CROSS MAIN</text>
-            <text x={xStart + (xEnd - xStart) * 0.5} y={yStart + (yEnd - yStart) * 0.5 - 15} fill={crossColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">TIP-IN</text>
+            <text x={x2Main * 0.5} y={y2Main * 0.5 - 15 * slotLabelScale} fill={crossColor} fontSize={9 * slotLabelScale} fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">CROSS MAIN</text>
+            <text x={xStart + (xEnd - xStart) * 0.5} y={yStart + (yEnd - yStart) * 0.5 - 15 * slotLabelScale} fill={crossColor} fontSize={9 * slotLabelScale} fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">TIP-IN</text>
           </g>
         );
       } else if (slotType === 'third-front') {
@@ -790,11 +797,11 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
         return (
           <g data-slot-preview="true">
             <line x1={0} y1={0} x2={x2} y2={y2} stroke={tiltColor} strokeWidth="3" opacity="0.92" />
-            <text x={x2 * 0.5} y={y2 * 0.5 - 15} fill={tiltColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">TILT MAIN</text>
+            <text x={x2 * 0.5} y={y2 * 0.5 - 15 * slotLabelScale} fill={tiltColor} fontSize={9 * slotLabelScale} fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">TILT MAIN</text>
             <line x1={0} y1={0} x2={x1} y2={y1} stroke={tiltColor} strokeWidth="3" opacity="0.92" strokeDasharray="5,2" />
             <line x1={x1*0.2} y1={y1*0.2 + 2} x2={x1*0.8} y2={y1*0.8 - 2} stroke={tiltColor} strokeWidth="1" opacity="0.68" />
             <line x1={x1*0.2} y1={y1*0.2 - 2} x2={x1*0.8} y2={y1*0.8 + 2} stroke={tiltColor} strokeWidth="1" opacity="0.68" />
-            <text x1={x1 * 0.5} y1={y1 * 0.5 + 20} fill={tiltColor} fontSize="9" fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">EXT CHAMFER</text>
+            <text x={x1 * 0.5} y={y1 * 0.5 + 20 * slotLabelScale} fill={tiltColor} fontSize={9 * slotLabelScale} fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">EXT CHAMFER</text>
           </g>
         );
       }
@@ -821,11 +828,24 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
     >
-      <div className="absolute top-4 left-4 z-10 pointer-events-none">
-          <div className="bg-slate-900/80 backdrop-blur px-3 py-2 rounded-lg border border-white/10 shadow-lg">
-             <span className="text-[10px] font-black uppercase text-slate-500 block mb-0.5">Diameter</span>
-             <span className="text-xl font-bold text-white leading-none">{modelDiameter.toFixed(1)} <span className="text-sm text-sky-500">mm</span></span>
-          </div>
+      <div className="absolute top-4 left-4 z-20">
+        <button
+          type="button"
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={() => setMeasurementsVisible((visible) => !visible)}
+          aria-pressed={measurementsVisible}
+          aria-label={`${t('Measurements')} ${measurementsVisible ? t('ON') : t('OFF')}`}
+          className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold shadow-lg backdrop-blur transition-colors ${
+            measurementsVisible
+              ? 'border-sky-400/40 bg-slate-900/80 text-sky-200 hover:bg-slate-800'
+              : 'border-white/10 bg-slate-900/80 text-slate-400 hover:bg-slate-800'
+          }`}
+        >
+          <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 4v16m0 0H4m2 0h2M4 6l2-2 2 2M10 18h10m0 0v-2m0 2v2m0-4 2 2-2 2" />
+          </svg>
+          {t('Measurements')} {measurementsVisible ? t('ON') : t('OFF')}
+        </button>
       </div>
       <svg width="100%" height="100%" className="cursor-move" ref={svgRef}>
         <pattern id="grid" width="100" height="100" patternUnits="userSpaceOnUse">
@@ -850,6 +870,14 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
               const isActiveLayer = !!activeLayerId && layer.id === activeLayerId;
               const layerOpacity = shouldEmphasizeActiveLayer ? (isActiveLayer ? 1.0 : 0.32) : 1.0;
               const layerLabelOpacity = shouldEmphasizeActiveLayer ? (isActiveLayer ? 1.0 : 0.55) : 1.0;
+              const bounds = planeBounds[layer.id];
+              const screenBounds = bounds && zRotation
+                ? { x: -bounds.x - bounds.width, y: bounds.y, width: bounds.width, height: bounds.height }
+                : bounds && { x: bounds.x, y: -bounds.y - bounds.height, width: bounds.width, height: bounds.height };
+              const dimensionX = screenBounds ? screenBounds.x + screenBounds.width + 8 : 0;
+              const dimensionMidY = screenBounds ? screenBounds.y + screenBounds.height / 2 : 0;
+              const dimensionBottomY = screenBounds ? screenBounds.y + screenBounds.height + 8 : 0;
+              const dimensionMidX = screenBounds ? screenBounds.x + screenBounds.width / 2 : 0;
               const emphasisFilter = shouldEmphasizeActiveLayer
                 ? (isActiveLayer ? 'drop-shadow(0 0 10px rgba(14,165,233,0.65))' : 'grayscale(0.45) brightness(0.72)')
                 : 'none';
@@ -874,7 +902,6 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
                       strokeDasharray="6,4"
                     />
                   )}
-                  <circle cx="0" cy="0" r="95" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="1" strokeDasharray="5,5" className="group"><title>Reference Radius (95mm)&#10;This dotted line shows the standard size for a snowflake arm.</title></circle>
                   <text
                     x="0"
                     y="-118"
@@ -891,16 +918,99 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
                     transform={`scale(1, -1) rotate(${zRotation})`}
                   >
                     <circle cx="0" cy="0" r="2" fill="#ef4444" />
-                    {renderHubs(layer.hubs, layerColor)}
-                    {renderImages(layer.images || [], layerColor)}
-                    {renderAbstracts(layer.abstracts, layerColor)}
-                    {getLayerTextGroups(layer).map((group, index) => (
-                      <React.Fragment key={`${layer.id}-text-${group.id || index}`}>
-                        {renderTextGroup(group, layerColor)}
-                      </React.Fragment>
-                    ))}
+                    <g transform={`scale(${inPlaneScale})`}>
+                      <g
+                        ref={(element) => {
+                          if (element) planeGeometryRefs.current.set(layer.id, element);
+                          else planeGeometryRefs.current.delete(layer.id);
+                        }}
+                      >
+                        {renderHubs(layer.hubs, layerColor)}
+                        {renderImages(layer.images || [], layerColor)}
+                        {renderAbstracts(layer.abstracts, layerColor)}
+                        {getLayerTextGroups(layer).map((group, index) => (
+                          <React.Fragment key={`${layer.id}-text-${group.id || index}`}>
+                            {renderTextGroup(group, layerColor)}
+                          </React.Fragment>
+                        ))}
+                      </g>
+                    </g>
                     {renderSlotPreview(layer, index, enabledLayers, slotLength, slotWidth)}
                   </g>
+                  {measurementsVisible && screenBounds && (
+                    <g transform={`scale(${inPlaneScale})`} aria-label={`${layer.name} dimensions`}>
+                      <line
+                        x1={dimensionX}
+                        y1={screenBounds.y}
+                        x2={dimensionX}
+                        y2={screenBounds.y + screenBounds.height}
+                        stroke={config.measurementColor ?? '#38bdf8'}
+                        strokeWidth="1"
+                      />
+                      <line
+                        x1={dimensionX - 3}
+                        y1={screenBounds.y}
+                        x2={dimensionX + 3}
+                        y2={screenBounds.y}
+                        stroke={config.measurementColor ?? '#38bdf8'}
+                        strokeWidth="1"
+                      />
+                      <line
+                        x1={dimensionX - 3}
+                        y1={screenBounds.y + screenBounds.height}
+                        x2={dimensionX + 3}
+                        y2={screenBounds.y + screenBounds.height}
+                        stroke={config.measurementColor ?? '#38bdf8'}
+                        strokeWidth="1"
+                      />
+                      <text
+                        x={0}
+                        y={0}
+                        fill={config.measurementColor ?? '#38bdf8'}
+                        fontSize="10"
+                        fontWeight="700"
+                        textAnchor="start"
+                        transform={`translate(${dimensionX + 6}, ${dimensionMidY}) scale(${annotationInverseScale})`}
+                      >
+                        H: {(screenBounds.height * inPlaneScale).toFixed(1)} mm
+                      </text>
+                      <line
+                        x1={screenBounds.x}
+                        y1={dimensionBottomY}
+                        x2={screenBounds.x + screenBounds.width}
+                        y2={dimensionBottomY}
+                        stroke={config.measurementColor ?? '#38bdf8'}
+                        strokeWidth="1"
+                      />
+                      <line
+                        x1={screenBounds.x}
+                        y1={dimensionBottomY - 3}
+                        x2={screenBounds.x}
+                        y2={dimensionBottomY + 3}
+                        stroke={config.measurementColor ?? '#38bdf8'}
+                        strokeWidth="1"
+                      />
+                      <line
+                        x1={screenBounds.x + screenBounds.width}
+                        y1={dimensionBottomY - 3}
+                        x2={screenBounds.x + screenBounds.width}
+                        y2={dimensionBottomY + 3}
+                        stroke={config.measurementColor ?? '#38bdf8'}
+                        strokeWidth="1"
+                      />
+                      <text
+                        x={0}
+                        y={0}
+                        fill={config.measurementColor ?? '#38bdf8'}
+                        fontSize="10"
+                        fontWeight="700"
+                        textAnchor="middle"
+                        transform={`translate(${dimensionMidX}, ${dimensionBottomY + 12 * annotationInverseScale}) scale(${annotationInverseScale})`}
+                      >
+                        W: {(screenBounds.width * inPlaneScale).toFixed(1)} mm
+                      </text>
+                    </g>
+                  )}
                 </g>
               );
             });

@@ -74,6 +74,8 @@ const SlotModeToggle: React.FC<{
   </div>
 );
 
+const ODD_ARM_SLOT_WARNING_STORAGE_KEY = 'snowflake-odd-arm-slot-warning-dismissed-v1';
+
 const DESCRIPTIONS: Record<string, string> = {
   "Project Name": "The filename used when saving or exporting your design.",
   "Model Color": "The base color applied to the 3D mesh and 2D preview.",
@@ -81,6 +83,7 @@ const DESCRIPTIONS: Record<string, string> = {
   "Reset View": "Reset the 2D view to fit the content.",
   "Export": "Export the current design in the selected format.",
   "Extrusion Depth": "The thickness of the snowflake planes in millimeters.",
+  "In-Plane Scale": "Scales all plane geometry around the shared center without changing material thickness or slot width.",
   "Global Boldness": "Makes all text, abstracts, hubs, and underlines appear bolder. Higher values make them thicker. Note: 3D boldness may not work properly with all fonts - some complex or decorative fonts may not render correctly.",
   "Preview Resolution": "Controls the geometric detail of the 3D preview. Lower is faster, higher is smoother.",
   "Profile Shape": "Choose Fillet for rounded edges or Chamfer for flat, angled edges.",
@@ -901,6 +904,18 @@ const CutSlotsMenu: React.FC<{
   tutorialId?: string;
 }> = ({ config, onUpdate, onSaveStartupSlots, startupSlotsEnabled, className, t, tutorialId }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [showOddArmWarning, setShowOddArmWarning] = useState(false);
+  const [suppressOddArmWarning, setSuppressOddArmWarning] = useState(false);
+  const [oddArmWarningSuppressed, setOddArmWarningSuppressed] = useState(false);
+
+  useEffect(() => {
+    try {
+      setOddArmWarningSuppressed(localStorage.getItem(ODD_ARM_SLOT_WARNING_STORAGE_KEY) === 'true');
+    } catch (error) {
+      console.warn('Unable to read odd-arm slot warning preference:', error);
+    }
+  }, []);
+
   useEffect(() => {
     if (!tutorialId) return;
     const onTutorial = (e: Event) => {
@@ -950,14 +965,61 @@ const CutSlotsMenu: React.FC<{
 
   const handleToggle = () => {
     const nextEnabled = !config.slotEnabled;
+    if (nextEnabled && !oddArmWarningSuppressed) {
+      const planeCount = config.slotMode === '2-plane' ? 2 : 3;
+      const hasOddArmPlane = config.layers.slice(0, planeCount).some((layer) => {
+        const armCount = layer.primary.enabled && (layer.primary.arms || 0) > 0
+          ? layer.primary.arms
+          : layer.secondaryEnabled && layer.secondary.enabled && (layer.secondary.arms || 0) > 0
+            ? layer.secondary.arms
+            : 6;
+        return armCount % 2 !== 0;
+      });
+      if (hasOddArmPlane) {
+        setSuppressOddArmWarning(false);
+        setShowOddArmWarning(true);
+        return;
+      }
+    }
     onUpdate({ slotEnabled: nextEnabled }, true);
   };
+
+  const saveOddArmWarningPreference = () => {
+    if (!suppressOddArmWarning) return;
+    try {
+      localStorage.setItem(ODD_ARM_SLOT_WARNING_STORAGE_KEY, 'true');
+      setOddArmWarningSuppressed(true);
+    } catch (error) {
+      console.warn('Unable to save odd-arm slot warning preference:', error);
+    }
+  };
+
+  const dismissOddArmWarning = () => {
+    saveOddArmWarningPreference();
+    setShowOddArmWarning(false);
+  };
+
+  const confirmOddArmWarning = () => {
+    saveOddArmWarningPreference();
+    setShowOddArmWarning(false);
+    onUpdate({ slotEnabled: true }, true);
+  };
+
+  useEffect(() => {
+    if (!showOddArmWarning) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') dismissOddArmWarning();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showOddArmWarning, suppressOddArmWarning]);
 
   const handleModeChange = (mode: '2-plane' | '3-plane') => {
     onUpdate({ slotMode: mode }, true);
   };
 
   return (
+    <>
     <div ref={containerRef} data-tutorial={tutorialId} className={`relative flex rounded-lg shadow-lg ${className}`}>
       <InfoTooltip label={t ? t('Cut Slots') : 'Cut Slots'} description={getDescription('Cut Slots', t)} className="flex-1">
         <button
@@ -1010,6 +1072,71 @@ const CutSlotsMenu: React.FC<{
         document.body
       )}
     </div>
+    {showOddArmWarning && createPortal(
+      <div
+        className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/70 p-4"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) dismissOddArmWarning();
+        }}
+      >
+        <section
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="odd-arm-slot-warning-title"
+          aria-describedby="odd-arm-slot-warning-description"
+          className="w-full max-w-md rounded-2xl border border-amber-400/30 bg-slate-900 p-5 shadow-2xl"
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-center gap-2 text-amber-300">
+              <span aria-hidden="true" className="text-xl">⚠</span>
+              <h2 id="odd-arm-slot-warning-title" className="text-sm font-black uppercase tracking-wide">
+                Odd number of arms
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={dismissOddArmWarning}
+              aria-label="Dismiss warning"
+              className="rounded p-1 text-slate-400 hover:bg-white/10 hover:text-white"
+            >
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 6l12 12M18 6L6 18" />
+              </svg>
+            </button>
+          </div>
+          <p id="odd-arm-slot-warning-description" className="mt-3 text-xs leading-relaxed text-slate-300">
+            Slots work best with even numbers of arms. With an odd number, the planes may not interlock or remain connected as reliably.
+          </p>
+          <label className="mt-4 flex cursor-pointer items-center gap-2 text-xs text-slate-400">
+            <input
+              type="checkbox"
+              checked={suppressOddArmWarning}
+              onChange={(event) => setSuppressOddArmWarning(event.target.checked)}
+              className="accent-amber-400"
+            />
+            Don’t show this warning again
+          </label>
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={dismissOddArmWarning}
+              className="rounded-lg px-3 py-2 text-xs font-bold text-slate-300 hover:bg-white/10"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={confirmOddArmWarning}
+              className="rounded-lg bg-amber-500 px-3 py-2 text-xs font-black text-slate-950 hover:bg-amber-400"
+            >
+              Enable Slots
+            </button>
+          </div>
+        </section>
+      </div>,
+      document.body
+    )}
+    </>
   );
 };
 
@@ -1697,7 +1824,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
       const calcStats = async () => {
       if (!activeLayer) return;
       let maxRad = 0;
-      activeLayer.hubs.forEach(h => { if (h.enabled) maxRad = Math.max(maxRad, h.outerRadius + ((h.shape === 'circle' && h.oscillationEnabled) ? h.oscillationAmplitude : 0)); });
+      activeLayer.hubs.forEach(h => { if (h.enabled) maxRad = Math.max(maxRad, h.outerRadius + (h.oscillationEnabled ? h.oscillationAmplitude : 0)); });
       activeLayer.abstracts.forEach(a => { if (a.enabled) maxRad = Math.max(maxRad, a.outerRadius + a.thickness / 2); });
       const layerTextGroups = getLayerTextGroups(activeLayer);
       for (const group of layerTextGroups) {
@@ -2084,6 +2211,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                   </div>
 
                   {renderSlider(t('Extrusion Depth'), config.extrusionDepth, 1, 20, 0.1, (v, c) => onUpdate({ extrusionDepth: v }, c), "mm", false, 3)}
+                  {renderSlider(t('In-Plane Scale'), (config.inPlaneScale ?? 1) * 100, 10, 200, 1, (v, c) => onUpdate({ inPlaneScale: v / 100 }, c), "%", false, 100)}
                   {renderSlider(t('Global Boldness'), config.globalStrokeWeight, 0, 10, 0.1, (v, c) => onUpdate({ globalStrokeWeight: v }, c), "mm", false, 0)}
                   <ControlRow label={t('Preview Resolution')} onReset={() => onUpdate({ quality: 'low' }, true)} onSaveDefault={onSaveAsDefault} isModified={config.quality !== 'low'} t={t}>
                      <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-lg" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px', backgroundColor: '#0f172a', padding: '4px', borderRadius: '8px' }}>
@@ -2514,6 +2642,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                    })}
                    <InfoTooltip label={t('Add Hub')} description={getDescription('Add Hub', t)}>
                      <button
+                       data-tutorial="add-hub"
                        onClick={() => {
                          const newHub: HubConfig = {
                            id: `hub-${Date.now()}`,
@@ -2592,31 +2721,25 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                      {activeLayer.hubs[selectedHubIndex].shape !== 'circle' && renderSlider(t('Hub Sides'), activeLayer.hubs[selectedHubIndex].sides, 3, 24, 1, (v, c) => updateHubConfig({ sides: v }, c), "", false, 6)}
                      {activeLayer.hubs[selectedHubIndex].shape === 'star' && renderSlider(t('Star Ratio'), activeLayer.hubs[selectedHubIndex].starRatio, 0.1, 0.9, 0.05, (v, c) => updateHubConfig({ starRatio: v }, c), "", false, 0.5)}
 
-                     {activeLayer.hubs[selectedHubIndex].shape === 'circle' ? (
-                       <>
-                          {renderSlider(t('Rotation'), activeLayer.hubs[selectedHubIndex].rotationOffset, -180, 180, 1, (v, c) => updateHubConfig({ rotationOffset: v }, c), "°", false, 0)}
-                            <div className="space-y-4 pt-4 border-t border-white/5">
-                              <div className={settingsHeaderClass}>
-                              <div className={settingsHeaderDotClass}></div>
-                              <span className={settingsHeaderLabelClass}>{t('Oscillation')}</span>
-                                  <div className="ml-auto flex items-center">
-                                    {onSaveAsDefault && activeLayer.hubs[selectedHubIndex].oscillationEnabled && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
-                                    <Toggle
-                                      label={activeLayer.hubs[selectedHubIndex].oscillationEnabled ? t('ON') : t('OFF')}
-                                      checked={activeLayer.hubs[selectedHubIndex].oscillationEnabled}
-                                      onChange={(c) => updateHubConfig({ oscillationEnabled: c }, true)}
-                                    />
-                                  </div>
-                              </div>
-                                <div className="flex items-center justify-end">
-                                      {activeLayer.hubs[selectedHubIndex].oscillationEnabled && <button onClick={() => updateHubConfig({ oscillationEnabled: false }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
-                              </div>
-                              {activeLayer.hubs[selectedHubIndex].oscillationEnabled && (<>{renderSlider(t('Amplitude'), activeLayer.hubs[selectedHubIndex].oscillationAmplitude, 1, 100, 0.1, (v, c) => updateHubConfig({ oscillationAmplitude: v }, c), "mm", false, 5)}{renderSlider(t('Frequency'), activeLayer.hubs[selectedHubIndex].oscillationFrequency, 3, 24, 1, (v, c) => updateHubConfig({ oscillationFrequency: v }, c), "", false, 6)}</>)}
-                          </div>
-                       </>
-                     ) : (
-                       renderSlider(t('Rotation'), activeLayer.hubs[selectedHubIndex].rotationOffset, -180, 180, 1, (v, c) => updateHubConfig({ rotationOffset: v }, c), "°", false, 0)
-                     )}
+                     {renderSlider(t('Rotation'), activeLayer.hubs[selectedHubIndex].rotationOffset, -180, 180, 1, (v, c) => updateHubConfig({ rotationOffset: v }, c), "°", false, 0)}
+                     <div className="space-y-4 pt-4 border-t border-white/5">
+                       <div className={settingsHeaderClass}>
+                         <div className={settingsHeaderDotClass}></div>
+                         <span className={settingsHeaderLabelClass}>{t('Oscillation')}</span>
+                         <div className="ml-auto flex items-center">
+                           {onSaveAsDefault && activeLayer.hubs[selectedHubIndex].oscillationEnabled && <button onClick={onSaveAsDefault} className="w-4 h-4 rounded hover:bg-emerald-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('saveDefault') || 'Save as Default'}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" /></svg></button>}
+                           <Toggle
+                             label={activeLayer.hubs[selectedHubIndex].oscillationEnabled ? t('ON') : t('OFF')}
+                             checked={activeLayer.hubs[selectedHubIndex].oscillationEnabled}
+                             onChange={(c) => updateHubConfig({ oscillationEnabled: c }, true)}
+                           />
+                         </div>
+                       </div>
+                       <div className="flex items-center justify-end">
+                         {activeLayer.hubs[selectedHubIndex].oscillationEnabled && <button onClick={() => updateHubConfig({ oscillationEnabled: false }, true)} className="w-4 h-4 rounded hover:bg-rose-500 hover:text-white text-slate-500 transition-colors flex items-center justify-center mr-1" title={t('reset')}><svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>}
+                       </div>
+                       {activeLayer.hubs[selectedHubIndex].oscillationEnabled && (<>{renderSlider(t('Amplitude'), activeLayer.hubs[selectedHubIndex].oscillationAmplitude, 0, 100, 0.1, (v, c) => updateHubConfig({ oscillationAmplitude: v }, c), "mm", false, 5)}{renderSlider(t('Frequency'), activeLayer.hubs[selectedHubIndex].oscillationFrequency, 0.1, 24, 0.1, (v, c) => updateHubConfig({ oscillationFrequency: v }, c), "", false, 6)}</>)}
+                     </div>
                    </div>
                 )}
              </div>
@@ -2627,6 +2750,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                <div className="flex gap-2 mb-2">
                   <InfoTooltip label={t('Add Shape')} description={getDescription('Add Shape', t)} className="flex-1">
                       <button
+                          data-tutorial="add-abstract-shape"
                           onClick={() => { const newAbs: AbstractConfig = { id: `abs-${Date.now()}`, enabled: true, type: 'sine', arms: 6, rotationOffset: 0, innerRadius: 20, outerRadius: 60, amplitude: 5, frequency: 0.4, thickness: 0.5, mirrorEnabled: true, mirrorOffset: 0 }; updateAbstracts([...activeLayer.abstracts, newAbs], false); setSelectedAbstractIndex(activeLayer.abstracts.length); }}
                           className="w-full h-8 rounded-lg bg-sky-500/10 text-sky-400 border border-sky-500/20 text-xs font-bold uppercase transition-all hover:bg-sky-500 hover:text-white"
                       >
@@ -2635,6 +2759,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                   </InfoTooltip>
                   <InfoTooltip label={t('Add Fractal')} description={getDescription('Add Fractal', t)} className="flex-1">
                       <button
+                          data-tutorial="add-abstract-fractal"
                           onClick={() => { const newAbs: AbstractConfig = { id: `fract-${Date.now()}`, enabled: true, type: 'fractal', arms: 6, rotationOffset: 0, innerRadius: 20, outerRadius: 60, amplitude: 5, frequency: 0.4, thickness: 0.5, mirrorEnabled: false, mirrorOffset: 0, trunkLength: 20, branchesPerNode: 2, recursionDepth: 4, minBranchLength: 5, branchPattern: 'symmetric', branchAngle: 45, initialLength: 30, lengthDecay: 0.8, randomSeed: 1234, angleVariation: 0, lengthVariation: 0, thicknessDecay: 0.8 }; updateAbstracts([...activeLayer.abstracts, newAbs], false); setSelectedAbstractIndex(activeLayer.abstracts.length); }}
                           className="w-full h-8 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs font-bold uppercase transition-all hover:bg-emerald-500 hover:text-white"
                       >
@@ -2810,7 +2935,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
 
               {/* Upload button */}
               <InfoTooltip label={t('Import SVG')} description={getDescription('Import SVG', t)} className="w-full">
-              <label className="flex items-center justify-center gap-2 w-full h-9 rounded-lg bg-sky-500/10 text-sky-400 border border-sky-500/20 text-xs font-bold uppercase transition-all hover:bg-sky-500 hover:text-white cursor-pointer">
+              <label data-tutorial="import-images" className="flex items-center justify-center gap-2 w-full h-9 rounded-lg bg-sky-500/10 text-sky-400 border border-sky-500/20 text-xs font-bold uppercase transition-all hover:bg-sky-500 hover:text-white cursor-pointer">
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                 </svg>

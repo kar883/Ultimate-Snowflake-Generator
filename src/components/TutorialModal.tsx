@@ -1,7 +1,8 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 // A target is a CSS selector, or a button/element found by its visible text.
 type TargetSpec = string | { text: string; closest?: string };
+type SettingsTab = 'shortcuts' | 'apikey' | 'aiscope' | 'settings' | 'appearance';
 
 interface TutorialStep {
   icon: string;
@@ -21,6 +22,12 @@ interface TutorialStep {
   details?: string[];
   // Steps that only appear in advanced mode.
   advancedOnly?: boolean;
+  // Steps that only appear in basic mode.
+  basicOnly?: boolean;
+  // Select this plane before activating the step's control tab.
+  planeIndex?: number;
+  // Opens the Settings modal on this tab while the step is shown.
+  settingsTab?: SettingsTab;
   // When 'preview', the card is parked over the preview so the control panel stays visible.
   anchor?: 'preview';
 }
@@ -33,7 +40,8 @@ const resolveTarget = (spec: TargetSpec): HTMLElement | null => {
   return (spec.closest ? match.closest<HTMLElement>(spec.closest) : null) ?? match;
 };
 
-const CARD_WIDTH = 440;
+const CARD_WIDTH = 600;
+const MIN_CARD_WIDTH = 480;
 const GAP = 16;
 const PAD = 6;
 
@@ -57,7 +65,7 @@ const STEPS: TutorialStep[] = [
   {
     icon: '🎛️',
     title: 'Global settings',
-    body: 'The Global tab controls what applies to the whole model: extrusion depth, edge bevel or fillet, boldness, and model color. Bevel rounds the edges without changing the overall thickness.',
+    body: 'The Global tab controls what applies to the whole model: extrusion depth, edge bevel or fillet, boldness, model color, and the 2D measurement annotation color. In the 2D preview, use the Measurements toggle to show or hide width and height. Bevel rounds the edges without changing the overall thickness.',
     tips: ['Boldness thickens all text and shapes uniformly.'],
     targets: ['[data-tutorial="tab-global"]'],
     activate: '[data-tutorial="tab-global"]',
@@ -68,6 +76,8 @@ const STEPS: TutorialStep[] = [
       'Bevel Amount: edge size in mm. It is capped to what the geometry can support so edges never break.',
       'Fillet Detail: segments used to smooth the curve. Higher is smoother but slower to generate.',
       'Boldness: uniformly thickens every shape in the model.',
+      'In-Plane Scale: changes the model width and height without changing plane thickness.',
+      'Measurement Color: changes the 2D width/height lines and labels. The Measurements button at the top-left of the 2D preview toggles annotations on or off.',
       'Cut Slots: on/off for the interlocking slots. Slot Width (clearance), Slot Length and Automatic Slot Length appear only while Cut Slots is ON; Automatic Slot Length measures your design, including hubs and abstracts that extend past the text.',
     ],
   },
@@ -104,20 +114,64 @@ const STEPS: TutorialStep[] = [
   },
   {
     icon: '⭐',
-    title: 'Hubs and Abstracts',
-    body: 'The Hub tab adds a circle, polygon or star at the centre. The Abstract tab adds decorative lines, waves, zigzags and fractal branches.',
-    tips: ['Each can be switched on or off, mirrored, and rotated independently.'],
-    targets: ['[data-tutorial="tab-hubs"]', '[data-tutorial="tab-abstract"]'],
+    title: 'Hubs',
+    body: 'The Hubs tab adds circles, polygons or stars at the centre of your snowflake. Add a hub to explore its shape and size controls.',
+    tips: ['Hubs can be switched on or off, mirrored and rotated independently.'],
+    targets: ['[data-tutorial="tab-hubs"]', '[data-tutorial="add-hub"]'],
+    boxes: [['[data-tutorial="tab-hubs"]'], ['[data-tutorial="add-hub"]']],
+    noPanel: true,
+    basicOnly: true,
+    activate: '[data-tutorial="tab-hubs"]',
+    anchor: 'preview',
+  },
+  {
+    icon: '〰️',
+    title: 'Abstracts',
+    body: 'The Abstract tab adds decorative lines, waves, zigzags and fractal branches along your snowflake arms.',
+    tips: ['Add a shape or fractal to explore its controls. Abstracts can be mirrored and rotated independently.'],
+    targets: ['[data-tutorial="tab-abstract"]', '[data-tutorial="add-abstract-shape"]', '[data-tutorial="add-abstract-fractal"]'],
+    boxes: [['[data-tutorial="tab-abstract"]'], ['[data-tutorial="add-abstract-shape"]', '[data-tutorial="add-abstract-fractal"]']],
+    noPanel: true,
+    basicOnly: true,
+    activate: '[data-tutorial="tab-abstract"]',
+    anchor: 'preview',
+  },
+  {
+    icon: '⭐',
+    title: 'Hub options',
+    body: 'Configure the hub for the selected plane. The same hub controls are available for Base, Cross and Tilt; Sync All Planes determines whether edits apply to every plane.',
+    targets: ['[data-tutorial="tab-hubs"]', '[data-tutorial="add-hub"]'],
+    boxes: [['[data-tutorial="tab-hubs"]'], ['[data-tutorial="add-hub"]']],
+    advancedOnly: true,
     noPanel: true,
     activate: '[data-tutorial="tab-hubs"]',
     anchor: 'preview',
     details: [
-      'Hub shape: Circle, Polygon or Star. Radius and Sides/Points set its size and character.',
-      'Hub thickness and Bevel: the bevel is a true fillet, so rounding the edge never changes the overall thickness. Very large values are limited automatically, and an amber alert tells you when that happens.',
-      'Oscillation (circle hubs only): a sine-wave ripple on the hub edge. Amplitude is the wave height; Frequency is how many peaks go around the circle.',
-      'Abstract shapes: Line, Sine, Zigzag. Inner/Outer Radius set where they run along the arm; Amplitude and Frequency control the wave; Thickness is the stroke width.',
-      'Fractals: Recursion Depth is the number of branching generations, Branches Per Node and Branch Angle shape the tree, Length Decay shrinks each generation, and Random Seed makes the variation repeatable.',
-      'Mirror and Rotation Offset: duplicate a shape across the arm axis or turn it around the centre.',
+      'Add/select a hub and use its ON/OFF control to include it in the design.',
+      'Shape: choose Circle, Polygon or Star; Radius and Sides/Points control its size and silhouette.',
+      'Thickness and Bevel: set the hub depth and edge fillet. Bevel limits are reported when the geometry cannot support the requested value.',
+      'Hollow and Wall Thickness: make a ring-shaped hub and set the material left around its opening.',
+      'Oscillation (circle only): enable a rippled edge, then adjust Amplitude and Frequency.',
+      'Rotation Offset turns the hub around the centre.',
+    ],
+  },
+  {
+    icon: '〰️',
+    title: 'Abstract options',
+    body: 'Configure abstract shapes for the selected plane. The same abstract controls are available for Base, Cross and Tilt; Sync All Planes determines whether edits apply to every plane.',
+    targets: ['[data-tutorial="tab-abstract"]', '[data-tutorial="add-abstract-shape"]', '[data-tutorial="add-abstract-fractal"]'],
+    boxes: [['[data-tutorial="tab-abstract"]'], ['[data-tutorial="add-abstract-shape"]', '[data-tutorial="add-abstract-fractal"]']],
+    advancedOnly: true,
+    noPanel: true,
+    activate: '[data-tutorial="tab-abstract"]',
+    anchor: 'preview',
+    details: [
+      'Add/select a Shape or Fractal and use its ON/OFF control to include it in the design.',
+      'Type: choose Line, Sine, Zigzag or Fractal. Inner/Outer Radius set where the shape runs along the arm.',
+      'Amplitude and Frequency tune sine and zigzag patterns; Thickness sets the stroke width.',
+      'Fractal controls include Recursion Depth, Branches Per Node, Branch Angle, Initial Length and Minimum Branch Length.',
+      'Length Decay, Thickness Decay, Angle Variation and Length Variation shape branching across generations.',
+      'Random Seed makes fractal variation repeatable. Mirror and Rotation Offset control placement and orientation.',
     ],
   },
   {
@@ -146,7 +200,8 @@ const STEPS: TutorialStep[] = [
     title: 'Images',
     body: 'The Images tab turns your own artwork into snowflake shapes. Import an SVG and it is repeated around the snowflake as an arm element.',
     tips: ['Use Import SVG at the top of the Images tab. Simple, solid shapes work best.'],
-    targets: ['[data-tutorial="tab-images"]'],
+    targets: ['[data-tutorial="tab-images"]', '[data-tutorial="import-images"]'],
+    boxes: [['[data-tutorial="tab-images"]'], ['[data-tutorial="import-images"]']],
     noPanel: true,
     activate: '[data-tutorial="tab-images"]',
     anchor: 'preview',
@@ -164,22 +219,16 @@ const STEPS: TutorialStep[] = [
   {
     icon: '🧊',
     title: 'The 2D / 3D workspace',
-    body: 'Your snowflake is shown here. Use the 2D / 3D toggle at the top right of the preview. In 3D, the Planes card shows each plane with an ON/OFF button and a Ghost button, and the controls at the bottom right move the camera.',
-    tips: [
-      '2D is fast; 3D shows the real printable model. Drag to orbit and scroll to zoom in 3D.',
-      'ON/OFF and Ghost only change the preview; they do not affect what you export.',
-    ],
+    body: 'Switch between a fast 2D preview and the printable 3D model with the toggle at the preview’s top right. In 3D, drag to orbit and scroll to zoom.',
+    tips: ['Plane visibility and Ghost affect only the preview, not exports.'],
     targets: ['[data-tutorial="preview"]'],
     noPanel: true,
     activate: '[data-tutorial="view-3d"]',
     details: [
-      'ID Bodies (top right of the preview, 3D only): checks the model for floating or disconnected pieces that would fall off when printed. The button turns green (Bodies: OK) when everything is connected, or pulses red (Bodies: Alert) and highlights the loose bodies. Click it again to turn the check off.',
-      'Planes card: ON/OFF shows or hides a plane. Ghost makes it semi-transparent so you can see through it.',
-      'Orientation gizmo: drag to rotate the model, or click an axis to snap to that view.',
-      'Reset camera (home): returns to the default view.',
-      'Force refresh: rebuilds the 3D model if it looks out of date.',
-      'Auto Regen 3D: when ON, the 3D model rebuilds as you change settings; turn it off to edit freely and refresh manually.',
-      'Undo / Redo buttons appear at the bottom left when there is something to undo.',
+      'Planes card: ON/OFF hides or shows a plane; Ghost makes it transparent. These are preview-only.',
+      'ID Bodies checks for disconnected pieces: green means connected; red highlights loose parts.',
+      'Orbit by dragging or using the orientation gizmo; click an axis to snap to a view. Home resets the camera.',
+      'Force refresh rebuilds the model. Auto Regen controls automatic rebuilds; Undo / Redo are at the bottom left.',
     ],
   },
   {
@@ -249,10 +298,55 @@ const STEPS: TutorialStep[] = [
   },
   {
     icon: '⚙️',
-    title: 'Make it yours',
-    body: 'Open Settings (the sliders icon in the header) to change language, tooltips, shortcuts, app colors and the model color, or to save your current design as the startup default.',
-    tips: ['You are all set. Have fun designing!'],
+    title: 'Open Settings',
+    body: 'The Settings button is in the app header. Select Next to see the Settings options, or continue to About Snowflake Generator.',
     targets: ['[data-tutorial="settings"]'],
+    noPanel: true,
+  },
+  ...([
+    {
+      tab: 'shortcuts',
+      title: 'Settings: Shortcuts',
+      body: 'Choose the interface language, turn tooltips on or off, and review or customize keyboard shortcuts. Save your changes or reset shortcuts to their defaults.',
+    },
+    {
+      tab: 'apikey',
+      title: 'Settings: API Key',
+      body: 'Add a Gemini API key to enable AI text suggestions and randomization. Keys saved here stay in your browser; a VITE_GEMINI_API_KEY environment variable takes priority.',
+    },
+    {
+      tab: 'aiscope',
+      title: 'Settings: AI Controls',
+      body: 'Choose which design parameters the AI Randomizer may change. Disable a whole section or fine-tune the individual variables it can use.',
+    },
+    {
+      tab: 'settings',
+      title: 'Settings: Settings',
+      body: 'Save the current design as your startup default, configure the Basic or Advanced startup tutorial, restore factory defaults, and reset adaptive export-estimate learning.',
+    },
+    {
+      tab: 'appearance',
+      title: 'Settings: Appearance',
+      body: 'Customize the app background, panel, model, and measurement colors. You can also reduce interface animations, increase contrast, or reset appearance settings.',
+    },
+  ] as const).map(({ tab, title, body }): TutorialStep => ({
+    icon: '⚙️',
+    title,
+    body,
+    settingsTab: tab,
+    advancedOnly: true,
+    noPanel: true,
+    targets: [`[data-tutorial="settings-tab-${tab}"]`, '[data-tutorial="settings-content"]'],
+    boxes: [[`[data-tutorial="settings-tab-${tab}"]`], ['[data-tutorial="settings-content"]']],
+  })),
+  {
+    icon: 'ℹ️',
+    title: 'About Snowflake Generator',
+    body: 'The About Snowflake Generator window is available from the About button at the top of Settings. It contains app information, update checks, and links for support and feedback.',
+    tips: ['Open Settings, then select About. You can click the highlighted About button while the tutorial is open.'],
+    targets: ['[data-tutorial="about-button"]'],
+    settingsTab: 'settings',
+    noPanel: true,
   },
 ];
 
@@ -264,6 +358,8 @@ interface TutorialModalProps {
   disableAtStartup: boolean;
   advanced: boolean;
   onAdvancedChange: (advanced: boolean) => void;
+  onSelectPlane?: (planeIndex: number) => void;
+  onShowSettingsTab?: (tab: SettingsTab | null) => void;
 }
 
 const TutorialModal: React.FC<TutorialModalProps> = ({
@@ -273,17 +369,28 @@ const TutorialModal: React.FC<TutorialModalProps> = ({
   disableAtStartup,
   advanced,
   onAdvancedChange,
+  onSelectPlane,
+  onShowSettingsTab,
 }) => {
-  const steps = useMemo(() => STEPS.filter((s) => advanced || !s.advancedOnly), [advanced]);
+  const steps = useMemo(
+    () => STEPS.filter((s) => advanced ? !s.basicOnly : !s.advancedOnly),
+    [advanced]
+  );
   const [step, setStep] = useState(0);
   const [rect, setRect] = useState<DOMRect | null>(null);
   const [boxes, setBoxes] = useState<DOMRect[]>([]);
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+  const nextButtonRef = useRef<HTMLButtonElement>(null);
+  const focusNextAfterTransition = useRef(false);
 
   useEffect(() => {
     if (isOpen) setStep(0);
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) onShowSettingsTab?.(null);
+  }, [isOpen, onShowSettingsTab]);
 
   // When Basic/Advanced toggles, stay on the same slide (or the nearest earlier one) instead of shifting.
   const [prevSteps, setPrevSteps] = useState(steps);
@@ -298,11 +405,27 @@ const TutorialModal: React.FC<TutorialModalProps> = ({
     setStep(next);
   }
 
+  useEffect(() => {
+    if (!focusNextAfterTransition.current) return;
+    focusNextAfterTransition.current = false;
+    nextButtonRef.current?.focus({ preventScroll: true });
+  }, [step]);
+
+  const advanceStep = useCallback(() => {
+    if (step >= steps.length - 1) return;
+    focusNextAfterTransition.current = true;
+    setStep(step + 1);
+  }, [step, steps.length]);
+
   // Reveal the relevant tab, then track the highlighted element's bounds.
   useLayoutEffect(() => {
     if (!isOpen) return;
     const stepDef = steps[step];
     if (!stepDef) return;
+    onShowSettingsTab?.(stepDef.settingsTab ?? null);
+    if (stepDef.planeIndex !== undefined) {
+      onSelectPlane?.(stepDef.planeIndex);
+    }
     if (stepDef.activate) resolveTarget(stepDef.activate)?.click();
 
     const menuId = advanced ? stepDef.openMenu : undefined;
@@ -357,18 +480,18 @@ const TutorialModal: React.FC<TutorialModalProps> = ({
       window.removeEventListener('resize', measure);
       if (menuId) setMenu(false);
     };
-  }, [isOpen, step, steps, advanced]);
+  }, [isOpen, step, steps, advanced, onSelectPlane, onShowSettingsTab]);
 
   useEffect(() => {
     if (!isOpen) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
-      else if (event.key === 'ArrowRight') setStep((s) => Math.min(steps.length - 1, s + 1));
+      else if (event.key === 'ArrowRight') advanceStep();
       else if (event.key === 'ArrowLeft') setStep((s) => Math.max(0, s - 1));
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isOpen, onClose, steps.length]);
+  }, [isOpen, onClose, steps.length, advanceStep]);
 
   if (!isOpen) return null;
 
@@ -379,7 +502,7 @@ const TutorialModal: React.FC<TutorialModalProps> = ({
 
   // Shrink the card (down to a floor) so it can sit beside the highlight instead of covering it.
   const spaceRight = rect ? vw - (rect.right + PAD + 4 + GAP * 2) : CARD_WIDTH;
-  const cardW = Math.min(vw - GAP * 2, Math.max(Math.min(CARD_WIDTH, spaceRight), 340));
+  const cardW = Math.min(vw - GAP * 2, Math.max(Math.min(CARD_WIDTH, spaceRight), MIN_CARD_WIDTH));
   const cardMaxH = vh - GAP * 2;
   const holes = boxes.length > 0 ? boxes : rect ? [rect] : [];
   let cardStyle: React.CSSProperties | undefined;
@@ -415,7 +538,7 @@ const TutorialModal: React.FC<TutorialModalProps> = ({
   }
   return (
     <div
-      className={`fixed inset-0 z-[300] ${rect ? '' : 'flex items-center justify-center bg-black/70 backdrop-blur-sm p-4'}`}
+      className={`fixed inset-0 z-[300] ${rect ? 'pointer-events-none' : 'flex items-center justify-center bg-black/70 backdrop-blur-sm p-4'}`}
       role="dialog"
       aria-modal="true"
       aria-labelledby="tutorial-title"
@@ -451,7 +574,7 @@ const TutorialModal: React.FC<TutorialModalProps> = ({
       <div
         ref={cardRef}
         data-tutorial-card
-        className={`rounded-2xl border border-white/10 bg-slate-900 shadow-2xl overflow-hidden ${rect ? 'fixed' : 'w-full max-w-lg'}`}
+        className={`pointer-events-auto rounded-2xl border border-white/10 bg-slate-900 shadow-2xl overflow-hidden ${rect ? 'fixed' : 'w-full max-w-lg'}`}
         style={rect ? { ...cardStyle, width: cardW, maxHeight: cardMaxH, overflowY: 'auto' } : { maxHeight: cardMaxH, overflowY: 'auto' }}
       >
         <div className="h-1 bg-slate-800">
@@ -568,8 +691,9 @@ const TutorialModal: React.FC<TutorialModalProps> = ({
                   Skip
                 </button>
                 <button
-                  onClick={() => setStep(step + 1)}
-                  className="px-4 h-8 rounded-lg bg-sky-600 text-white text-xs font-black uppercase tracking-wider hover:bg-sky-500"
+                  ref={nextButtonRef}
+                  onClick={advanceStep}
+                  className="px-4 h-8 rounded-lg bg-sky-600 text-white text-xs font-black uppercase tracking-wider hover:bg-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-300"
                 >
                   Next
                 </button>

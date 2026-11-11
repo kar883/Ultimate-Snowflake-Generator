@@ -3,11 +3,11 @@
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
 
 ## Download
-- Windows Installer: [Snowflake.Generator.Setup.1.1.3.exe](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.3/Snowflake.Generator.Setup.1.1.3.exe)
-- Windows ZIP: [Snowflake.Generator-1.1.3-win.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.3/Snowflake.Generator-1.1.3-win.zip)
-- macOS DMG: [Snowflake.Generator-1.1.3-arm64.dmg](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.3/Snowflake.Generator-1.1.3-arm64.dmg)
-- macOS ZIP: [Snowflake.Generator-1.1.3-arm64-mac.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.3/Snowflake.Generator-1.1.3-arm64-mac.zip)
-- Linux AppImage: [Snowflake.Generator-1.1.3.AppImage](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.3/Snowflake.Generator-1.1.3.AppImage)
+- Windows Installer: [Snowflake.Generator.Setup.1.1.4.exe](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.4/Snowflake.Generator.Setup.1.1.4.exe)
+- Windows ZIP: [Snowflake.Generator-1.1.4-win.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.4/Snowflake.Generator-1.1.4-win.zip)
+- macOS DMG: [Snowflake.Generator-1.1.4-arm64.dmg](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.4/Snowflake.Generator-1.1.4-arm64.dmg)
+- macOS ZIP: [Snowflake.Generator-1.1.4-arm64-mac.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.4/Snowflake.Generator-1.1.4-arm64-mac.zip)
+- Linux AppImage: [Snowflake.Generator-1.1.4.AppImage](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.4/Snowflake.Generator-1.1.4.AppImage)
 - All release assets: [GitHub Releases](https://github.com/kar883/Ultimate-Snowflake-Generator/releases)
 
 ### Windows security warning

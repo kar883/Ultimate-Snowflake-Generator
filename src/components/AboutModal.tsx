@@ -9,6 +9,7 @@ interface AboutModalProps {
 }
 
 const REPO_URL = 'https://github.com/kar883/Ultimate-Snowflake-Generator';
+const FEATURE_REQUEST_EMAIL = '44126918+kar883@users.noreply.github.com';
 const BUY_ME_A_COFFEE_URL = 'https://www.buymeacoffee.com/kylerussell';
 const BUY_ME_A_COFFEE_BUTTON_IMG = 'https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=&slug=kylerussell&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff';
 const BUY_ME_A_COFFEE_LOGO_IMG = 'https://cdn.buymeacoffee.com/buttons/bmc-new-btn-logo.svg';
@@ -34,6 +35,19 @@ const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose, version, reque
       return;
     }
     window.open(BUY_ME_A_COFFEE_URL, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleEmailFeedback = () => {
+    const subject = encodeURIComponent('Ultimate Snowflake Generator feedback');
+    const body = encodeURIComponent(
+      `Please describe your feature request or bug report below.\n\nFor bug reports, include steps to reproduce and what you expected to happen.\n\nDetailed descriptions and screenshots are recommended.\n\nApp version: ${version}\n\n`
+    );
+    const mailtoUrl = `mailto:${FEATURE_REQUEST_EMAIL}?subject=${subject}&body=${body}`;
+    if (electronAPI?.openExternal) {
+      electronAPI.openExternal(mailtoUrl);
+      return;
+    }
+    window.open(mailtoUrl, '_blank', 'noopener,noreferrer');
   };
 
   const handleCheckForUpdates = async () => {
@@ -135,6 +149,24 @@ const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose, version, reque
                 <p className="text-[11px] text-slate-300">{updateStatus}</p>
               )}
             </div>
+          </div>
+
+          {/* Feature Requests and Bug Reports */}
+          <div className="p-4 bg-slate-800/40 rounded-xl border border-white/5">
+            <h4 className="text-xs font-black text-white mb-2">Feature Requests &amp; Bug Reports</h4>
+            <p className="text-[11px] text-slate-300 mb-3 leading-relaxed">
+              Have an idea to improve the app or found a bug? Email me using your preferred email app. A detailed description and screenshots are recommended.
+            </p>
+            <button
+              type="button"
+              onClick={handleEmailFeedback}
+              className="w-full rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-[11px] font-black text-sky-300 transition-colors hover:bg-sky-500/20"
+            >
+              Email Feature Request or Bug Report
+            </button>
+            <p className="mt-2 text-[10px] text-slate-500">
+              Opens your email app addressed to {FEATURE_REQUEST_EMAIL}. For bug reports, please include steps to reproduce the issue.
+            </p>
           </div>
 
           {/* Buy Me a Coffee */}

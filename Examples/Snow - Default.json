@@ -1,5 +1,6 @@
 {
   "projectName": "Snow",
+  "inPlaneScale": 1,
   "layers": [
     {
       "id": "layer-1",

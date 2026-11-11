@@ -36,6 +36,7 @@ export interface SlotProfile2D {
   rotationDeg?: number;
   chamferStart?: number;
   chamferEnd?: number;
+  singleChamferEnd?: boolean;
 }
 
 export interface ShapeInstance2D {
@@ -44,25 +45,43 @@ export interface ShapeInstance2D {
   strokeWidth?: number;
 }
 
-const createSlotCrossSection = (CrossSection: any, profile: SlotProfile2D): any => {
+export const createSlotProfileOutline = (profile: SlotProfile2D): Array<[number, number]> => {
   const length = Math.max(0.01, profile.length);
   const width = Math.max(0.01, profile.width);
   const xStart = profile.xOffset ?? 0;
   const xEnd = xStart + length;
-  const centerY = (profile.yOffset ?? 0) - (width / 2);
+  const yCenter = profile.yOffset ?? 0;
+  const yTop = yCenter + width / 2;
+  const yBottom = yCenter - width / 2;
   const startChamfer = Math.min(width / 2, Math.max(0, profile.chamferStart ?? 0), length / 2);
   const endChamfer = Math.min(width / 2, Math.max(0, profile.chamferEnd ?? 0), length / 2);
-  const points = [
-    [xStart + startChamfer, centerY + (width / 2)],
-    [xEnd - endChamfer, centerY + (width / 2)],
-    [xEnd, centerY + (width / 2) - endChamfer],
-    [xEnd, centerY - (width / 2) + endChamfer],
-    [xEnd - endChamfer, centerY - (width / 2)],
-    [xStart + startChamfer, centerY - (width / 2)],
-    [xStart, centerY - (width / 2) + startChamfer],
-    [xStart, centerY + (width / 2) - startChamfer],
+  if (profile.singleChamferEnd) {
+    const points: Array<[number, number]> = [
+      [xStart + startChamfer, yTop],
+      [xEnd, yTop],
+      [xEnd - endChamfer, yBottom],
+      [xStart + startChamfer, yBottom],
+    ];
+    if (startChamfer > 0) {
+      points.push([xStart, yBottom + startChamfer], [xStart, yTop - startChamfer]);
+    }
+    return points;
+  }
+  return [
+    [xStart + startChamfer, yTop],
+    [xEnd - endChamfer, yTop],
+    [xEnd, yTop - endChamfer],
+    [xEnd, yBottom + endChamfer],
+    [xEnd - endChamfer, yBottom],
+    [xStart + startChamfer, yBottom],
+    [xStart, yBottom + startChamfer],
+    [xStart, yTop - startChamfer],
   ];
-  return CrossSection.ofPolygons([points], 'Positive').rotate(profile.rotationDeg ?? 0);
+};
+
+const createSlotCrossSection = (CrossSection: any, profile: SlotProfile2D): any => {
+  return CrossSection.ofPolygons([createSlotProfileOutline(profile)], 'Positive')
+    .rotate(profile.rotationDeg ?? 0);
 };
 
 export async function initManifold() {
@@ -89,6 +108,7 @@ export async function manifoldSubtract(
   slotGeometries: THREE.BufferGeometry[],
   options?: {
     baseIsManifold?: boolean;
+    baseWeldTolerance?: number;
     /** Throw on any operand/subtract failure instead of skipping the slot. */
     strict?: boolean;
     filletRadius?: number;
@@ -104,7 +124,7 @@ export async function manifoldSubtract(
   const baseIsManifold = options?.baseIsManifold ?? false;
   const cleanBase = baseIsManifold
     ? ensureIndexed(baseGeometry)
-    : prepare(baseGeometry, { weld: true, tolerance: 1e-5 });
+    : prepare(baseGeometry, { weld: true, tolerance: options?.baseWeldTolerance ?? 1e-5 });
   const basePos = cleanBase.attributes.position.array as Float32Array;
   const baseIdx = cleanBase.index!.array as Uint32Array;
 
@@ -308,6 +328,60 @@ export async function manifoldUnionGeometries(
     return out;
   } finally {
     unionResult?.delete?.();
+  }
+}
+
+export async function manifoldRemoveTinyComponents(
+  geometry: THREE.BufferGeometry,
+  options?: { minimumVolume?: number; relativeVolume?: number }
+): Promise<THREE.BufferGeometry> {
+  const wasm = await initManifold();
+  const { Manifold, Mesh } = wasm;
+  const clean = prepare(geometry, { weld: true, tolerance: 1e-5 });
+  const mesh = new Mesh({
+    numProp: 3,
+    vertProperties: clean.attributes.position.array as Float32Array,
+    triVerts: clean.index!.array as Uint32Array,
+  });
+  let solid: any = null;
+  let components: any[] = [];
+  let composed: any = null;
+
+  try {
+    mesh.merge();
+    solid = createManifoldFromMesh(Manifold, mesh);
+    components = solid.decompose();
+    if (components.length <= 1) return geometry;
+
+    const volumes = components.map((component) => component.volume());
+    const largestIndex = volumes.reduce(
+      (largest, volume, index) => volume > volumes[largest] ? index : largest,
+      0
+    );
+    const threshold = Math.max(
+      options?.minimumVolume ?? 0.1,
+      volumes[largestIndex] * (options?.relativeVolume ?? 1e-4)
+    );
+    const retained = components.filter((component, index) =>
+      index === largestIndex || volumes[index] >= threshold
+    );
+    if (retained.length === components.length) return geometry;
+
+    composed = Manifold.compose(retained);
+    const cleanedGeometry = meshToBufferGeometry(composed.getMesh());
+    composed.delete?.();
+    composed = null;
+    console.info(
+      `[slot-csg] Removed ${components.length - retained.length} tiny disconnected component(s) ` +
+      `(largest=${volumes[largestIndex].toFixed(3)} mm³, threshold=${threshold.toFixed(3)} mm³)`
+    );
+    return cleanedGeometry;
+  } finally {
+    composed?.delete?.();
+    components.forEach((component) => component.delete?.());
+    solid?.delete?.();
+    mesh.delete?.();
+    clean.dispose();
   }
 }
 

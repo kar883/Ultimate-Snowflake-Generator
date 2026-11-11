@@ -35,6 +35,8 @@ interface HeaderProps {
   onResetAppearance?: () => void;
   modelColor?: string;
   onModelColorChange?: (color: string) => void;
+  measurementColor?: string;
+  onMeasurementColorChange?: (color: string) => void;
   tutorialEnabled?: boolean;
   onTutorialEnabledChange?: (enabled: boolean) => void;
   onShowTutorial?: () => void;
@@ -57,7 +59,7 @@ const Header: React.FC<HeaderProps> = ({
   onResetShortcuts,
   onSaveAsDefault,
   onRestoreFactoryDefaults,
-  appVersion = '1.1.3',
+  appVersion = '1.1.4',
   language = 'en',
   onLanguageChange,
   showTooltips,
@@ -67,6 +69,8 @@ const Header: React.FC<HeaderProps> = ({
   onResetAppearance,
   modelColor,
   onModelColorChange,
+  measurementColor,
+  onMeasurementColorChange,
   tutorialEnabled,
   onTutorialEnabledChange,
   onShowTutorial,
@@ -274,6 +278,8 @@ const Header: React.FC<HeaderProps> = ({
             onResetAppearance={onResetAppearance}
             modelColor={modelColor}
             onModelColorChange={onModelColorChange}
+            measurementColor={measurementColor}
+            onMeasurementColorChange={onMeasurementColorChange}
             tutorialEnabled={tutorialEnabled}
             onTutorialEnabledChange={onTutorialEnabledChange}
             onShowTutorial={() => {

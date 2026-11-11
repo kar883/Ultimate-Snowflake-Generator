@@ -11,6 +11,9 @@ export interface Translations {
   // Control labels
   'Project Name': string;
   'Model Color': string;
+  'Measurement Color': string;
+  'Measurements': string;
+  'In-Plane Scale': string;
   'Edge Profile': string;
   'Extrusion Depth': string;
   'Global Boldness': string;
@@ -155,6 +158,8 @@ export interface Translations {
   // Descriptions
   'Project Name_desc': string;
   'Model Color_desc': string;
+  'Measurement Color_desc': string;
+  'In-Plane Scale_desc': string;
   'Edge Profile_desc': string;
   'Extrusion Depth_desc': string;
   'Global Boldness_desc': string;
@@ -309,6 +314,9 @@ export const translations: Record<string, Translations> = {
     // Control labels
     'Project Name': 'Project Name',
     'Model Color': 'Model Color',
+    'Measurement Color': 'Measurement Color',
+    'Measurements': 'Measurements',
+    'In-Plane Scale': 'In-Plane Scale',
     'Edge Profile': 'Edge Profile',
     'Extrusion Depth': 'Extrusion Depth',
     'Global Boldness': 'Global Boldness',
@@ -458,6 +466,8 @@ export const translations: Record<string, Translations> = {
     // Descriptions
     'Project Name_desc': 'The filename used when saving or exporting your design.',
     'Model Color_desc': 'The base color applied to the 3D mesh and 2D preview.',
+    'Measurement Color_desc': 'The color used for the width and height annotations in the 2D preview.',
+    'In-Plane Scale_desc': 'Scales the model in width and height without changing its thickness.',
     'Edge Profile_desc': 'Adds rounded or slanted edges to the 3D model for a more realistic look.',
     'Extrusion Depth_desc': 'The thickness of the 3D model when extruded.',
     'Global Boldness_desc': 'Adds stroke thickness to all text elements for a bolder appearance.',
@@ -606,6 +616,9 @@ export const translations: Record<string, Translations> = {
     // Control labels
     'Project Name': 'Nombre del Proyecto',
     'Model Color': 'Color del Modelo',
+    'Measurement Color': 'Color de las medidas',
+    'Measurements': 'Medidas',
+    'In-Plane Scale': 'Escala en el plano',
     'Edge Profile': 'Perfil del Borde',
     'Extrusion Depth': 'Profundidad de Extrusión',
     'Global Boldness': 'Grosor Global',
@@ -755,6 +768,8 @@ export const translations: Record<string, Translations> = {
     // Descriptions
     'Project Name_desc': 'El nombre de archivo usado al guardar o exportar tu diseño.',
     'Model Color_desc': 'El color base aplicado al modelo 3D y vista previa 2D.',
+    'Measurement Color_desc': 'Color de las anotaciones de ancho y alto en la vista previa 2D.',
+    'In-Plane Scale_desc': 'Escala el ancho y el alto del modelo sin cambiar su grosor.',
     'Edge Profile_desc': 'Añade bordes redondeados o inclinados al modelo 3D para un aspecto más realista.',
     'Extrusion Depth_desc': 'La profundidad del modelo 3D cuando se extruye.',
     'Global Boldness_desc': 'Añade grosor de trazo a todos los elementos de texto para una apariencia más audaz.',
@@ -903,6 +918,9 @@ export const translations: Record<string, Translations> = {
     // Control labels
     'Project Name': 'Nom du Projet',
     'Model Color': 'Couleur du Modèle',
+    'Measurement Color': 'Couleur des mesures',
+    'Measurements': 'Mesures',
+    'In-Plane Scale': 'Échelle dans le plan',
     'Edge Profile': 'Profil du Bord',
     'Extrusion Depth': 'Profondeur d\'Extrusion',
     'Global Boldness': 'Épaisseur Globale',
@@ -1052,6 +1070,8 @@ export const translations: Record<string, Translations> = {
     // Descriptions
     'Project Name_desc': 'Le nom de fichier utilisé lors de la sauvegarde ou exportation de votre design.',
     'Model Color_desc': 'La couleur de base appliquée au maillage 3D et à l\'aperçu 2D.',
+    'Measurement Color_desc': 'Couleur des annotations de largeur et de hauteur dans l’aperçu 2D.',
+    'In-Plane Scale_desc': 'Modifie la largeur et la hauteur du modèle sans changer son épaisseur.',
     'Edge Profile_desc': 'Ajoute des bords arrondis ou inclinés au modèle 3D pour un look plus réaliste.',
     'Extrusion Depth_desc': 'L\'épaisseur du modèle 3D lorsqu\'il est extrudé.',
     'Global Boldness_desc': 'Ajoute une épaisseur de trait à tous les éléments de texte pour une apparence plus audacieuse.',
@@ -1200,6 +1220,9 @@ export const translations: Record<string, Translations> = {
     // Control labels
     'Project Name': 'Projektname',
     'Model Color': 'Modellfarbe',
+    'Measurement Color': 'Maßlinienfarbe',
+    'Measurements': 'Maße',
+    'In-Plane Scale': 'Skalierung in der Ebene',
     'Edge Profile': 'Kantenprofil',
     'Extrusion Depth': 'Extrusionstiefe',
     'Global Boldness': 'Globale Fettigkeit',
@@ -1349,6 +1372,8 @@ export const translations: Record<string, Translations> = {
     // Descriptions
     'Project Name_desc': 'Der Dateiname beim Speichern oder Exportieren Ihres Designs.',
     'Model Color_desc': 'Die Grundfarbe auf das 3D-Modell und 2D-Vorschau angewendet.',
+    'Measurement Color_desc': 'Farbe der Breiten- und Höhenangaben in der 2D-Vorschau.',
+    'In-Plane Scale_desc': 'Skaliert Breite und Höhe des Modells, ohne die Dicke zu ändern.',
     'Edge Profile_desc': 'Fügt abgerundete oder geneigte Kanten zum 3D-Modell für realistischeres Aussehen hinzu.',
     'Extrusion Depth_desc': 'Die Dicke des 3D-Modells bei Extrusion.',
     'Global Boldness_desc': 'Fügt Strichstärke zu allen Textelementen für kräftigeres Erscheinungsbild hinzu.',
@@ -1497,6 +1522,9 @@ export const translations: Record<string, Translations> = {
     // Control labels
     'Project Name': '项目名称',
     'Model Color': '模型颜色',
+    'Measurement Color': '测量标注颜色',
+    'Measurements': '测量标注',
+    'In-Plane Scale': '平面内缩放',
     'Edge Profile': '边缘轮廓',
     'Extrusion Depth': '挤出深度',
     'Global Boldness': '全局粗体',
@@ -1646,6 +1674,8 @@ export const translations: Record<string, Translations> = {
     // Descriptions
     'Project Name_desc': '保存或导出设计时使用的文件名。',
     'Model Color_desc': '应用于3D网格和2D预览的基础颜色。',
+    'Measurement Color_desc': '2D预览中宽度和高度标注使用的颜色。',
+    'In-Plane Scale_desc': '缩放模型的宽度和高度，不改变厚度。',
     'Edge Profile_desc': '为3D模型添加圆角或斜角边缘以获得更真实的外观。',
     'Extrusion Depth_desc': '3D模型挤出时的厚度。',
     'Global Boldness_desc': '为所有文本元素添加笔画粗细以获得更粗的外观。',
@@ -1794,6 +1824,9 @@ export const translations: Record<string, Translations> = {
     // Control labels
     'Project Name': 'プロジェクト名',
     'Model Color': 'モデルカラー',
+    'Measurement Color': '寸法の色',
+    'Measurements': '寸法',
+    'In-Plane Scale': '平面内スケール',
     'Edge Profile': 'エッジプロファイル',
     'Extrusion Depth': '押し出し深度',
     'Global Boldness': 'グローバル太字',
@@ -1943,6 +1976,8 @@ export const translations: Record<string, Translations> = {
     // Descriptions
     'Project Name_desc': 'デザインを保存またはエクスポートする際に使用されるファイル名。',
     'Model Color_desc': '3Dメッシュと2Dプレビューに適用されるベースカラー。',
+    'Measurement Color_desc': '2Dプレビューの幅と高さの寸法表示に使う色。',
+    'In-Plane Scale_desc': '厚さを変えずにモデルの幅と高さを拡大・縮小します。',
     'Edge Profile_desc': 'よりリアルな見た目のために3Dモデルに丸みまたは斜めのエッジを追加します。',
     'Extrusion Depth_desc': '押し出し時の3Dモデルの厚さ。',
     'Global Boldness_desc': 'すべてのテキスト要素にストロークの太さを追加して大胆な外観にします。',

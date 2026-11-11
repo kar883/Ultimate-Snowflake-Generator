@@ -872,6 +872,7 @@ interface Snowflake3DProps {
   isVisible: boolean;
   identifyBodiesMode?: boolean;
   onFloatingBodiesChange?: (floatingByLayer: Record<string, boolean>) => void;
+  onDisconnectedPiecesDetected?: () => void;
   onProcessingChange?: (isProcessing: boolean) => void;
   emergencyStopSeq?: number;
   forceRefreshToken?: number;
@@ -1176,6 +1177,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   initialDiameter, isVisible,
   identifyBodiesMode = false,
   onFloatingBodiesChange,
+  onDisconnectedPiecesDetected,
   onProcessingChange,
   emergencyStopSeq = 0,
   forceRefreshToken = 0,
@@ -1331,6 +1333,11 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
 
   const viewportLayers = config.layers.filter(l => l.enabled);
   const configKey = useMemo(() => JSON.stringify(config), [config]);
+  const autoIdentifyTriggeredRef = useRef(false);
+
+  useEffect(() => {
+    autoIdentifyTriggeredRef.current = false;
+  }, [configKey]);
 
   useEffect(() => {
     generateMeshRef.current = generateMesh;
@@ -1908,10 +1915,19 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
       onFloatingBodiesChange?.(floatingByLayer);
       setSlotDisconnectedLayers(automaticSlotCheck ? [...disconnectedLayers] : []);
       setSlotAnalysisError(automaticSlotCheck && analysisErrors.length ? analysisErrors.join('; ') : null);
+      if (
+        automaticSlotCheck
+        && disconnectedLayers.size > 0
+        && !identifyBodiesMode
+        && !autoIdentifyTriggeredRef.current
+      ) {
+        autoIdentifyTriggeredRef.current = true;
+        onDisconnectedPiecesDetected?.();
+      }
       if (analysisErrors.length) console.error('Disconnected-body analysis failed:', analysisErrors.join('; '));
       applyAppearanceRef.current();
     });
-  }, [color, config.slotEnabled, configKey, identifyBodiesMode, isVisible, onFloatingBodiesChange, planeVisibility, terminateBodiesWorkers]);
+  }, [color, config.slotEnabled, configKey, identifyBodiesMode, isVisible, onDisconnectedPiecesDetected, onFloatingBodiesChange, planeVisibility, terminateBodiesWorkers]);
 
   useEffect(() => {
     runBodiesAnalysisRef.current = runBodiesAnalysis;

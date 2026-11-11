@@ -199,7 +199,10 @@ export interface SnowflakeConfig {
   layers: LayerConfig[];
   activeLayerIndex: number;
   color: string;
+  measurementColor?: string;
   extrusionDepth: number;
+  /** Uniform XY-only scaling around the shared origin; 1 means 100%. */
+  inPlaneScale?: number;
   bevelEnabled: boolean;
   bevelType: 'fillet' | 'chamfer';
   bevelAmount: number;

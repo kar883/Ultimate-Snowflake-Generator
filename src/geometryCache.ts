@@ -28,6 +28,7 @@ export function hashConfig(config: any): string {
   const relevantConfig = {
     layers: config.layers.filter((l: any) => l.enabled),
     extrusionDepth: config.extrusionDepth,
+    inPlaneScale: config.inPlaneScale ?? 1,
     bevelEnabled: config.bevelEnabled,
     bevelType: config.bevelType,
     bevelAmount: config.bevelAmount,

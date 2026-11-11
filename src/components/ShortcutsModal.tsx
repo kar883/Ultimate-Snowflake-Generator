@@ -294,6 +294,8 @@ interface ShortcutsModalProps {
   onResetAppearance?: () => void;
   modelColor?: string;
   onModelColorChange?: (color: string) => void;
+  measurementColor?: string;
+  onMeasurementColorChange?: (color: string) => void;
   tutorialEnabled?: boolean;
   onTutorialEnabledChange?: (enabled: boolean) => void;
   onShowTutorial?: () => void;
@@ -343,6 +345,8 @@ const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
   onResetAppearance = () => undefined,
   modelColor = '#38bdf8',
   onModelColorChange,
+  measurementColor = '#38bdf8',
+  onMeasurementColorChange,
   tutorialEnabled = true,
   onTutorialEnabledChange,
   onShowTutorial,
@@ -565,6 +569,7 @@ const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
   const tabBtn = (id: TabId, emoji: string, label: string) => (
     <button
       onClick={() => setActiveTab(id)}
+      data-tutorial={`settings-tab-${id}`}
       className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-md text-[10px] font-black uppercase tracking-wider transition-all
         ${activeTab === id
           ? 'bg-sky-600/20 text-sky-400 border border-sky-500/30'
@@ -585,6 +590,7 @@ const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
             <button
               type="button"
               onClick={onAbout}
+              data-tutorial="about-button"
               className="text-[11px] font-black text-sky-400 hover:text-sky-300 transition-colors underline uppercase tracking-wide"
             >
               About
@@ -607,7 +613,7 @@ const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
         </div>
 
         {/* ── Scrollable content ───────────────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar px-5 py-4 min-h-0">
+        <div className="flex-1 overflow-y-auto custom-scrollbar px-5 py-4 min-h-0" data-tutorial="settings-content">
 
           {/* ════════════════════════════════ SHORTCUTS TAB */}
           {activeTab === 'shortcuts' && (
@@ -1157,6 +1163,56 @@ const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
                       <span className="w-20 text-[10px] font-mono text-slate-500 uppercase">{modelColor}</span>
                     </span>
                   </label>
+                )}
+
+                {onMeasurementColorChange && (
+                  <div className="space-y-2 border-t border-white/5 pt-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-[11px] font-semibold text-slate-300">{t('Measurement Color')}</div>
+                        <p className="text-[10px] text-slate-500">{t('Measurement Color_desc')}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {measurementColor.toLowerCase() !== '#38bdf8' && (
+                          <>
+                            {onSaveAsDefault && (
+                              <button
+                                type="button"
+                                onClick={onSaveAsDefault}
+                                className="rounded p-1 text-slate-500 transition-colors hover:bg-emerald-500 hover:text-white"
+                                title={t('saveDefault')}
+                                aria-label={`${t('saveDefault')} ${t('Measurement Color')}`}
+                              >
+                                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3h11l3 3v15H5V3z" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3v6h8V3" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 21v-6h8v6" />
+                                </svg>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => onMeasurementColorChange('#38bdf8')}
+                              className="rounded p-1 text-slate-500 transition-colors hover:bg-rose-500 hover:text-white"
+                              title={t('reset')}
+                              aria-label={`${t('reset')} ${t('Measurement Color')}`}
+                            >
+                              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                              </svg>
+                            </button>
+                          </>
+                        )}
+                        <input
+                          type="color"
+                          value={measurementColor}
+                          onChange={(event) => onMeasurementColorChange(event.target.value)}
+                          aria-label={t('Measurement Color')}
+                          className="w-9 h-7 rounded border border-white/15 bg-transparent cursor-pointer"
+                        />
+                      </div>
+                    </div>
+                  </div>
                 )}
               </div>
 
