@@ -62,8 +62,39 @@ jobs:
         name: ${{ matrix.os }}-build
         path: dist-electron/
 
+  build-web:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v5
+      with:
+        node-version: '22'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build browser-only app
+      run: npm run build:web
+
+    - name: Package web build
+      run: |
+        VERSION=$(node -p "require('./package.json').version")
+        cd dist-web
+        zip -r "../Snowflake.Generator-${VERSION}-web.zip" .
+
+    - name: Upload web build
+      uses: actions/upload-artifact@v5
+      with:
+        name: web-build
+        path: Snowflake.Generator-*-web.zip
+
   release:
-    needs: build
+    needs: [build, build-web]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
 
@@ -85,6 +116,7 @@ jobs:
           release-assets/**/*.AppImage
           release-assets/**/*.deb
           release-assets/**/*.tar.gz
+          release-assets/**/*-web.zip
           !release-assets/**/*.blockmap
           !release-assets/**/builder-debug.yml
           !release-assets/**/builder-effective-config.yaml
@@ -92,5 +124,3 @@ jobs:
         prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-

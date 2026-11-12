@@ -2,29 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/svg+xml" href="%BASE_URL%favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Snowflake Designer</title>
-    
-    <!-- Pyodide - load with error handling -->
-    <script>
-      window.loadPyodide = function() {
-        return new Promise((resolve, reject) => {
-          const script = document.createElement('script');
-          script.src = 'https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js';
-          script.async = true;
-          script.onload = () => {
-            console.log('✅ Pyodide script loaded');
-            resolve();
-          };
-          script.onerror = (error) => {
-            console.error('❌ Failed to load Pyodide:', error);
-            reject(error);
-          };
-          document.head.appendChild(script);
-        });
-      };
-    </script>
+    <meta name="description" content="Design customizable 2D and 3D snowflakes in your browser and export them for 3D printing or vector workflows." />
+    <meta name="theme-color" content="#020617" />
+    <title>Ultimate Snowflake Generator</title>
   </head>
   <body>
     <div id="root"></div>

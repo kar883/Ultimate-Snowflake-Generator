@@ -3,6 +3,7 @@
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
 
 ## Download
+- Web app: [Open in your browser](https://kar883.github.io/Ultimate-Snowflake-Generator/)
 - Windows Installer: [Snowflake.Generator.Setup.1.1.4.exe](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.4/Snowflake.Generator.Setup.1.1.4.exe)
 - Windows ZIP: [Snowflake.Generator-1.1.4-win.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.4/Snowflake.Generator-1.1.4-win.zip)
 - macOS DMG: [Snowflake.Generator-1.1.4-arm64.dmg](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.4/Snowflake.Generator-1.1.4-arm64.dmg)
@@ -13,6 +14,8 @@
 
 The macOS downloads are for Apple Silicon (ARM64).
 
+The web edition runs in your browser; your projects and preferences remain in that browser unless you export or share them. No account or app-hosted project storage is required. GitHub Pages must be enabled for this repository before the web link is available.
+
 ### Windows security warning
 The installer isn't code-signed, so Windows SmartScreen may show "Windows protected your PC" when you run it. This is expected for unsigned apps. To continue, click **More info**, then **Run anyway**. You can review the source code in this repository, or use the Windows ZIP version if you prefer not to run an installer.
 
@@ -21,7 +24,7 @@ Inspired by [Jexom's OpenSCAD snowflake](https://www.thingiverse.com/thing:27022
 ## Getting Started
 - Download the installer or portable package for your operating system from the links above.
 - For system-font access in a browser, use Chrome or Edge 103+ in a secure context (HTTPS or localhost). The system font picker may not be available in other browsers.
-- AI-powered suggestions require an internet connection and a Gemini API key. Open **Settings & Shortcuts → API Key** in the app to add your key. It is stored locally in the app; do not share it or upload it with a project.
+- AI-powered suggestions require an internet connection and a Gemini API key. Open **Settings & Shortcuts → API Key** in the app to add your key. It is stored in the browser's local storage and sent directly to Google when AI features are used; it is not sent to this app's server. Avoid saving it on shared devices or including it in shared project files.
 
 ## What You Can Do
 - Create designs/snowflakes from repeating text, per-letter adjustments, hubs, oscillating outlines, abstract patterns and fractals, and imported SVG artwork. SVG artwork can be repeated radially or placed once in the center.

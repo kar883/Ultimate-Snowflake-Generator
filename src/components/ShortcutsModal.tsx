@@ -767,7 +767,7 @@ const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
                 </div>
                 {apiKeyError && <p className="text-[10px] text-rose-400 font-semibold">⚠ {apiKeyError}</p>}
                 <p className="text-[10px] text-slate-600">
-                  Saved to <code className="bg-white/5 px-1 rounded text-[9px]">localStorage</code> — never sent to any server.
+                  Saved in this browser's <code className="bg-white/5 px-1 rounded text-[9px]">localStorage</code>. It is sent directly to Google when you use AI features; this app does not send it to its own server. Avoid saving it on shared devices.
                 </p>
               </div>
 

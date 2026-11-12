@@ -9,6 +9,7 @@ interface AboutModalProps {
 }
 
 const REPO_URL = 'https://github.com/kar883/Ultimate-Snowflake-Generator';
+const RELEASES_URL = `${REPO_URL}/releases/latest`;
 const FEATURE_REQUEST_EMAIL = '44126918+kar883@users.noreply.github.com';
 const BUY_ME_A_COFFEE_URL = 'https://www.buymeacoffee.com/kylerussell';
 const BUY_ME_A_COFFEE_BUTTON_IMG = 'https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=&slug=kylerussell&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff';
@@ -51,9 +52,8 @@ const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose, version, reque
   };
 
   const handleCheckForUpdates = async () => {
-    // If not Electron, show message
     if (!isDesktopBuild) {
-      setUpdateStatus('Update check is only available in the desktop app build.');
+      window.open(RELEASES_URL, '_blank', 'noopener,noreferrer');
       return;
     }
     // If Electron but no preload, show fallback
@@ -139,11 +139,10 @@ const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose, version, reque
               <button
                 type="button"
                 onClick={handleCheckForUpdates}
-                disabled={isCheckingUpdates || !isDesktopBuild}
+                disabled={isCheckingUpdates}
                 className="inline-flex items-center justify-center rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-[11px] font-black text-sky-300 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-70 transition-colors"
-                title={!isDesktopBuild ? 'Update check only available in desktop app.' : undefined}
               >
-                {isCheckingUpdates ? 'Checking Updates...' : 'Check for Updates'}
+                {isCheckingUpdates ? 'Checking Updates...' : isDesktopBuild ? 'Check for Updates' : 'View Web Releases'}
               </button>
               {updateStatus && (
                 <p className="text-[11px] text-slate-300">{updateStatus}</p>
