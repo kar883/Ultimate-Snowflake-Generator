@@ -1,0 +1,53 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+dist-electron
+Reference Only
+*.local
+
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Playwright artifacts
+playwright-report/
+test-results/
+e2e/
+!e2e/
+e2e/*
+!e2e/snowflake-stress.spec.ts
+!e2e/refresh-regression.spec.ts
+e2e/**/*.spec.ts-snapshots/
+
+# Local test run outputs
+e2e-*.json
+final_results.json
+full_results.json
+kb_results.*
+last_run*.json
+planes*_results.json
+results*.json
+results*.log
+results*.txt
+subset*.json
+subset*.log
+targeted*.json
+test_output.log
+old_code.txt

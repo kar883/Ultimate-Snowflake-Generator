@@ -1,0 +1,1048 @@
+
+import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
+import { SnowflakeConfig, LayerConfig, TextGroupConfig, HubConfig, AbstractConfig, ShortcutConfig, ImageConfig } from '../types';
+import { FONT_TTF_URLS } from '../constants';
+import { getHubOutlinePoints } from '../utils/hubGeometry';
+import opentype from 'opentype.js';
+import { InfoTooltip } from './Tooltip';
+import { modelCache2D, hashConfig } from '../geometryCache';
+import { useSvgRotationWorker } from '../hooks/useSvgRotationWorker';
+import { useTranslation } from '../translations';
+import { fontPreloader } from '../utils/fontPreloader';
+import { getAdjustedGlyphPathCommands, makePathFromCommands } from '../utils/textControl';
+
+// Helper function to get translated description
+const getDescription = (key: string, t?: (key: string) => string): string => {
+  const DESCRIPTIONS: Record<string, string> = {
+    "Reset View": "Reset the 2D view to fit the content.",
+    "Undo": "Revert the last change made to the design.",
+    "Redo": "Re-apply a change that was undone.",
+  };
+  
+  if (!t) return DESCRIPTIONS[key] || key;
+  const translatedKey = `${key}_desc`;
+  const translated = t(translatedKey);
+  return translated !== translatedKey ? translated : (DESCRIPTIONS[key] || key);
+};
+
+interface SnowflakePreviewProps {
+  config: SnowflakeConfig;
+  globalColor: string;
+  globalBevel: boolean;
+  globalBevelAmount: number;
+  globalThickness: number;
+  slotEnabled: boolean;
+  slotLength: number;
+  slotWidth: number;
+  svgRef: React.RefObject<SVGSVGElement>;
+  dynamicFonts: Record<string, string>;
+  undo?: () => void;
+  redo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  calculatedDiameter?: number;
+  shortcuts?: ShortcutConfig;
+  fontsPreloaded?: boolean;
+  activeLayerId?: string;
+  syncAllLayers?: boolean;
+  highlightActivePlaneOnly?: boolean;
+  backgroundColor?: string;
+}
+
+const seededRandom = (seed: number) => {
+  let value = seed;
+  return () => {
+    value = (value * 16807) % 2147483647;
+    return (value - 1) / 2147483646;
+  };
+};
+
+const getLayerTextGroups = (layer: LayerConfig): TextGroupConfig[] => {
+  if (Array.isArray(layer.textGroups) && layer.textGroups.length > 0) {
+    return layer.textGroups;
+  }
+  const groups: TextGroupConfig[] = [layer.primary];
+  if (layer.secondaryEnabled !== false) groups.push(layer.secondary);
+  return groups;
+};
+
+const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
+  config, globalColor, globalBevel, globalBevelAmount, globalThickness, slotEnabled, slotLength, slotWidth, svgRef, dynamicFonts, undo, redo, canUndo, canRedo, calculatedDiameter, shortcuts, fontsPreloaded, activeLayerId, syncAllLayers = true, highlightActivePlaneOnly = false, backgroundColor = '#020617'
+}) => {
+  const { t } = useTranslation(config.language || 'en');
+  // Use a ref for the font cache so loading a font never triggers an infinite
+  // re-render loop (the old useState caused: load font → setFonts → effect re-fires
+  // → tries to load font again → repeat).  A lightweight forceUpdate counter is
+  // incremented once per newly-loaded font so the SVG paths re-render exactly once.
+  const fontsRef = useRef<Record<string, opentype.Font>>({});
+  const [fontLoadCount, setFontLoadCount] = useState(0);
+  // Batch font-load re-renders: instead of each font load firing a separate
+  // setState (causing N visible intermediate preview states on startup), we
+  // coalesce them into a single update within a 60ms window.
+  const fontLoadBatchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingFontLoadRef = useRef(0);
+  const triggerFontLoadUpdate = () => {
+    pendingFontLoadRef.current += 1;
+    if (fontLoadBatchTimer.current) return; // already pending
+    fontLoadBatchTimer.current = setTimeout(() => {
+      fontLoadBatchTimer.current = null;
+      const count = pendingFontLoadRef.current;
+      pendingFontLoadRef.current = 0;
+      setFontLoadCount(c => c + count);
+    }, 60);
+  };
+  // Convenience alias so all existing `fonts[name]` reads below work unchanged.
+  const fonts = fontsRef.current;
+  const [viewTransform, setViewTransform] = useState({ x: 0, y: 0, scale: 1.8 });
+  const [containerSize, setContainerSize] = useState({ width: 800, height: 800 });
+  const [cachedSvgContent, setCachedSvgContent] = useState<string | null>(null);
+  const [isGeneratingSvg, setIsGeneratingSvg] = useState(false);
+  const [initialPreviewReady, setInitialPreviewReady] = useState(false);
+  const [measurementsVisible, setMeasurementsVisible] = useState(true);
+
+  // SVG rotation worker disabled for performance - using simple CSS transform instead
+  // const { rotatedPaths, isRotating, rotateSvg } = useSvgRotationWorker();
+
+  const modelDiameter = calculatedDiameter || 200;
+  const inPlaneScale = typeof config.inPlaneScale === 'number' && Number.isFinite(config.inPlaneScale)
+    ? Math.max(0.1, Math.min(2, config.inPlaneScale))
+    : 1;
+  const annotationScale = Math.max(0.001, viewTransform.scale * inPlaneScale);
+  const annotationInverseScale = 1 / annotationScale;
+  const previewSlotLength = slotLength * (config.automaticSlotLength === false ? inPlaneScale : 1);
+
+  const isDragging = useRef(false);
+  const lastPos = useRef({ x: 0, y: 0 });
+
+  const hasUserInteracted = useRef(false);
+
+  const enabledLayers = useMemo(() => config.layers.filter(l => l.enabled), [config.layers]);
+  const planeGeometryRefs = useRef(new Map<string, SVGGElement>());
+  const [planeBounds, setPlaneBounds] = useState<Record<string, { x: number; y: number; width: number; height: number }>>({});
+
+  useEffect(() => {
+    const nextBounds: Record<string, { x: number; y: number; width: number; height: number }> = {};
+    enabledLayers.forEach((layer) => {
+      const geometry = planeGeometryRefs.current.get(layer.id);
+      if (geometry) nextBounds[layer.id] = geometry.getBBox();
+    });
+    setPlaneBounds(nextBounds);
+  }, [enabledLayers, inPlaneScale, config.globalStrokeWeight, fontLoadCount]);
+
+  const requiredInitialFonts = useMemo(() => {
+    const required = new Set<string>();
+    enabledLayers.forEach(layer => {
+      const collectIfNeeded = (group: TextGroupConfig) => {
+        if (!group.enabled || !group.text?.trim()) return;
+        const name = group.fontFamily.replace(/'/g, '').split(',')[0].trim();
+        if (name) required.add(name);
+      };
+      getLayerTextGroups(layer).forEach(collectIfNeeded);
+    });
+    return Array.from(required);
+  }, [enabledLayers]);
+
+  const allInitialFontsLoaded = useMemo(() => {
+    // fontLoadCount is intentionally read to re-evaluate when fontsRef is mutated.
+    void fontLoadCount;
+    if (!fontsPreloaded) return false;
+    return requiredInitialFonts.every(name => Boolean(fontsRef.current[name]));
+  }, [fontsPreloaded, requiredInitialFonts, fontLoadCount]);
+
+  useEffect(() => {
+    if (!initialPreviewReady && fontsPreloaded && allInitialFontsLoaded) {
+      setInitialPreviewReady(true);
+    }
+  }, [initialPreviewReady, fontsPreloaded, allInitialFontsLoaded]);
+
+  const layerSpacing = useMemo(() => {
+      const gap = Math.max(48, modelDiameter * 0.12, 70 / inPlaneScale);
+      const diameterRequirement = modelDiameter + gap;
+      const slotRequirement = slotEnabled ? previewSlotLength + (modelDiameter / 2) + gap : 0;
+      return Math.max(diameterRequirement, slotRequirement);
+  }, [modelDiameter, inPlaneScale, slotEnabled, previewSlotLength]);
+
+  const fitView = useCallback(() => {
+    if (containerSize.width === 0 || containerSize.height === 0) return;
+
+    const count = enabledLayers.length;
+    const effectiveCount = Math.max(1, count);
+
+    const totalWidth = (Math.max(0, effectiveCount - 1) * layerSpacing) + modelDiameter + 100;
+    const totalHeight = Math.max(350, modelDiameter + 100);
+
+    const fitScaleX = (containerSize.width * 0.9) / totalWidth;
+    const fitScaleY = (containerSize.height * 0.9) / totalHeight;
+    const newScale = Math.min(1.5, fitScaleX, fitScaleY);
+
+    setViewTransform(prev => {
+        if (Math.abs(prev.scale - newScale) > 0.1 || Math.abs(prev.x) > 1 || Math.abs(prev.y) > 1) {
+            return { x: 0, y: 0, scale: newScale };
+        }
+        return prev;
+    });
+  }, [containerSize, enabledLayers.length, layerSpacing, modelDiameter]);
+
+  useEffect(() => {
+    if (!hasUserInteracted.current) {
+        fitView();
+    }
+  }, [fitView]);
+
+  useEffect(() => {
+    // Don't try to load fonts until preloading is complete
+    if (!fontsPreloaded) return;
+    
+    config.layers.filter(l => l.enabled).forEach(l => {
+      const loadFontIfNeeded = (family: string) => {
+        const name = family.replace(/'/g, '').split(',')[0].trim();
+        
+        // Skip if already loaded or currently loading
+        if (fontsRef.current[name] || (fontsRef.current as any)[`__loading_${name}`]) return;
+        
+        // Check if font is preloaded first
+        const preloadedFont = fontPreloader.getFont(name);
+        if (preloadedFont) {
+          fontsRef.current[name] = preloadedFont;
+          triggerFontLoadUpdate();
+          return;
+        }
+        
+        // Mark as in-flight with a sentinel so concurrent calls don't double-load
+        (fontsRef.current as any)[`__loading_${name}`] = true;
+        opentype.load(dynamicFonts[name] || FONT_TTF_URLS[name], (e, f) => {
+          delete (fontsRef.current as any)[`__loading_${name}`];
+          if (!e && f) {
+            fontsRef.current[name] = f;
+            triggerFontLoadUpdate();
+          }
+        });
+      };
+      getLayerTextGroups(l).forEach(group => {
+        if (group.enabled) loadFontIfNeeded(group.fontFamily);
+      });
+    });
+  // Intentionally excludes fontsRef (stable ref) and fontLoadCount to avoid the loop.
+  // Re-runs only when the actual font names / URLs change.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.layers, dynamicFonts, fontsPreloaded]);
+
+  // Check for preloaded fonts on mount
+  useEffect(() => {
+    // Don't check until preloading is complete
+    if (!fontsPreloaded) return;
+    
+    const checkPreloadedFonts = () => {
+      let foundPreloaded = false;
+      config.layers.filter(l => l.enabled).forEach(l => {
+        const checkFont = (family: string) => {
+          const name = family.replace(/'/g, '').split(',')[0].trim();
+          if (!fontsRef.current[name] && !((fontsRef.current as any)[`__loading_${name}`])) {
+            const preloadedFont = fontPreloader.getFont(name);
+            if (preloadedFont) {
+              fontsRef.current[name] = preloadedFont;
+              foundPreloaded = true;
+            }
+          }
+        };
+        
+        getLayerTextGroups(l).forEach(group => {
+          if (group.enabled) checkFont(group.fontFamily);
+        });
+      });
+      
+      if (foundPreloaded) {
+        triggerFontLoadUpdate();
+      }
+    };
+
+    // Check immediately
+    checkPreloadedFonts();
+    
+    // Also check after a short delay in case fonts are still loading
+    const timer = setTimeout(checkPreloadedFonts, 1000);
+    return () => clearTimeout(timer);
+  }, [config.layers, fontsPreloaded]);
+
+  useEffect(() => {
+    if (!svgRef.current) return;
+    const updateSize = () => {
+       const rect = svgRef.current?.getBoundingClientRect();
+       if (rect) setContainerSize({ width: rect.width, height: rect.height });
+    };
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(svgRef.current);
+    return () => observer.disconnect();
+  }, [svgRef]);
+
+  const handleWheel = (e: React.WheelEvent) => {
+    e.stopPropagation();
+    hasUserInteracted.current = true;
+    const scaleFactor = 1.1;
+    const direction = e.deltaY > 0 ? 1 / scaleFactor : scaleFactor;
+    setViewTransform(prev => ({ ...prev, scale: Math.max(0.1, Math.min(10, prev.scale * direction)) }));
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    isDragging.current = true;
+    lastPos.current = { x: e.clientX, y: e.clientY };
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging.current) return;
+    hasUserInteracted.current = true;
+    const dx = e.clientX - lastPos.current.x;
+    const dy = e.clientY - lastPos.current.y;
+    setViewTransform(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
+    lastPos.current = { x: e.clientX, y: e.clientY };
+  };
+
+  const handleMouseUp = () => {
+    isDragging.current = false;
+  };
+
+  const handleResetView = () => {
+      hasUserInteracted.current = false;
+      fitView();
+  };
+
+  // ... Rendering logic ...
+  const renderUnderline = (group: TextGroupConfig, color: string) => {
+      if (!group.underline || !group.underline.enabled) return null;
+      const u = group.underline;
+      const startX = group.textX + u.startXOffset;
+      const endX = startX + u.length;
+      const topY = (group.mirrorOffset / 2) + u.yOffset;
+      const t = u.thickness + config.globalStrokeWeight;
+      const angleStep = 360 / group.arms;
+      const instances = [];
+      for (let i = 0; i < group.arms; i++) {
+         const angle = i * angleStep + group.rotationOffset;
+         if (!group.mirrorEnabled) {
+             instances.push(<g key={`u-${i}`} transform={`rotate(${angle})`}><line x1={startX} y1={topY} x2={endX} y2={topY} stroke={color} strokeWidth={t} strokeLinecap="round" /></g>);
+         } else {
+             const botY = -(group.mirrorOffset / 2) - u.yOffset;
+             if (u.capType === 'none') {
+                 instances.push(<g key={`u-${i}`} transform={`rotate(${angle})`}><line x1={startX} y1={topY} x2={endX} y2={topY} stroke={color} strokeWidth={t} strokeLinecap="round" /><line x1={startX} y1={botY} x2={endX} y2={botY} stroke={color} strokeWidth={t} strokeLinecap="round" /></g>);
+             } else {
+                let d = `M ${startX} ${topY} L ${endX} ${topY}`;
+                if (u.capType === 'square') { const cx = endX + u.capWidth; d += ` L ${cx} ${topY} L ${cx} ${botY} L ${endX} ${botY}`; }
+                else if (u.capType === 'round') { const ry = Math.abs(topY - botY) / 2; const rx = u.capWidth; d += ` A ${rx} ${ry} 0 0 1 ${endX} ${botY}`; }
+                else if (u.capType === 'chevron') { const cx = endX + u.capWidth; d += ` L ${cx} 0 L ${endX} ${botY}`; }
+                d += ` L ${startX} ${botY}`;
+                instances.push(<g key={`u-${i}`} transform={`rotate(${angle})`}><path d={d} fill="none" stroke={color} strokeWidth={t} strokeLinecap="butt" strokeLinejoin="miter" /></g>);
+             }
+         }
+      }
+      return <g>{instances}</g>;
+  };
+
+  const renderTextGroup = (group: TextGroupConfig, color: string) => {
+    if (!group.enabled) return null;
+
+    let textPaths = null;
+
+    if (group.text) {
+      const fontName = group.fontFamily.replace(/'/g, '').split(',')[0].trim();
+      const font = fonts[fontName];
+
+      const buildSvgInstances = (
+        pathData: string | null,
+        fallback = false,
+        glyphPaths?: Array<{ d: string }>
+      ) => {
+        const angleStep = 360 / group.arms;
+        const instances = [] as React.ReactNode[];
+        for (let i = 0; i < group.arms; i++) {
+          const angle = i * angleStep + group.rotationOffset;
+          const transform = `rotate(${angle}) translate(${group.textX}, ${group.mirrorOffset / 2}) ${fallback ? '' : ''}`;
+
+          if (fallback) {
+            instances.push(
+              <g key={`arm-fallback-${i}`} transform={transform}>
+                <text
+                  x={0}
+                  y={0}
+                  fill={color}
+                  stroke={color}
+                  strokeWidth={0.5}
+                  fontSize={group.fontSize}
+                  fontFamily={group.fontFamily}
+                  dominantBaseline="middle"
+                  textAnchor="start"
+                >
+                  {group.text}
+                </text>
+              </g>
+            );
+            if (group.mirrorEnabled) {
+              instances.push(
+                <g key={`arm-mirror-fallback-${i}`} transform={`rotate(${angle}) translate(${group.textX}, ${-group.mirrorOffset / 2}) scale(1, -1)`}>
+                  <text
+                    x={0}
+                    y={0}
+                    fill={color}
+                    stroke={color}
+                    strokeWidth={0.5}
+                    fontSize={group.fontSize}
+                    fontFamily={group.fontFamily}
+                    dominantBaseline="middle"
+                    textAnchor="start"
+                  >
+                    {group.text}
+                  </text>
+                </g>
+              );
+            }
+          } else if (glyphPaths && glyphPaths.length > 0) {
+            const strokeWidth = Math.max(0.5, (config.globalStrokeWeight || 0) + (group.thickness || 0));
+            instances.push(
+              <g key={`arm-${i}`} transform={transform}>
+                {glyphPaths.map((glyphPath, gi) => {
+                  return (
+                    <path
+                      key={`g-${gi}`}
+                      d={glyphPath.d}
+                      fill={color}
+                      stroke={color}
+                      strokeWidth={strokeWidth}
+                      strokeLinejoin="round"
+                      strokeLinecap="round"
+                    />
+                  );
+                })}
+              </g>
+            );
+            if (group.mirrorEnabled) {
+              instances.push(
+                <g key={`arm-mirror-${i}`} transform={`rotate(${angle}) translate(${group.textX}, ${-group.mirrorOffset / 2}) scale(1, -1)`}>
+                  {glyphPaths.map((glyphPath, gi) => {
+                    return (
+                      <path
+                        key={`mg-${gi}`}
+                        d={glyphPath.d}
+                        fill={color}
+                        stroke={color}
+                        strokeWidth={strokeWidth}
+                        strokeLinejoin="round"
+                        strokeLinecap="round"
+                      />
+                    );
+                  })}
+                </g>
+              );
+            }
+          } else if (pathData) {
+            const strokeWidth = Math.max(0.5, (config.globalStrokeWeight || 0) + (group.thickness || 0));
+            instances.push(
+              <g key={`arm-${i}`} transform={transform}>
+                <path d={pathData} fill={color} stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" />
+              </g>
+            );
+            if (group.mirrorEnabled) {
+              instances.push(
+                <g key={`arm-mirror-${i}`} transform={`rotate(${angle}) translate(${group.textX}, ${-group.mirrorOffset / 2}) scale(1, -1)`}>
+                  <path d={pathData} fill={color} stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" />
+                </g>
+              );
+            }
+          }
+        }
+        return <g>{instances}</g>;
+      };
+
+      if (font) {
+        const scale = group.fontSize / font.unitsPerEm;
+        const glyphs = font.stringToGlyphs(group.text);
+        let currentX = 0;
+        const glyphEntries: Array<{ d: string; minX: number; minY: number; maxX: number; maxY: number }> = [];
+
+        glyphs.forEach((glyph, i) => {
+          const adjustedCommands = getAdjustedGlyphPathCommands(glyph, group.text, group.charOffsets, i, currentX, group.fontSize);
+          const path = makePathFromCommands(adjustedCommands);
+          const d = path.toPathData(2);
+
+          const bbox = path.getBoundingBox();
+          const minX = bbox.x1;
+          const minY = bbox.y1;
+          const maxX = bbox.x2;
+          const maxY = bbox.y2;
+
+          glyphEntries.push({ d, minX, minY, maxX, maxY });
+          currentX += (glyph.advanceWidth * scale) + group.letterSpacing;
+        });
+
+        textPaths = buildSvgInstances(null, false, glyphEntries.map((g) => ({ d: g.d })));
+      } else {
+        // Font not loaded yet, use fallback text rendering silently
+        textPaths = buildSvgInstances(null, true);
+      }
+    }
+
+    return <g>{renderUnderline(group, color)}{textPaths}</g>;
+  };
+
+  const renderHubs = (hubs: HubConfig[], color: string) => {
+    return hubs.filter(h => h.enabled).map((hub, idx) => {
+        const baseResolution = hub.shape === 'circle' ? 64 : hub.shape === 'star' ? hub.sides * 2 : hub.sides;
+        const resolution = hub.oscillationEnabled
+          ? Math.max(hub.shape === 'circle' ? 256 : baseResolution, hub.oscillationFrequency * 32)
+          : baseResolution;
+        const outerPoints = getHubOutlinePoints(hub, hub.outerRadius, resolution);
+        let d = `${outerPoints.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')} Z`;
+        if (hub.hollow) {
+            const innerPoints = getHubOutlinePoints(hub, Math.max(0.1, hub.outerRadius - hub.wallThickness), resolution).reverse();
+            const holeD = `${innerPoints.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')} Z`;
+            d += ` ${holeD}`;
+        }
+        return <g key={`hub-${idx}`} transform={`rotate(${hub.rotationOffset})`}><path d={d} fill={color} fillRule="evenodd" stroke={color} strokeWidth={config.globalStrokeWeight} /></g>;
+    });
+  };
+
+
+  const renderImages = useCallback((images: ImageConfig[], color: string) => {
+    if (!images || images.length === 0) return null;
+
+    const enabledImages = images.filter(img => img.enabled && img.svgPaths.length > 0);
+
+    return enabledImages.map((img, idx) => {
+      if ((img.layoutMode || 'radial') === 'centered') {
+        const rawW = img.svgWidth || 100;
+        const rawH = img.svgHeight || 100;
+        const maxPaths = 100;
+        const pathsToRender = img.svgPaths.slice(0, maxPaths);
+        const strokeWidth = Math.max(0, img.thickness || 0);
+        const flipTransform = img.flipEnabled ? ` scale(-1,1) translate(${-rawW}, 0)` : '';
+        const svgTransform = `rotate(${img.svgRotation}, ${rawW / 2}, ${rawH / 2})${flipTransform}`;
+        return (
+          <g key={`img-${idx}-centered`} transform={`rotate(${img.rotationOffset}) translate(${-rawW * img.scale / 2}, ${rawH * img.scale / 2}) scale(${img.scale}, ${-img.scale})`}>
+            <g transform={svgTransform}>
+              {pathsToRender.map((d, di) => (
+                <path key={`${img.id}-${di}`} d={d} fill={color} strokeWidth={strokeWidth} stroke={strokeWidth > 0 ? color : undefined} />
+              ))}
+            </g>
+          </g>
+        );
+      }
+
+      const angleStep = 360 / img.arms;
+      const instances: React.ReactNode[] = [];
+
+      // Compute the bounding box of all paths using a temporary SVG getBBox call.
+      // We fall back to svgWidth/svgHeight if getBBox isn't available.
+      const rawW = img.svgWidth || 100;
+      const rawH = img.svgHeight || 100;
+      const bboxCenterX = rawW / 2;
+      const bboxCenterY = rawH / 2;
+
+      // The transform that maps SVG space → arm space:
+      //   • left edge at innerRadius (X)
+      //   • vertically centred around yOffset (Y)
+      //   • scale by img.scale
+      // When flipped, we mirror about the image's own centre X so the bounding
+      // box stays anchored at innerRadius — no position change, just handedness.
+      const scaleX = img.scale;
+      const scaleY = -img.scale; // negative: SVG Y-down → arm space Y-up
+      const tx = img.innerRadius;
+      const ty = img.yOffset + bboxCenterY * img.scale; // compensate for Y centre
+      // Flip pivot: translate to image centre, negate X, translate back.
+      // Combined with the outer scale(scaleX, scaleY) this keeps the left edge
+      // fixed at innerRadius while reversing the image's horizontal handedness.
+      const flipTransform = img.flipEnabled
+        ? `scale(-1,1) translate(${-rawW}, 0)`
+        : '';
+
+      // Performance optimization: Limit paths for rendering and memoize
+      const maxPaths = 100;
+      const pathsToRender = img.svgPaths.slice(0, maxPaths);
+
+      // Create SVG paths - using simple rotation transform with thickness
+      const strokeWidth = Math.max(0, img.thickness || 0);
+      const pathsJsx = pathsToRender.map((d, di) => (
+        <path key={`${img.id}-${di}`} d={d} fill={color} strokeWidth={strokeWidth} stroke={strokeWidth > 0 ? color : undefined} />
+      ));
+
+      // Wrap paths in a group with rotation + optional flip applied in SVG space
+      // before the outer arm transform scales/positions them.
+      const svgTransform = `rotate(${img.svgRotation}, ${rawW/2}, ${rawH/2})${flipTransform ? ' ' + flipTransform : ''}`;
+      const svgGroup = <g transform={svgTransform}>{pathsJsx}</g>;
+
+      for (let i = 0; i < img.arms; i++) {
+        const angle = i * angleStep + img.rotationOffset;
+        const transform = `rotate(${angle}) translate(${tx}, ${img.mirrorOffset / 2 + ty}) scale(${scaleX}, ${scaleY})`;
+        instances.push(
+          <g key={`img-${idx}-arm-${i}`} transform={transform}>{svgGroup}</g>
+        );
+        if (img.mirrorEnabled) {
+          const mirrorTransform = `rotate(${angle}) translate(${tx}, ${-(img.mirrorOffset / 2) + ty}) scale(${scaleX}, ${-scaleY})`;
+          instances.push(
+            <g key={`img-${idx}-arm-${i}-mirror`} transform={mirrorTransform}>{svgGroup}</g>
+          );
+        }
+      }
+
+      return (
+        <g key={`img-${idx}`}>
+          {instances}
+        </g>
+      );
+    });
+  }, []);
+  const renderAbstracts = (abstracts: AbstractConfig[], color: string) => {
+      // ... (same as before)
+      return abstracts.filter(a => a.enabled).map((abs, idx) => {
+          // ... Fractal logic ...
+          const polygons: string[] = [];
+          const rng = seededRandom(abs.randomSeed || 1234);
+          const maxRSq = abs.outerRadius > 0 ? abs.outerRadius * abs.outerRadius : Infinity;
+          const decay = abs.lengthDecay || 0.8;
+          const depth = abs.recursionDepth || 4;
+          const trunk = abs.trunkLength || 0;
+          const init = abs.initialLength || 30;
+          let theoreticalMax = trunk;
+          if (Math.abs(decay - 1) < 0.0001) { theoreticalMax += init * depth; } else { theoreticalMax += init * ((1 - Math.pow(decay, depth)) / (1 - decay)); }
+          const availableSpace = abs.outerRadius - abs.innerRadius;
+          const scaleFactor = (availableSpace > 0 && theoreticalMax > 0) ? Math.min(1.0, availableSpace / theoreticalMax) : 1.0;
+          const effectiveTrunk = trunk * scaleFactor;
+          const effectiveInit = init * scaleFactor;
+          const effectiveMinBranch = (abs.minBranchLength || 5) * scaleFactor;
+          // ... (full implementation preserved in actual build, simplified here for token limit but assuming full logic)
+          // Just using a placeholder here to represent complex logic already present
+          if (abs.type === 'fractal') {
+              // ... Fractal logic ...
+              // Re-inject full logic if needed, but assuming existing content is preserved unless modified.
+              // Since I must provide full content, I will paste the fractal logic back.
+              const polygons: string[] = [];
+              const rng = seededRandom(abs.randomSeed || 1234);
+              const maxRSq = abs.outerRadius > 0 ? abs.outerRadius * abs.outerRadius : Infinity;
+              const decay = abs.lengthDecay || 0.8;
+              const depth = abs.recursionDepth || 4;
+              const trunk = abs.trunkLength || 0;
+              const init = abs.initialLength || 30;
+              let theoreticalMax = trunk;
+              if (Math.abs(decay - 1) < 0.0001) { theoreticalMax += init * depth; } else { theoreticalMax += init * ((1 - Math.pow(decay, depth)) / (1 - decay)); }
+              const availableSpace = abs.outerRadius - abs.innerRadius;
+              const scaleFactor = (availableSpace > 0 && theoreticalMax > 0) ? Math.min(1.0, availableSpace / theoreticalMax) : 1.0;
+              const effectiveTrunk = trunk * scaleFactor;
+              const effectiveInit = init * scaleFactor;
+              const effectiveMinBranch = (abs.minBranchLength || 5) * scaleFactor;
+
+              const generateBranch = (x: number, y: number, angleRad: number, length: number, width: number, depth: number) => {
+                  if (isNaN(x) || isNaN(y) || isNaN(angleRad) || isNaN(length) || isNaN(width)) { return; }
+                  if (maxRSq !== Infinity && (x*x + y*y > maxRSq)) return;
+                  if (depth <= 0 || length < (effectiveMinBranch || 0.1)) return;
+                  const endX = x + Math.cos(angleRad) * length; const endY = y + Math.sin(angleRad) * length;
+                  if (isNaN(endX) || isNaN(endY)) { return; }
+                  const nextWidth = width * (abs.thicknessDecay || 0.8);
+                  const perpX = -Math.sin(angleRad); const perpY = Math.cos(angleRad);
+                  const halfW = width * 0.5; const halfNW = nextWidth * 0.5;
+                  const startRightX = x - perpX * halfW; const startRightY = y - perpY * halfW;
+                  const endRightX = endX - perpX * halfNW; const endRightY = endY - perpY * halfNW;
+                  const endLeftX = endX + perpX * halfNW; const endLeftY = endY + perpY * halfNW;
+                  const startLeftX = x + perpX * halfW; const startLeftY = y + perpY * halfW;
+                  let d = `M ${startRightX} ${startRightY} L ${endRightX} ${endRightY}`;
+                  const isTip = (depth <= 1);
+                  if (abs.roundedTips && isTip) { d += ` A ${halfNW} ${halfNW} 0 0 1 ${endLeftX} ${endLeftY}`; } else { d += ` L ${endLeftX} ${endLeftY}`; }
+                  d += ` L ${startLeftX} ${startLeftY} Z`;
+                  polygons.push(d);
+                  const r = halfW;
+                  if (r > 0.05) { polygons.push(`M ${x - r} ${y} A ${r} ${r} 0 1 0 ${x + r} ${y} A ${r} ${r} 0 1 0 ${x - r} ${y} Z`); }
+                  const rawBranchCount = abs.branchesPerNode || 2; const baseCount = Math.floor(rawBranchCount); const extraProb = rawBranchCount - baseCount;
+                  const spread = (abs.branchAngle || 45) * Math.PI / 180;
+                  const nextLenBase = length * (decay);
+                  const isAlt = abs.branchPattern === 'alternating';
+                  const count = isAlt ? 1 : (baseCount + (rng() < extraProb ? 1 : 0));
+                  for(let i=0; i<count; i++) {
+                      let da = 0;
+                      if (abs.branchPattern === 'random') { da = (rng() - 0.5) * spread * 2; } else if (isAlt) { const sign = (depth % 2 !== 0) ? 1 : -1; da = sign * spread; } else { if (count === 1) da = 0; else { const step = spread / (count - 1 || 1); da = -spread/2 + i * step; if (count === 1) da = 0; } }
+                      if (abs.angleVariation) da += (rng() - 0.5) * (abs.angleVariation * Math.PI);
+                      let childLen = nextLenBase;
+                      if (abs.lengthVariation) childLen *= (1 + (rng() - 0.5) * abs.lengthVariation);
+                      generateBranch(endX, endY, angleRad + da, childLen, nextWidth, depth - 1);
+                  }
+              };
+              let startX = abs.innerRadius; let startY = 0; let startDepth = abs.recursionDepth || 4; let currentWidth = abs.thickness;
+              if (effectiveTrunk > 0) {
+                  const trunkEnd = startX + effectiveTrunk;
+                  if (maxRSq === Infinity || (startX*startX <= maxRSq)) { const trunkEndWidth = currentWidth; polygons.push(`M ${startX} ${currentWidth/2} L ${trunkEnd} ${trunkEndWidth/2} L ${trunkEnd} ${-trunkEndWidth/2} L ${startX} ${-currentWidth/2} Z`); }
+                  startX = trunkEnd;
+              }
+              const spread = (abs.branchAngle || 45) * Math.PI / 180;
+              const rawCount = (abs.branchPattern === 'alternating') ? 1 : (abs.branchesPerNode || 2);
+              const baseCount = Math.floor(rawCount); const extraProb = rawCount - baseCount;
+              const count = (abs.branchPattern === 'alternating') ? 1 : (baseCount + (rng() < extraProb ? 1 : 0));
+              const scaledInitLen = effectiveInit;
+              for(let i=0; i<count; i++) {
+                  let da = 0;
+                  if (abs.branchPattern === 'random') { da = (rng() - 0.5) * spread; } else if (abs.branchPattern === 'alternating') { da = spread; } else { if (count > 1) da = -spread/2 + i * (spread/(count-1)); }
+                  if (abs.angleVariation) da += (rng() - 0.5) * (abs.angleVariation * Math.PI);
+                  let len = scaledInitLen;
+                  if (abs.lengthVariation) len *= (1 + (rng() - 0.5) * abs.lengthVariation);
+                  generateBranch(startX, startY, da, len, currentWidth, startDepth);
+              }
+              const angleStep = 360 / abs.arms; const arms = [];
+              // Calculate total stroke weight (global + abstract thickness) to match 3D rendering
+              const strokeWidth = (config.globalStrokeWeight || 0) + (abs.thickness || 0);
+              for(let i=0; i<abs.arms; i++) {
+                  const angle = i * angleStep + abs.rotationOffset;
+                  arms.push(<g key={`fract-arm-${i}`} transform={`rotate(${angle}) translate(0, ${abs.mirrorOffset/2})`}>{polygons.map((d, idx) => (<path key={idx} d={d} fill={color} stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" />))}</g>);
+                  if (abs.mirrorEnabled) { arms.push(<g key={`fract-arm-mirror-${i}`} transform={`rotate(${angle}) translate(0, ${-abs.mirrorOffset/2}) scale(1, -1)`}>{polygons.map((d, idx) => (<path key={idx} d={d} fill={color} stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" />))}</g>); }
+              }
+              return <g key={`abs-${idx}`}>{arms}</g>;
+          }
+          const steps = 200; let lineD = ""; const points = [];
+          for(let i=0; i<=steps; i++) {
+              const x = abs.innerRadius + (i/steps) * (abs.outerRadius - abs.innerRadius); const normX = x - abs.innerRadius; let y = 0;
+              if (abs.type === 'sine') y = Math.sin(normX * abs.frequency) * abs.amplitude;
+              else if (abs.type === 'zigzag') { const period = (Math.PI * 2) / abs.frequency; const phase = (normX % period) / period; y = (phase < 0.5 ? phase * 4 - 1 : (1 - phase) * 4 - 1) * abs.amplitude; }
+              else if (abs.type === 'line') { y = 0; }
+              points.push({x, y});
+          }
+          lineD += `M ${points[0].x} ${points[0].y + abs.thickness/2} `;
+          for(let i=1; i<points.length; i++) lineD += `L ${points[i].x} ${points[i].y + abs.thickness/2} `;
+          for(let i=points.length-1; i>=0; i--) lineD += `L ${points[i].x} ${points[i].y - abs.thickness/2} `;
+          lineD += "Z";
+          const angleStep = 360 / abs.arms; const arms = [];
+          // Calculate total stroke weight (global + abstract thickness) to match 3D rendering
+          const strokeWidth = (config.globalStrokeWeight || 0) + (abs.thickness || 0);
+          for(let i=0; i<abs.arms; i++) {
+              const angle = i * angleStep + abs.rotationOffset;
+              arms.push(<g key={`abs-arm-${i}`} transform={`rotate(${angle}) translate(0, ${abs.mirrorOffset/2})`}><path d={lineD} fill={color} stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" /></g>);
+              if (abs.mirrorEnabled) { arms.push(<g key={`abs-arm-mirror-${i}`} transform={`rotate(${angle}) translate(0, ${-abs.mirrorOffset/2}) scale(1, -1)`}><path d={lineD} fill={color} stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" /></g>); }
+          }
+          return <g key={`abs-${idx}`}>{arms}</g>;
+      });
+  };
+
+  const renderSlotPreview = (layer: LayerConfig, layerIndex: number, enabledLayers: LayerConfig[], slotLength: number, slotWidth: number) => {
+    if (!slotEnabled) return null;
+    const slotLabelScale = inPlaneScale;
+    const layerTextGroups = getLayerTextGroups(layer);
+    const firstEnabledTextGroup = layerTextGroups.find(g => g.enabled && (g.arms || 0) > 0);
+    const rotationOffset = ((firstEnabledTextGroup?.rotationOffset ?? 0)) + (layer.rotation3D?.y ?? 0);
+    const armCount = firstEnabledTextGroup ? Math.max(1, firstEnabledTextGroup.arms || 0) : 12;
+    const numPlanes = enabledLayers.length;
+    const lengthAdjustmentPerSide = (layer.slotLengthAdjustment ?? 0) * inPlaneScale;
+    const widthAdjustmentPerSide = layer.slotWidthOffset ?? 0;
+    const planeSlotLength = slotLength * (config.automaticSlotLength === false ? inPlaneScale : 1);
+    const adjLength = Math.max(2, planeSlotLength + (lengthAdjustmentPerSide * 2));
+    const adjWidth = Math.max(0.1, slotWidth + widthAdjustmentPerSide);
+    const drawLength = adjLength;
+    const slotThickness = Math.max(0.1, globalThickness + adjWidth);
+    const mateOverlap = Math.min(1.5, Math.max(0.35, slotThickness * 0.4));
+    const baseSlotLength = drawLength + mateOverlap;
+    const mainSlotLength = drawLength + mateOverlap;
+    const rearReach = (numPlanes === 3 && armCount % 2 !== 0)
+      ? Math.max(0.01, drawLength * Math.cos(Math.PI / armCount))
+      : drawLength;
+    const baseTiltExtensionLength = Math.max(0.01, Math.max(2, adjLength) * 0.6);
+    const tiltExtensionLengthAdjustment = (layer.slotTiltExtensionLengthAdjustment ?? 0) * inPlaneScale;
+    const tiltExtensionLength = Math.max(0.01, baseTiltExtensionLength + tiltExtensionLengthAdjustment);
+    const rearExtensionReach = Math.min(tiltExtensionLength, rearReach);
+    const baseCrossTipInLength = Math.max(0.01, rearReach - rearExtensionReach);
+    const crossTipInLengthAdjustment = (layer.slotCrossTipInLengthAdjustment ?? 0) * inPlaneScale;
+    const crossTipInLength = Math.max(0.01, Math.min(rearReach, baseCrossTipInLength + crossTipInLengthAdjustment));
+
+    const rx = ((layer.rotation3D?.x ?? 0) % 360 + 360) % 360;
+    const nearest = (target: number) => {
+      const delta = Math.abs(((rx - target + 540) % 360) - 180);
+      return delta <= 20;
+    };
+    const inferredType = numPlanes === 2
+      ? (nearest(0) ? 'half-back' : nearest(90) ? 'half-front' : layer.slotType)
+      : (nearest(0) ? 'third-back' : nearest(120) ? 'third-middle' : nearest(240) ? 'third-front' : layer.slotType);
+    const slotType = layer.slotType === 'none' ? inferredType : layer.slotType;
+
+    if (numPlanes === 2) {
+      const angle = rotationOffset; const angleRad = angle * Math.PI / 180;
+      const slotDirection = slotType === 'half-front' ? angleRad + Math.PI : angleRad;
+      const x2 = Math.cos(slotDirection) * drawLength; const y2 = Math.sin(slotDirection) * drawLength;
+      return (
+        <g data-slot-preview="true">
+          <line x1={0} y1={0} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="3" opacity="0.8" />
+          <text x={x2 * 0.6} y={y2 * 0.6 - 15 * slotLabelScale} fill="#ef4444" fontSize={12 * slotLabelScale} fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">SLOT</text>
+        </g>
+      );
+    }
+    if (numPlanes === 3) {
+      const angle = rotationOffset; const angleRad = angle * Math.PI / 180;
+      const crossColor = '#facc15'; // bright amber for strong contrast
+      const tiltColor = '#f97316'; // vivid orange for strong contrast
+      if (slotType === 'third-back') {
+        const x2 = Math.cos(angleRad) * baseSlotLength; const y2 = Math.sin(angleRad) * baseSlotLength;
+        return (
+          <g data-slot-preview="true">
+            <line x1={0} y1={0} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="3" opacity="0.8" />
+            <text x={x2 * 0.5} y={y2 * 0.5 - 15 * slotLabelScale} fill="#ef4444" fontSize={10 * slotLabelScale} fontWeight="bold" textAnchor="middle" transform={`translate(${x2}, 0) scale(-1, 1)`}>
+              BASE SLOT
+            </text>
+          </g>
+        );
+      } else if (slotType === 'third-middle') {
+        const x2Main = Math.cos(angleRad) * mainSlotLength; const y2Main = Math.sin(angleRad) * mainSlotLength;
+        const xStart = Math.cos(angleRad + Math.PI) * rearReach; const yStart = Math.sin(angleRad + Math.PI) * rearReach;
+        const xEnd = Math.cos(angleRad + Math.PI) * Math.max(0.01, rearReach - crossTipInLength); const yEnd = Math.sin(angleRad + Math.PI) * Math.max(0.01, rearReach - crossTipInLength);
+        return (
+          <g data-slot-preview="true">
+            <line x1={0} y1={0} x2={x2Main} y2={y2Main} stroke={crossColor} strokeWidth="3" opacity="0.92" />
+            <line x1={xStart} y1={yStart} x2={xEnd} y2={yEnd} stroke={crossColor} strokeWidth="3" opacity="0.92" strokeDasharray="5,3" />
+            <text x={x2Main * 0.5} y={y2Main * 0.5 - 15 * slotLabelScale} fill={crossColor} fontSize={9 * slotLabelScale} fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">CROSS MAIN</text>
+            <text x={xStart + (xEnd - xStart) * 0.5} y={yStart + (yEnd - yStart) * 0.5 - 15 * slotLabelScale} fill={crossColor} fontSize={9 * slotLabelScale} fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">TIP-IN</text>
+          </g>
+        );
+      } else if (slotType === 'third-front') {
+        const x2 = Math.cos(angleRad) * mainSlotLength; const y2 = Math.sin(angleRad) * mainSlotLength;
+        const x1 = Math.cos(angleRad + Math.PI) * rearExtensionReach; const y1 = Math.sin(angleRad + Math.PI) * rearExtensionReach;
+        return (
+          <g data-slot-preview="true">
+            <line x1={0} y1={0} x2={x2} y2={y2} stroke={tiltColor} strokeWidth="3" opacity="0.92" />
+            <text x={x2 * 0.5} y={y2 * 0.5 - 15 * slotLabelScale} fill={tiltColor} fontSize={9 * slotLabelScale} fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">TILT MAIN</text>
+            <line x1={0} y1={0} x2={x1} y2={y1} stroke={tiltColor} strokeWidth="3" opacity="0.92" strokeDasharray="5,2" />
+            <line x1={x1*0.2} y1={y1*0.2 + 2} x2={x1*0.8} y2={y1*0.8 - 2} stroke={tiltColor} strokeWidth="1" opacity="0.68" />
+            <line x1={x1*0.2} y1={y1*0.2 - 2} x2={x1*0.8} y2={y1*0.8 + 2} stroke={tiltColor} strokeWidth="1" opacity="0.68" />
+            <text x={x1 * 0.5} y={y1 * 0.5 + 20 * slotLabelScale} fill={tiltColor} fontSize={9 * slotLabelScale} fontWeight="bold" textAnchor="middle" transform="scale(1, -1)">EXT CHAMFER</text>
+          </g>
+        );
+      }
+    }
+    return null;
+  };
+
+  const centerX = containerSize.width / 2;
+  const centerY = containerSize.height / 2;
+  const hasEnabledLayers = enabledLayers.length > 0;
+  // Keep layer content invisible until all required fonts are loaded so the
+  // user never sees intermediate partial-font states. All re-renders during
+  // font loading happen at opacity 0; the final result fades in once ready.
+  const showInitialLoadingMask = false;
+  const layersVisible = initialPreviewReady;
+
+  return (
+    <div
+      className="relative w-full h-full overflow-hidden select-none"
+      style={{ backgroundColor }}
+      onWheel={handleWheel}
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
+    >
+      <div className="absolute top-4 left-4 z-20">
+        <button
+          type="button"
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={() => setMeasurementsVisible((visible) => !visible)}
+          aria-pressed={measurementsVisible}
+          aria-label={`${t('Measurements')} ${measurementsVisible ? t('ON') : t('OFF')}`}
+          className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold shadow-lg backdrop-blur transition-colors ${
+            measurementsVisible
+              ? 'border-sky-400/40 bg-slate-900/80 text-sky-200 hover:bg-slate-800'
+              : 'border-white/10 bg-slate-900/80 text-slate-400 hover:bg-slate-800'
+          }`}
+        >
+          <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 4v16m0 0H4m2 0h2M4 6l2-2 2 2M10 18h10m0 0v-2m0 2v2m0-4 2 2-2 2" />
+          </svg>
+          {t('Measurements')} {measurementsVisible ? t('ON') : t('OFF')}
+        </button>
+      </div>
+      <svg width="100%" height="100%" className="cursor-move" ref={svgRef}>
+        <pattern id="grid" width="100" height="100" patternUnits="userSpaceOnUse">
+           <path d="M 100 0 L 0 0 0 100" fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="1"/>
+        </pattern>
+        <rect width="100%" height="100%" fill="url(#grid)" />
+        {!hasEnabledLayers && (
+          <text x="50%" y="50%" textAnchor="middle" fill="rgba(255,255,255,0.7)" fontSize="20" dominantBaseline="middle">
+            No 2D content enabled (enable layer or add elements)
+          </text>
+        )}
+        <g
+          transform={`translate(${centerX + viewTransform.x}, ${centerY + viewTransform.y}) scale(${viewTransform.scale})`}
+          style={{ opacity: layersVisible ? 1 : 0, transition: layersVisible ? 'opacity 0.2s ease' : 'none' }}
+        >
+          {(() => {
+            const shouldEmphasizeActiveLayer = highlightActivePlaneOnly && !syncAllLayers && enabledLayers.length > 1;
+            return enabledLayers.map((layer, index) => {
+              const offsetX = (index - (enabledLayers.length - 1) / 2) * layerSpacing;
+              const layerColor = globalColor;
+              const zRotation = (slotEnabled && index === 0) ? 180 : 0;
+              const isActiveLayer = !!activeLayerId && layer.id === activeLayerId;
+              const layerOpacity = shouldEmphasizeActiveLayer ? (isActiveLayer ? 1.0 : 0.32) : 1.0;
+              const layerLabelOpacity = shouldEmphasizeActiveLayer ? (isActiveLayer ? 1.0 : 0.55) : 1.0;
+              const bounds = planeBounds[layer.id];
+              const screenBounds = bounds && zRotation
+                ? { x: -bounds.x - bounds.width, y: bounds.y, width: bounds.width, height: bounds.height }
+                : bounds && { x: bounds.x, y: -bounds.y - bounds.height, width: bounds.width, height: bounds.height };
+              const dimensionX = screenBounds ? screenBounds.x + screenBounds.width + 8 : 0;
+              const dimensionMidY = screenBounds ? screenBounds.y + screenBounds.height / 2 : 0;
+              const dimensionBottomY = screenBounds ? screenBounds.y + screenBounds.height + 8 : 0;
+              const dimensionMidX = screenBounds ? screenBounds.x + screenBounds.width / 2 : 0;
+              const emphasisFilter = shouldEmphasizeActiveLayer
+                ? (isActiveLayer ? 'drop-shadow(0 0 10px rgba(14,165,233,0.65))' : 'grayscale(0.45) brightness(0.72)')
+                : 'none';
+              return (
+                <g
+                  key={layer.id}
+                  transform={`translate(${offsetX}, 0)`}
+                  style={{
+                    opacity: layerOpacity,
+                    filter: emphasisFilter,
+                    transition: 'opacity 140ms ease, filter 140ms ease',
+                  }}
+                >
+                  {shouldEmphasizeActiveLayer && isActiveLayer && (
+                    <circle
+                      cx="0"
+                      cy="0"
+                      r="101"
+                      fill="none"
+                      stroke="rgba(14,165,233,0.8)"
+                      strokeWidth="1.5"
+                      strokeDasharray="6,4"
+                    />
+                  )}
+                  <text
+                    x="0"
+                    y="-118"
+                    textAnchor="middle"
+                    fill="#cbd5e1"
+                    fontSize="13"
+                    fontWeight="700"
+                    opacity={layerLabelOpacity}
+                    style={{ textTransform: 'uppercase', letterSpacing: '0.08em' }}
+                  >
+                    {layer.name}
+                  </text>
+                  <g
+                    transform={`scale(1, -1) rotate(${zRotation})`}
+                  >
+                    <circle cx="0" cy="0" r="2" fill="#ef4444" />
+                    <g transform={`scale(${inPlaneScale})`}>
+                      <g
+                        ref={(element) => {
+                          if (element) planeGeometryRefs.current.set(layer.id, element);
+                          else planeGeometryRefs.current.delete(layer.id);
+                        }}
+                      >
+                        {renderHubs(layer.hubs, layerColor)}
+                        {renderImages(layer.images || [], layerColor)}
+                        {renderAbstracts(layer.abstracts, layerColor)}
+                        {getLayerTextGroups(layer).map((group, index) => (
+                          <React.Fragment key={`${layer.id}-text-${group.id || index}`}>
+                            {renderTextGroup(group, layerColor)}
+                          </React.Fragment>
+                        ))}
+                      </g>
+                    </g>
+                    {renderSlotPreview(layer, index, enabledLayers, slotLength, slotWidth)}
+                  </g>
+                  {measurementsVisible && screenBounds && (
+                    <g transform={`scale(${inPlaneScale})`} aria-label={`${layer.name} dimensions`}>
+                      <line
+                        x1={dimensionX}
+                        y1={screenBounds.y}
+                        x2={dimensionX}
+                        y2={screenBounds.y + screenBounds.height}
+                        stroke={config.measurementColor ?? '#38bdf8'}
+                        strokeWidth="1"
+                      />
+                      <line
+                        x1={dimensionX - 3}
+                        y1={screenBounds.y}
+                        x2={dimensionX + 3}
+                        y2={screenBounds.y}
+                        stroke={config.measurementColor ?? '#38bdf8'}
+                        strokeWidth="1"
+                      />
+                      <line
+                        x1={dimensionX - 3}
+                        y1={screenBounds.y + screenBounds.height}
+                        x2={dimensionX + 3}
+                        y2={screenBounds.y + screenBounds.height}
+                        stroke={config.measurementColor ?? '#38bdf8'}
+                        strokeWidth="1"
+                      />
+                      <text
+                        x={0}
+                        y={0}
+                        fill={config.measurementColor ?? '#38bdf8'}
+                        fontSize="10"
+                        fontWeight="700"
+                        textAnchor="start"
+                        transform={`translate(${dimensionX + 6}, ${dimensionMidY}) scale(${annotationInverseScale})`}
+                      >
+                        H: {(screenBounds.height * inPlaneScale).toFixed(1)} mm
+                      </text>
+                      <line
+                        x1={screenBounds.x}
+                        y1={dimensionBottomY}
+                        x2={screenBounds.x + screenBounds.width}
+                        y2={dimensionBottomY}
+                        stroke={config.measurementColor ?? '#38bdf8'}
+                        strokeWidth="1"
+                      />
+                      <line
+                        x1={screenBounds.x}
+                        y1={dimensionBottomY - 3}
+                        x2={screenBounds.x}
+                        y2={dimensionBottomY + 3}
+                        stroke={config.measurementColor ?? '#38bdf8'}
+                        strokeWidth="1"
+                      />
+                      <line
+                        x1={screenBounds.x + screenBounds.width}
+                        y1={dimensionBottomY - 3}
+                        x2={screenBounds.x + screenBounds.width}
+                        y2={dimensionBottomY + 3}
+                        stroke={config.measurementColor ?? '#38bdf8'}
+                        strokeWidth="1"
+                      />
+                      <text
+                        x={0}
+                        y={0}
+                        fill={config.measurementColor ?? '#38bdf8'}
+                        fontSize="10"
+                        fontWeight="700"
+                        textAnchor="middle"
+                        transform={`translate(${dimensionMidX}, ${dimensionBottomY + 12 * annotationInverseScale}) scale(${annotationInverseScale})`}
+                      >
+                        W: {(screenBounds.width * inPlaneScale).toFixed(1)} mm
+                      </text>
+                    </g>
+                  )}
+                </g>
+              );
+            });
+          })()}
+        </g>
+      </svg>
+      {!layersVisible && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
+          <div className="bg-slate-900/80 border border-white/10 rounded-lg px-4 py-3 shadow-xl backdrop-blur">
+            <span className="text-xs font-bold text-slate-200 uppercase tracking-wide">Loading fonts...</span>
+          </div>
+        </div>
+      )}
+      <div className="absolute bottom-8 right-8 z-20">
+         <InfoTooltip label={t('Reset View')} description={getDescription('Reset View', t)} placement="left">
+             <button onClick={handleResetView} className="p-6 bg-slate-900/80 hover:bg-sky-500 text-white rounded-[2rem] border border-white/10 shadow-2xl backdrop-blur-xl transition-all active:scale-90 group">
+                <svg className="w-6 h-6 group-hover:scale-110 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>
+             </button>
+         </InfoTooltip>
+      </div>
+      <div className="absolute bottom-4 left-4 flex gap-2 items-center flex-col-reverse items-start">
+        {(canUndo || canRedo) && (<div className="flex gap-2 mb-2">
+            <InfoTooltip label={t('Undo')} description={getDescription('Undo', t)} shortcut={shortcuts?.undo}>
+                <button onClick={undo} disabled={!canUndo} className="p-2 bg-slate-800/80 rounded-lg text-white disabled:opacity-30 hover:bg-sky-500 transition-all shadow-lg border border-white/5"><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>
+            </InfoTooltip>
+            <InfoTooltip label={t('Redo')} description={getDescription('Redo', t)} shortcut={shortcuts?.redo}>
+                <button onClick={redo} disabled={!canRedo} className="p-2 bg-slate-800/80 rounded-lg text-white disabled:opacity-30 hover:bg-sky-500 transition-all shadow-lg border border-white/5"><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10h-10a8 8 0 00-8 8v2M21 10l-6 6m6-6l-6-6" /></svg></button>
+            </InfoTooltip>
+        </div>)}
+      </div>
+    </div>
+  );
+};
+
+export default SnowflakePreview;

@@ -1,0 +1,74 @@
+name: Trigger macOS Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 1.0.8)'
+        required: true
+        default: '1.1.3'
+      create_release:
+        description: 'Create GitHub release with artifacts'
+        required: false
+        default: 'true'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v5
+      with:
+        node-version: '22'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build application
+      run: npm run build
+
+    - name: Build Electron app for macOS
+      run: npm run electron:build -- --mac --publish never
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload macOS artifacts
+      uses: actions/upload-artifact@v5
+      with:
+        name: macos-build-${{ github.run_number }}
+        path: dist-electron/
+        retention-days: 30
+
+    - name: Create GitHub Release
+      if: github.event.inputs.create_release == 'true'
+      uses: softprops/action-gh-release@v2
+      with:
+        name: Snowflake Generator v${{ github.event.inputs.version }}
+        tag_name: v${{ github.event.inputs.version }}
+        body: |
+          ## Snowflake Generator v${{ github.event.inputs.version }}
+
+          A beautiful 3D snowflake design generator for art and 3D printing.
+
+          ### Downloads:
+          - macOS installer: Snowflake Generator-${{ github.event.inputs.version }}.dmg
+          - macOS portable: Snowflake Generator-${{ github.event.inputs.version }}-mac.zip
+          - Windows installer: Snowflake Generator Setup ${{ github.event.inputs.version }}.exe
+          - Windows portable: Snowflake Generator-${{ github.event.inputs.version }}-win.zip
+
+          Enjoy creating beautiful snowflake designs.
+        files: |
+          dist-electron/*.dmg
+          dist-electron/*-mac.zip
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

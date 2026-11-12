@@ -1,0 +1,600 @@
+{
+  "projectName": "Russell",
+  "layers": [
+    {
+      "id": "layer-1",
+      "name": "Base Plane",
+      "enabled": true,
+      "rotation3D": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "primary": {
+        "id": "text-yjt7369k",
+        "enabled": true,
+        "text": "Russell",
+        "fontFamily": "Great Vibes",
+        "arms": 6,
+        "textX": 20,
+        "letterSpacing": 0,
+        "thickness": 0,
+        "fontSize": 27.32606838564837,
+        "mirrorEnabled": true,
+        "mirrorOffset": 0,
+        "rotationOffset": 0,
+        "charOffsets": [
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "underline": {
+          "enabled": false,
+          "thickness": 1.5,
+          "startXOffset": 0,
+          "length": 50,
+          "yOffset": -5,
+          "capType": "none",
+          "capWidth": 10
+        }
+      },
+      "secondary": {
+        "enabled": false,
+        "text": "",
+        "fontFamily": "Great Vibes",
+        "arms": 6,
+        "textX": 10,
+        "letterSpacing": 0,
+        "thickness": 0,
+        "fontSize": 20,
+        "mirrorEnabled": true,
+        "mirrorOffset": 0,
+        "rotationOffset": 30,
+        "charOffsets": [],
+        "underline": {
+          "enabled": false,
+          "thickness": 1.5,
+          "startXOffset": 0,
+          "length": 50,
+          "yOffset": -5,
+          "capType": "none",
+          "capWidth": 10
+        },
+        "id": "text-xma8l3up"
+      },
+      "secondaryEnabled": false,
+      "textGroups": [
+        {
+          "id": "text-yjt7369k",
+          "enabled": true,
+          "text": "Russell",
+          "fontFamily": "Great Vibes",
+          "arms": 6,
+          "textX": 20,
+          "letterSpacing": 0,
+          "thickness": 0,
+          "fontSize": 27.32606838564837,
+          "mirrorEnabled": true,
+          "mirrorOffset": 0,
+          "rotationOffset": 0,
+          "charOffsets": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0,
+              "y": 0
+            }
+          ],
+          "underline": {
+            "enabled": false,
+            "thickness": 1.5,
+            "startXOffset": 0,
+            "length": 50,
+            "yOffset": -5,
+            "capType": "none",
+            "capWidth": 10
+          }
+        }
+      ],
+      "abstracts": [],
+      "hubs": [
+        {
+          "id": "hub-1778159942039",
+          "enabled": true,
+          "shape": "circle",
+          "sides": 5,
+          "outerRadius": 21.1,
+          "hollow": true,
+          "wallThickness": 3,
+          "starRatio": 0.5,
+          "rotationOffset": 75,
+          "oscillationEnabled": true,
+          "oscillationAmplitude": 5,
+          "oscillationFrequency": 6
+        },
+        {
+          "id": "hub-1778160137266",
+          "enabled": true,
+          "shape": "circle",
+          "sides": 6,
+          "outerRadius": 16.7,
+          "hollow": true,
+          "wallThickness": 2.5,
+          "starRatio": 0.5,
+          "rotationOffset": -15,
+          "oscillationEnabled": true,
+          "oscillationAmplitude": 5,
+          "oscillationFrequency": 6
+        },
+        {
+          "id": "hub-1793977538455",
+          "enabled": true,
+          "shape": "circle",
+          "sides": 6,
+          "outerRadius": 7.2,
+          "hollow": true,
+          "wallThickness": 5.2,
+          "starRatio": 0.5,
+          "rotationOffset": 14,
+          "oscillationEnabled": true,
+          "oscillationAmplitude": 13.6,
+          "oscillationFrequency": 6
+        }
+      ],
+      "slotType": "none",
+      "slotLengthAdjustment": 0,
+      "slotWidthOffset": 0,
+      "slotCrossTipInLengthAdjustment": 0,
+      "slotTiltExtensionLengthAdjustment": 0,
+      "slotBridgeEnabled": true,
+      "slotBridgeManualWidthEnabled": false,
+      "slotBridgeManualWidth": 6,
+      "slotManualWidthEnabled": false,
+      "slotBridgeCrossMainManualWidthEnabled": false,
+      "slotBridgeCrossMainManualWidth": 6,
+      "slotBridgeCrossTipInManualWidthEnabled": false,
+      "slotBridgeCrossTipInManualWidth": 6,
+      "slotBridgeTiltMainManualWidthEnabled": false,
+      "slotBridgeTiltMainManualWidth": 6,
+      "slotBridgeTiltExtensionManualWidthEnabled": false,
+      "slotBridgeTiltExtensionManualWidth": 6,
+      "slotWidthCrossMainOffsetEnabled": false,
+      "slotWidthCrossMainOffset": 0,
+      "slotWidthCrossTipInOffsetEnabled": false,
+      "slotWidthCrossTipInOffset": 0,
+      "slotWidthTiltMainOffsetEnabled": false,
+      "slotWidthTiltMainOffset": 0,
+      "slotWidthTiltExtensionOffsetEnabled": false,
+      "slotWidthTiltExtensionOffset": 0,
+      "protectMatingClearance": true,
+      "slotBridges": [],
+      "images": []
+    },
+    {
+      "id": "layer-2",
+      "name": "Cross Plane",
+      "enabled": false,
+      "rotation3D": {
+        "x": 120,
+        "y": 0,
+        "z": 0
+      },
+      "primary": {
+        "id": "text-yjt7369k",
+        "enabled": true,
+        "text": "Russell",
+        "fontFamily": "Great Vibes",
+        "arms": 6,
+        "textX": 20,
+        "letterSpacing": 0,
+        "thickness": 0,
+        "fontSize": 27.32606838564837,
+        "mirrorEnabled": true,
+        "mirrorOffset": 0,
+        "rotationOffset": 0,
+        "charOffsets": [
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "underline": {
+          "enabled": false,
+          "thickness": 1.5,
+          "startXOffset": 0,
+          "length": 50,
+          "yOffset": -5,
+          "capType": "none",
+          "capWidth": 10
+        }
+      },
+      "secondary": {
+        "enabled": false,
+        "text": "",
+        "fontFamily": "Great Vibes",
+        "arms": 6,
+        "textX": 10,
+        "letterSpacing": 0,
+        "thickness": 0,
+        "fontSize": 20,
+        "mirrorEnabled": true,
+        "mirrorOffset": 0,
+        "rotationOffset": 30,
+        "charOffsets": [],
+        "underline": {
+          "enabled": false,
+          "thickness": 1.5,
+          "startXOffset": 0,
+          "length": 50,
+          "yOffset": -5,
+          "capType": "none",
+          "capWidth": 10
+        },
+        "id": "text-m9006p6s"
+      },
+      "secondaryEnabled": false,
+      "textGroups": [
+        {
+          "id": "text-yjt7369k",
+          "enabled": true,
+          "text": "Russell",
+          "fontFamily": "Great Vibes",
+          "arms": 6,
+          "textX": 20,
+          "letterSpacing": 0,
+          "thickness": 0,
+          "fontSize": 27.32606838564837,
+          "mirrorEnabled": true,
+          "mirrorOffset": 0,
+          "rotationOffset": 0,
+          "charOffsets": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0,
+              "y": 0
+            }
+          ],
+          "underline": {
+            "enabled": false,
+            "thickness": 1.5,
+            "startXOffset": 0,
+            "length": 50,
+            "yOffset": -5,
+            "capType": "none",
+            "capWidth": 10
+          }
+        }
+      ],
+      "abstracts": [],
+      "hubs": [
+        {
+          "id": "hub-1778159942039",
+          "enabled": true,
+          "shape": "circle",
+          "sides": 5,
+          "outerRadius": 21.1,
+          "hollow": true,
+          "wallThickness": 3,
+          "starRatio": 0.5,
+          "rotationOffset": 75,
+          "oscillationEnabled": true,
+          "oscillationAmplitude": 5,
+          "oscillationFrequency": 6
+        },
+        {
+          "id": "hub-1778160137266",
+          "enabled": true,
+          "shape": "circle",
+          "sides": 6,
+          "outerRadius": 16.7,
+          "hollow": true,
+          "wallThickness": 2.5,
+          "starRatio": 0.5,
+          "rotationOffset": -15,
+          "oscillationEnabled": true,
+          "oscillationAmplitude": 5,
+          "oscillationFrequency": 6
+        },
+        {
+          "id": "hub-1793977538455",
+          "enabled": true,
+          "shape": "circle",
+          "sides": 6,
+          "outerRadius": 7.2,
+          "hollow": true,
+          "wallThickness": 5.2,
+          "starRatio": 0.5,
+          "rotationOffset": 14,
+          "oscillationEnabled": true,
+          "oscillationAmplitude": 13.6,
+          "oscillationFrequency": 6
+        }
+      ],
+      "slotType": "none",
+      "slotLengthAdjustment": 0,
+      "slotWidthOffset": 0,
+      "slotCrossTipInLengthAdjustment": 0,
+      "slotTiltExtensionLengthAdjustment": 0,
+      "slotBridgeEnabled": true,
+      "slotBridgeManualWidthEnabled": false,
+      "slotBridgeManualWidth": 6,
+      "slotManualWidthEnabled": false,
+      "slotBridgeCrossMainManualWidthEnabled": false,
+      "slotBridgeCrossMainManualWidth": 6,
+      "slotBridgeCrossTipInManualWidthEnabled": false,
+      "slotBridgeCrossTipInManualWidth": 6,
+      "slotBridgeTiltMainManualWidthEnabled": false,
+      "slotBridgeTiltMainManualWidth": 6,
+      "slotBridgeTiltExtensionManualWidthEnabled": false,
+      "slotBridgeTiltExtensionManualWidth": 6,
+      "slotWidthCrossMainOffsetEnabled": false,
+      "slotWidthCrossMainOffset": 0,
+      "slotWidthCrossTipInOffsetEnabled": false,
+      "slotWidthCrossTipInOffset": 0,
+      "slotWidthTiltMainOffsetEnabled": false,
+      "slotWidthTiltMainOffset": 0,
+      "slotWidthTiltExtensionOffsetEnabled": false,
+      "slotWidthTiltExtensionOffset": 0,
+      "protectMatingClearance": true,
+      "slotBridges": [],
+      "images": []
+    },
+    {
+      "id": "layer-4",
+      "name": "Tilt Plane",
+      "enabled": false,
+      "rotation3D": {
+        "x": 240,
+        "y": 0,
+        "z": 0
+      },
+      "primary": {
+        "id": "text-yjt7369k",
+        "enabled": true,
+        "text": "Russell",
+        "fontFamily": "Great Vibes",
+        "arms": 6,
+        "textX": 20,
+        "letterSpacing": 0,
+        "thickness": 0,
+        "fontSize": 27.32606838564837,
+        "mirrorEnabled": true,
+        "mirrorOffset": 0,
+        "rotationOffset": 0,
+        "charOffsets": [
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "underline": {
+          "enabled": false,
+          "thickness": 1.5,
+          "startXOffset": 0,
+          "length": 50,
+          "yOffset": -5,
+          "capType": "none",
+          "capWidth": 10
+        }
+      },
+      "secondary": {
+        "enabled": false,
+        "text": "",
+        "fontFamily": "Great Vibes",
+        "arms": 6,
+        "textX": 10,
+        "letterSpacing": 0,
+        "thickness": 0,
+        "fontSize": 20,
+        "mirrorEnabled": true,
+        "mirrorOffset": 0,
+        "rotationOffset": 30,
+        "charOffsets": [],
+        "underline": {
+          "enabled": false,
+          "thickness": 1.5,
+          "startXOffset": 0,
+          "length": 50,
+          "yOffset": -5,
+          "capType": "none",
+          "capWidth": 10
+        },
+        "id": "text-0s70mov8"
+      },
+      "secondaryEnabled": false,
+      "textGroups": [
+        {
+          "id": "text-yjt7369k",
+          "enabled": true,
+          "text": "Russell",
+          "fontFamily": "Great Vibes",
+          "arms": 6,
+          "textX": 20,
+          "letterSpacing": 0,
+          "thickness": 0,
+          "fontSize": 27.32606838564837,
+          "mirrorEnabled": true,
+          "mirrorOffset": 0,
+          "rotationOffset": 0,
+          "charOffsets": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0,
+              "y": 0
+            }
+          ],
+          "underline": {
+            "enabled": false,
+            "thickness": 1.5,
+            "startXOffset": 0,
+            "length": 50,
+            "yOffset": -5,
+            "capType": "none",
+            "capWidth": 10
+          }
+        }
+      ],
+      "abstracts": [],
+      "hubs": [
+        {
+          "id": "hub-1778159942039",
+          "enabled": true,
+          "shape": "circle",
+          "sides": 5,
+          "outerRadius": 21.1,
+          "hollow": true,
+          "wallThickness": 3,
+          "starRatio": 0.5,
+          "rotationOffset": 75,
+          "oscillationEnabled": true,
+          "oscillationAmplitude": 5,
+          "oscillationFrequency": 6
+        },
+        {
+          "id": "hub-1778160137266",
+          "enabled": true,
+          "shape": "circle",
+          "sides": 6,
+          "outerRadius": 16.7,
+          "hollow": true,
+          "wallThickness": 2.5,
+          "starRatio": 0.5,
+          "rotationOffset": -15,
+          "oscillationEnabled": true,
+          "oscillationAmplitude": 5,
+          "oscillationFrequency": 6
+        },
+        {
+          "id": "hub-1793977538455",
+          "enabled": true,
+          "shape": "circle",
+          "sides": 6,
+          "outerRadius": 7.2,
+          "hollow": true,
+          "wallThickness": 5.2,
+          "starRatio": 0.5,
+          "rotationOffset": 14,
+          "oscillationEnabled": true,
+          "oscillationAmplitude": 13.6,
+          "oscillationFrequency": 6
+        }
+      ],
+      "slotType": "none",
+      "slotLengthAdjustment": 0,
+      "slotWidthOffset": 0,
+      "slotCrossTipInLengthAdjustment": 0,
+      "slotTiltExtensionLengthAdjustment": 0,
+      "slotBridgeEnabled": true,
+      "slotBridgeManualWidthEnabled": false,
+      "slotBridgeManualWidth": 6,
+      "slotManualWidthEnabled": false,
+      "slotBridgeCrossMainManualWidthEnabled": false,
+      "slotBridgeCrossMainManualWidth": 6,
+      "slotBridgeCrossTipInManualWidthEnabled": false,
+      "slotBridgeCrossTipInManualWidth": 6,
+      "slotBridgeTiltMainManualWidthEnabled": false,
+      "slotBridgeTiltMainManualWidth": 6,
+      "slotBridgeTiltExtensionManualWidthEnabled": false,
+      "slotBridgeTiltExtensionManualWidth": 6,
+      "slotWidthCrossMainOffsetEnabled": false,
+      "slotWidthCrossMainOffset": 0,
+      "slotWidthCrossTipInOffsetEnabled": false,
+      "slotWidthCrossTipInOffset": 0,
+      "slotWidthTiltMainOffsetEnabled": false,
+      "slotWidthTiltMainOffset": 0,
+      "slotWidthTiltExtensionOffsetEnabled": false,
+      "slotWidthTiltExtensionOffset": 0,
+      "protectMatingClearance": true,
+      "slotBridges": [],
+      "images": []
+    }
+  ],
+  "activeLayerIndex": 0,
+  "color": "#38bdf8",
+  "extrusionDepth": 3,
+  "bevelEnabled": true,
+  "bevelType": "fillet",
+  "bevelAmount": 0.4,
+  "bevelSegments": 5,
+  "slotEnabled": false,
+  "slotBakedProfileEnabled": true,
+  "manifoldExact": true,
+  "slotBridgesEnabled": true,
+  "slotLength": 95,
+  "slotWidth": 0.2,
+  "slotMode": "3-plane",
+  "quality": "low",
+  "syncAllLayers": true,
+  "highlightActivePlaneOnly": false,
+  "globalStrokeWeight": 0,
+  "freeFloatingCheck": true
+}

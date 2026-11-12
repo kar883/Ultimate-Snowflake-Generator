@@ -1,0 +1,106 @@
+{
+  "name": "snowflake-generator",
+  "private": true,
+  "version": "1.1.4",
+  "type": "module",
+  "main": "main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:clean": "npm run build",
+    "preview": "vite preview",
+    "test:e2e": "playwright test",
+    "test:hub-oscillation": "node scripts/test-hub-oscillation.mjs",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:report": "playwright show-report",
+    "verify:manifold": "node ./node_modules/electron/cli.js scripts/verify-manifold.cjs && node scripts/assert-manifold-report.cjs",
+    "electron:start": "electron .",
+    "electron:build": "electron-builder",
+    "package": "npm run build && npm run electron:build",
+    "dist": "node build.js"
+  },
+  "dependencies": {
+    "@electron/osx-sign": "^2.3.0",
+    "@google/genai": "^1.34.0",
+    "@jscad/csg": "^0.7.0",
+    "@vitejs/plugin-react": "^5.1.2",
+    "jszip": "3.10.1",
+    "manifold": "^3.1.0",
+    "manifold-3d": "^3.3.2",
+    "opentype.js": "1.3.4",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "remesh-threejs": "^0.3.1",
+    "this": "^1.1.0",
+    "three": "0.160.0",
+    "three-bvh-csg": "0.0.17",
+    "three-mesh-bvh": "^0.9.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.53.2",
+    "@types/node": "^22.14.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "autoprefixer": "^10.4.24",
+    "electron": "^40.8.5",
+    "electron-builder": "^26.8.1",
+    "electron-builder-squirrel-windows": "^26.8.1",
+    "esbuild": "^0.27.4",
+    "jimp": "^1.6.1",
+    "png-to-ico": "^3.0.1",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.19",
+    "typescript": "~5.8.2",
+    "vite": "^6.4.1"
+  },
+  "build": {
+    "appId": "com.snowflake.generator",
+    "productName": "Snowflake Generator",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "dist/**",
+      "main.cjs",
+      "electron.js",
+      "preload.js",
+      "package.json",
+      "assets/**"
+    ],
+    "icon": "assets/icon.png",
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "guid": "{B7E2A1C4-9F3B-4D2A-8C1E-2F3A4B5C6D7E}",
+      "include": "scripts/installer.nsh"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.graphics"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb",
+        "tar.gz"
+      ]
+    }
+  },
+  "description": "A beautiful 3D snowflake design generator for art and 3D printing",
+  "author": {
+    "name": "Snowflake Generator Contributors",
+    "email": "44126918+kar883@users.noreply.github.com"
+  },
+  "license": "CC-BY-NC-4.0"
+}

@@ -1,0 +1,2515 @@
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import * as THREE from 'three';
+// @ts-ignore
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
+// @ts-ignore
+import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
+import { SnowflakeConfig, ShortcutConfig, DesignQuality } from '../types';
+
+const SLOT_DEBUG_OVERLAY_ENABLED = false;
+const CONFLICT_DEBUG_OVERLAY_ENABLED = false;
+
+function createSlotDebugCuttersForLayer(
+  layer: SnowflakeConfig['layers'][number],
+  layerIndex: number,
+  enabledLayers: SnowflakeConfig['layers'],
+  config: SnowflakeConfig,
+  materialThickness: number,
+  centerZ: number
+): THREE.BufferGeometry[] {
+  if (!config.slotEnabled) return [];
+  if (config.slotMode === '2-plane' && enabledLayers.length < 2) return [];
+  if (config.slotMode === '3-plane' && enabledLayers.length < 3) return [];
+
+  const modelDiameter = 190;
+  const adjLength = Math.max(2, config.slotLength + (layer.slotLengthAdjustment ?? 0));
+  const widthAdjustment = layer.slotWidthOffset ?? 0;
+  const drawLength = Math.max(adjLength, (modelDiameter / 2) + 20);
+  const tipInStart = Math.max(0, adjLength * 0.75);
+  const tipInLength = Math.max(0.01, drawLength * 0.22);
+  const extensionLength = Math.max(0.01, adjLength * 0.6);
+  const armAngle = layer.primary.rotationOffset ?? 0;
+  const enabledTextThicknesses = [
+    layer.primary.enabled ? (layer.primary.thickness || 0) : 0,
+    (layer.secondaryEnabled && layer.secondary.enabled) ? (layer.secondary.thickness || 0) : 0,
+  ];
+  const maxLayerTextThickness = Math.max(...enabledTextThicknesses);
+  const textThicknessOverBaseline = Math.max(0, maxLayerTextThickness - 1.0);
+  const effectiveBoldnessForSlot = Math.max(0, (config.globalStrokeWeight || 0) + textThicknessOverBaseline);
+  const slotThickness = Math.max(0.1, materialThickness + effectiveBoldnessForSlot + config.slotWidth + widthAdjustment);
+  const bridge = Math.min(0.4, Math.max(0.15, slotThickness * 0.08));
+  const halfChannel = Math.max(0.12, (slotThickness - bridge) / 2);
+  const fullPunch = Math.max(500, drawLength * 4);
+
+  const cutters: THREE.BufferGeometry[] = [];
+  const addCutter = (
+    nearX: number,
+    length: number,
+    slotThickness: number,
+    rotXDeg: number,
+    rotZDeg: number,
+    yOffset = 0
+  ) => {
+    if (length <= 0.01 || slotThickness <= 0.01) return;
+    const g = new THREE.BoxGeometry(length, fullPunch, slotThickness);
+    g.translate(nearX + (length / 2), yOffset, 0);
+    g.rotateX((rotXDeg * Math.PI) / 180);
+    g.rotateZ((rotZDeg * Math.PI) / 180);
+    g.translate(0, 0, centerZ);
+    cutters.push(g);
+  };
+
+  if (config.slotMode === '2-plane') {
+    if (layerIndex === 0) {
+      addCutter(0, drawLength, slotThickness, 90, -armAngle, 0);
+    } else if (layerIndex === 1) {
+      addCutter(0, drawLength, slotThickness, 270, -(armAngle + 180), 0);
+    }
+    return cutters;
+  }
+
+  if (layerIndex === 0) {
+    addCutter(-drawLength, drawLength, slotThickness, 240, -armAngle, 0);
+    return cutters;
+  }
+
+  if (layerIndex === 1) {
+    addCutter(0, drawLength, slotThickness, 240, -armAngle, 0);
+    const tipInCutLength = Math.max(0.01, drawLength - extensionLength);
+    addCutter(-drawLength, tipInCutLength, slotThickness, 240, -armAngle, 0);
+    addCutter(-drawLength, tipInCutLength, slotThickness, 120, -armAngle, 0);
+    return cutters;
+  }
+
+  if (layerIndex === 2) {
+    addCutter(0, drawLength, slotThickness, 240, -armAngle, 0);
+    addCutter(0, drawLength, slotThickness, 120, -armAngle, 0);
+    addCutter(
+      -extensionLength,
+      extensionLength,
+      slotThickness,
+      240,
+      -armAngle,
+      -((bridge / 2) + (halfChannel / 2))
+    );
+    addCutter(
+      0,
+      extensionLength,
+      slotThickness,
+      240,
+      -armAngle,
+      (bridge / 2) + (halfChannel / 2)
+    );
+    return cutters;
+  }
+
+  return cutters;
+}
+
+function createConflictDebugVolumes(group: THREE.Group): { meshes: THREE.Mesh[]; count: number } {
+  const perLayerMeshes = new Map<string, THREE.Mesh[]>();
+  const perLayerBounds = new Map<string, THREE.Box3>();
+
+  group.traverse(child => {
+    if (!(child instanceof THREE.Mesh)) return;
+    if (!child.userData.layerId || child.userData.slotDebug) return;
+
+    const layerId = String(child.userData.layerId);
+    const bounds = new THREE.Box3().setFromObject(child);
+    if (bounds.isEmpty()) return;
+
+    if (!perLayerMeshes.has(layerId)) perLayerMeshes.set(layerId, []);
+    perLayerMeshes.get(layerId)!.push(child);
+
+    const existing = perLayerBounds.get(layerId);
+    if (existing) existing.union(bounds);
+    else perLayerBounds.set(layerId, bounds.clone());
+  });
+
+  const pointInsideMesh = (mesh: THREE.Mesh, pointWorld: THREE.Vector3, ray: THREE.Raycaster): boolean => {
+    const dir = new THREE.Vector3(1, 0.123, 0.071).normalize();
+    const start = pointWorld.clone().addScaledVector(dir, -2000);
+    ray.set(start, dir);
+    const hits = ray.intersectObject(mesh, false);
+    let crossings = 0;
+    for (const hit of hits) {
+      if (hit.distance > 1e-4) crossings++;
+    }
+    return (crossings % 2) === 1;
+  };
+
+  const pointInsideLayer = (layerMeshes: THREE.Mesh[], pointWorld: THREE.Vector3, ray: THREE.Raycaster): boolean => {
+    for (const m of layerMeshes) {
+      if (pointInsideMesh(m, pointWorld, ray)) return true;
+    }
+    return false;
+  };
+
+  const layerIds = Array.from(perLayerBounds.keys());
+  const meshes: THREE.Mesh[] = [];
+  let totalCells = 0;
+
+  for (let i = 0; i < layerIds.length; i++) {
+    for (let j = i + 1; j < layerIds.length; j++) {
+      const idA = layerIds[i];
+      const idB = layerIds[j];
+      const boundsA = perLayerBounds.get(idA);
+      const boundsB = perLayerBounds.get(idB);
+      const meshesA = perLayerMeshes.get(idA);
+      const meshesB = perLayerMeshes.get(idB);
+      if (!boundsA || !boundsB || !meshesA || !meshesB || !boundsA.intersectsBox(boundsB)) continue;
+
+      const overlap = boundsA.clone().intersect(boundsB);
+      if (overlap.isEmpty()) continue;
+
+      const size = new THREE.Vector3();
+      overlap.getSize(size);
+      if (size.x < 0.05 || size.y < 0.05 || size.z < 0.05) continue;
+
+      const targetStep = 1.4;
+      const nx = Math.min(28, Math.max(1, Math.ceil(size.x / targetStep)));
+      const ny = Math.min(28, Math.max(1, Math.ceil(size.y / targetStep)));
+      const nz = Math.min(18, Math.max(1, Math.ceil(size.z / targetStep)));
+
+      const sx = size.x / nx;
+      const sy = size.y / ny;
+      const sz = size.z / nz;
+
+      const ray = new THREE.Raycaster();
+      const occupiedWorldCenters: THREE.Vector3[] = [];
+      const p = new THREE.Vector3();
+
+      for (let ix = 0; ix < nx; ix++) {
+        for (let iy = 0; iy < ny; iy++) {
+          for (let iz = 0; iz < nz; iz++) {
+            p.set(
+              overlap.min.x + (ix + 0.5) * sx,
+              overlap.min.y + (iy + 0.5) * sy,
+              overlap.min.z + (iz + 0.5) * sz
+            );
+
+            if (!pointInsideLayer(meshesA, p, ray)) continue;
+            if (!pointInsideLayer(meshesB, p, ray)) continue;
+            occupiedWorldCenters.push(p.clone());
+          }
+        }
+      }
+
+      if (occupiedWorldCenters.length === 0) continue;
+
+      const inst = new THREE.InstancedMesh(
+        new THREE.BoxGeometry(Math.max(0.08, sx), Math.max(0.08, sy), Math.max(0.08, sz)),
+        new THREE.MeshBasicMaterial({
+          color: 0xff3b30,
+          wireframe: false,
+          transparent: true,
+          opacity: 0.4,
+          depthWrite: false,
+        }),
+        occupiedWorldCenters.length
+      );
+
+      const mtx = new THREE.Matrix4();
+      const local = new THREE.Vector3();
+      occupiedWorldCenters.forEach((wc, idx) => {
+        local.copy(group.worldToLocal(wc.clone()));
+        mtx.makeTranslation(local.x, local.y, local.z);
+        inst.setMatrixAt(idx, mtx);
+      });
+
+      inst.instanceMatrix.needsUpdate = true;
+      inst.userData.conflictDebug = true;
+      inst.userData.conflictLayers = [idA, idB];
+      inst.name = `Conflict ${idA} x ${idB}`;
+      inst.renderOrder = 1000;
+      meshes.push(inst);
+      totalCells += occupiedWorldCenters.length;
+    }
+  }
+
+  return { meshes, count: totalCells };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Identify disconnected mesh bodies for the "ID Bodies" diagnostic tool.
+//
+// The geometry is a set of flat extruded slabs (all at the same Z range).
+// Adjacent shapes that overlap or touch in XY have zero vertex proximity —
+// their outline vertices sit on their own perimeters and never coincide.
+// Vertex-welding or vertex-proximity bridging cannot connect them.
+//
+// Correct approach — three phases:
+//
+//  1. BFS on triangle adjacency (standard connected components per mesh island).
+//     This correctly separates things like a unicorn body from a floating eye.
+//
+//  2. 2D overlap test: for each raw body, sample the XY centroid of every Nth
+//     triangle.  For each sample, test whether it falls inside any triangle of
+//     any other raw body (ignoring Z).  If yes → the two bodies physically
+//     overlap/touch and should be treated as one connected piece.
+//     Uses union-find to propagate transitivity (A∩B, B∩C → A=B=C).
+//
+//  3. Remap raw body IDs through union-find and paint vertex colors.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Point-in-triangle (2D, sign test)
+function ptInTri2D(
+  px: number, py: number,
+  ax: number, ay: number,
+  bx: number, by: number,
+  cx: number, cy: number
+): boolean {
+  const d1 = (px - bx) * (ay - by) - (ax - bx) * (py - by);
+  const d2 = (px - cx) * (by - cy) - (bx - cx) * (py - cy);
+  const d3 = (px - ax) * (cy - ay) - (cx - ax) * (py - ay);
+  const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
+  const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
+  return !(hasNeg && hasPos);
+}
+
+function findConnectedBodies(geo: THREE.BufferGeometry): {
+  bodyPerVertex: Int32Array;
+  bodyCount: number;
+} {
+  const origPos   = geo.attributes.position;
+  const origCount = origPos.count;
+  const idx       = geo.index;
+  const triCount  = idx ? idx.count / 3 : origCount / 3;
+
+  const vi = (t: number, k: number) =>
+    idx ? idx.getX(t * 3 + k) : t * 3 + k;
+
+  // ── Phase 1: BFS on triangle adjacency ───────────────────────────────────
+  // Build compact linked-list adjacency (avoids Set<> GC pressure).
+  const adjHead = new Int32Array(origCount).fill(-1);
+  const adjNext: number[] = [];
+  const adjDest: number[] = [];
+  const addEdge = (a: number, b: number) => {
+    adjNext.push(adjHead[a]); adjDest.push(b); adjHead[a] = adjNext.length - 1;
+    adjNext.push(adjHead[b]); adjDest.push(a); adjHead[b] = adjNext.length - 1;
+  };
+  for (let t = 0; t < triCount; t++) {
+    const a = vi(t, 0), b = vi(t, 1), c = vi(t, 2);
+    if (a === b || b === c || a === c) continue;
+    addEdge(a, b); addEdge(b, c); addEdge(a, c);
+  }
+
+  const bpv = new Int32Array(origCount).fill(-1);
+  let rawCount = 0;
+  const queue = new Int32Array(origCount);
+  for (let start = 0; start < origCount; start++) {
+    if (bpv[start] !== -1) continue;
+    let head = 0, tail = 0;
+    queue[tail++] = start;
+    bpv[start] = rawCount;
+    while (head < tail) {
+      const cur = queue[head++];
+      for (let e = adjHead[cur]; e !== -1; e = adjNext[e]) {
+        const nb = adjDest[e];
+        if (bpv[nb] === -1) { bpv[nb] = rawCount; queue[tail++] = nb; }
+      }
+    }
+    rawCount++;
+  }
+
+  if (rawCount <= 1) {
+    return { bodyPerVertex: bpv.map(v => Math.max(v, 0)) as unknown as Int32Array, bodyCount: rawCount };
+  }
+
+  // ── Phase 2: 2D overlap union-find ───────────────────────────────────────
+  // For each raw body collect its triangles' XY data.
+  // We sample every SAMPLE_STRIDE-th triangle centroid of each body and test
+  // whether it sits inside any triangle of any other body.
+  const SAMPLE_STRIDE = 4; // check 1 in 4 triangles as probe points
+
+  // bodyTris[b] = flat array [ax,ay, bx,by, cx,cy, ...] for body b
+  const bodyTris: Float32Array[] = new Array(rawCount);
+  const bodyTriBufs: number[][] = Array.from({ length: rawCount }, () => []);
+
+  for (let t = 0; t < triCount; t++) {
+    const a = vi(t, 0), b = vi(t, 1), c = vi(t, 2);
+    const body = bpv[a];
+    if (body < 0) continue;
+    bodyTriBufs[body].push(
+      origPos.getX(a), origPos.getY(a),
+      origPos.getX(b), origPos.getY(b),
+      origPos.getX(c), origPos.getY(c),
+    );
+  }
+  for (let b = 0; b < rawCount; b++) {
+    bodyTris[b] = new Float32Array(bodyTriBufs[b]);
+  }
+
+  // Grid-accelerate lookups: bucket each body's triangles by cell.
+  // Cell size = rough triangle size estimate.
+  const CELL = 5; // mm — coarse grid, fine enough for typical ornament features
+  // For each body build a map: cellKey → [triIndex, triIndex, ...]
+  type Grid = Map<number, number[]>;
+  const bodyGrid: Grid[] = new Array(rawCount);
+  for (let b = 0; b < rawCount; b++) {
+    const tris = bodyTris[b];
+    const grid: Grid = new Map();
+    const n = tris.length / 6;
+    for (let t = 0; t < n; t++) {
+      const o = t * 6;
+      const minX = Math.min(tris[o], tris[o+2], tris[o+4]);
+      const maxX = Math.max(tris[o], tris[o+2], tris[o+4]);
+      const minY = Math.min(tris[o+1], tris[o+3], tris[o+5]);
+      const maxY = Math.max(tris[o+1], tris[o+3], tris[o+5]);
+      const x0 = Math.floor(minX / CELL), x1 = Math.floor(maxX / CELL);
+      const y0 = Math.floor(minY / CELL), y1 = Math.floor(maxY / CELL);
+      for (let gx = x0; gx <= x1; gx++) {
+        for (let gy = y0; gy <= y1; gy++) {
+          const key = gx * 100000 + gy;
+          let bucket = grid.get(key);
+          if (!bucket) { bucket = []; grid.set(key, bucket); }
+          bucket.push(t);
+        }
+      }
+    }
+    bodyGrid[b] = grid;
+  }
+
+  // Test whether point (px,py) is inside any triangle of body b via grid
+  const pointInBody = (px: number, py: number, b: number): boolean => {
+    const gx = Math.floor(px / CELL);
+    const gy = Math.floor(py / CELL);
+    const tris = bodyTris[b];
+    const grid = bodyGrid[b];
+    // Check the point's cell and 8 neighbours
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const bucket = grid.get((gx + dx) * 100000 + (gy + dy));
+        if (!bucket) continue;
+        for (const t of bucket) {
+          const o = t * 6;
+          if (ptInTri2D(px, py,
+            tris[o], tris[o+1],
+            tris[o+2], tris[o+3],
+            tris[o+4], tris[o+5])) return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  // Union-Find
+  const parent = Int32Array.from({ length: rawCount }, (_, i) => i);
+  const find = (x: number): number => {
+    while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+    return x;
+  };
+  const union = (a: number, b: number) => {
+    a = find(a); b = find(b); if (a !== b) parent[a] = b;
+  };
+
+  // For each body A, sample every SAMPLE_STRIDE-th triangle centroid and test
+  // whether it's inside any other body B.
+  for (let a = 0; a < rawCount; a++) {
+    const trisA = bodyTris[a];
+    const nA = trisA.length / 6;
+    for (let t = 0; t < nA; t += SAMPLE_STRIDE) {
+      const o = t * 6;
+      // centroid of this triangle
+      const px = (trisA[o] + trisA[o+2] + trisA[o+4]) / 3;
+      const py = (trisA[o+1] + trisA[o+3] + trisA[o+5]) / 3;
+      for (let b = 0; b < rawCount; b++) {
+        if (find(a) === find(b)) continue; // already merged
+        if (pointInBody(px, py, b)) { union(a, b); break; }
+      }
+    }
+  }
+
+  // ── Phase 3: remap raw IDs → merged IDs ──────────────────────────────────
+  const rootToId = new Map<number, number>();
+  let bodyCount = 0;
+  const remap = new Int32Array(rawCount);
+  for (let b = 0; b < rawCount; b++) {
+    const r = find(b);
+    if (!rootToId.has(r)) rootToId.set(r, bodyCount++);
+    remap[b] = rootToId.get(r)!;
+  }
+  const bodyPerVertex = new Int32Array(origCount);
+  for (let i = 0; i < origCount; i++) {
+    bodyPerVertex[i] = bpv[i] >= 0 ? remap[bpv[i]] : 0;
+  }
+
+  return { bodyPerVertex, bodyCount };
+}
+
+// Build per-vertex colour attribute.
+// The largest connected body keeps the design color; all floating bodies share
+// one highlight color for a clear binary visual signal.
+const FLOAT_HIGHLIGHT_COLOR = '#f97316';
+
+function buildBodyColors(
+  geo: THREE.BufferGeometry,
+  bpv: Int32Array,
+  bodyCount: number,
+  designColor: string
+): THREE.BufferAttribute {
+  const posCount = geo.attributes.position.count;
+
+  // Find the largest body — that's the "main" connected mesh
+  const sizes = new Int32Array(bodyCount);
+  for (let i = 0; i < posCount; i++) if (bpv[i] >= 0) sizes[bpv[i]]++;
+  let mainBody = 0;
+  for (let b = 1; b < bodyCount; b++) if (sizes[b] > sizes[mainBody]) mainBody = b;
+
+  // Map: main body -> design color, all others -> one floating highlight color
+  const bodyToColor = new Array<THREE.Color>(bodyCount);
+  const mainCol = new THREE.Color(designColor);
+  const floatCol = new THREE.Color(FLOAT_HIGHLIGHT_COLOR);
+  for (let b = 0; b < bodyCount; b++) {
+    bodyToColor[b] = (b === mainBody) ? mainCol : floatCol;
+  }
+
+  const arr = new Float32Array(posCount * 3);
+  for (let i = 0; i < posCount; i++) {
+    const c = bpv[i] >= 0 ? bodyToColor[bpv[i]] : mainCol;
+    arr[i * 3] = c.r; arr[i * 3 + 1] = c.g; arr[i * 3 + 2] = c.b;
+  }
+  return new THREE.BufferAttribute(arr, 3);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dynamic XYZ orientation gizmo
+// ─────────────────────────────────────────────────────────────────────────────
+const XYZGizmo: React.FC<{
+  camQ: THREE.Quaternion | null;
+  onSnapDirection?: (direction: THREE.Vector3) => void;
+  onRotateStep?: (dir: 'left' | 'right' | 'up' | 'down') => void;
+}> = ({ camQ, onSnapDirection, onRotateStep }) => {
+  const [hovered, setHovered] = useState<{ kind: 'face' | 'edge' | 'corner' | 'arrow'; key: string; label: string } | null>(null);
+  const size = 115;
+  const cx = size / 2;
+  const cy = size / 2;
+  const radius = 64.0625;
+  const faceLabelColor = 'rgba(0,0,0,1)';
+
+  if (!camQ) {
+    return (
+      <svg width={size} height={size} className="select-none">
+        <circle cx={cx} cy={cy} r={52.5} fill="rgba(15,23,42,0.72)" stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
+      </svg>
+    );
+  }
+
+  const keyFrom = (x: number, y: number, z: number) => `${x > 0 ? 'p' : 'n'}${y > 0 ? 'p' : 'n'}${z > 0 ? 'p' : 'n'}`;
+  const parseKey = (k: string) => ({
+    x: k[0] === 'p' ? 1 : -1,
+    y: k[1] === 'p' ? 1 : -1,
+    z: k[2] === 'p' ? 1 : -1,
+  });
+
+  const corners3D = [
+    new THREE.Vector3(1, 1, 1), new THREE.Vector3(1, 1, -1), new THREE.Vector3(1, -1, 1), new THREE.Vector3(1, -1, -1),
+    new THREE.Vector3(-1, 1, 1), new THREE.Vector3(-1, 1, -1), new THREE.Vector3(-1, -1, 1), new THREE.Vector3(-1, -1, -1),
+  ];
+
+  const projected = new Map<string, { x: number; y: number; depth: number; world: THREE.Vector3 }>();
+  corners3D.forEach(v => {
+    const vr = v.clone().normalize().applyQuaternion(camQ);
+    projected.set(keyFrom(v.x, v.y, v.z), {
+      x: cx + vr.x * radius,
+      y: cy - vr.y * radius,
+      depth: vr.z,
+      world: v.clone(),
+    });
+  });
+
+  const faceDefs = [
+    { key: 'px', normal: new THREE.Vector3(1, 0, 0), corners: ['ppp', 'ppn', 'pnn', 'pnp'], color: 'rgba(239,68,68,0.34)' },
+    { key: 'nx', normal: new THREE.Vector3(-1, 0, 0), corners: ['npp', 'npn', 'nnn', 'nnp'], color: 'rgba(239,68,68,0.18)' },
+    { key: 'py', normal: new THREE.Vector3(0, 1, 0), corners: ['ppp', 'ppn', 'npn', 'npp'], color: 'rgba(34,197,94,0.34)' },
+    { key: 'ny', normal: new THREE.Vector3(0, -1, 0), corners: ['pnp', 'pnn', 'nnn', 'nnp'], color: 'rgba(34,197,94,0.18)' },
+    { key: 'pz', normal: new THREE.Vector3(0, 0, 1), corners: ['ppp', 'npp', 'nnp', 'pnp'], color: 'rgba(59,130,246,0.34)' },
+    { key: 'nz', normal: new THREE.Vector3(0, 0, -1), corners: ['ppn', 'npn', 'nnn', 'pnn'], color: 'rgba(59,130,246,0.18)' },
+  ].map(f => {
+    const points = f.corners.map(k => projected.get(k)!);
+    const depth = points.reduce((sum, p) => sum + p.depth, 0) / points.length;
+    return { ...f, points, depth };
+  }).sort((a, b) => a.depth - b.depth);
+
+  const edgeDefs: Array<[string, string]> = [
+    ['ppp', 'ppn'], ['ppp', 'pnp'], ['ppp', 'npp'], ['ppn', 'pnn'],
+    ['ppn', 'npn'], ['pnp', 'pnn'], ['pnp', 'nnp'], ['pnn', 'nnn'],
+    ['npp', 'npn'], ['npp', 'nnp'], ['npn', 'nnn'], ['nnp', 'nnn'],
+  ];
+
+  const faceLabelByKey: Record<string, string> = {
+    px: 'Snap Right Face',
+    nx: 'Snap Left Face',
+    py: 'Snap Top Face',
+    ny: 'Snap Bottom Face',
+    pz: 'Snap Front Face',
+    nz: 'Snap Back Face',
+  };
+  const faceShortLabelByKey: Record<string, string> = {
+    px: 'RIGHT',
+    nx: 'LEFT',
+    py: 'TOP',
+    ny: 'BOTTOM',
+    pz: 'FRONT',
+    nz: 'BACK',
+  };
+
+  const edgeItems = edgeDefs.map(([a, b], i) => {
+    const pa = projected.get(a)!;
+    const pb = projected.get(b)!;
+    const aa = parseKey(a);
+    const bb = parseKey(b);
+    const snapVec = new THREE.Vector3(
+      aa.x + bb.x,
+      aa.y + bb.y,
+      aa.z + bb.z,
+    ).normalize();
+    const key = `${a}-${b}`;
+    return { key, i, pa, pb, snapVec };
+  });
+
+  // Draw a tiny XYZ triad from the front-most cube corner so orientation
+  // remains readable even when face labels are partially occluded.
+  const frontCorner = Array.from(projected.entries()).reduce((best, cur) =>
+    !best || cur[1].depth > best[1].depth ? cur : best
+  , null as [string, { x: number; y: number; depth: number; world: THREE.Vector3 }] | null);
+
+  const axisLine = (cornerKey: string, axis: 'x' | 'y' | 'z') => {
+    const keyChars = cornerKey.split('') as Array<'p' | 'n'>;
+    const idx = axis === 'x' ? 0 : axis === 'y' ? 1 : 2;
+    keyChars[idx] = keyChars[idx] === 'p' ? 'n' : 'p';
+    const targetKey = keyChars.join('');
+    const from = projected.get(cornerKey);
+    const to = projected.get(targetKey);
+    if (!from || !to) return null;
+    const t = 0.34;
+    return {
+      x1: from.x,
+      y1: from.y,
+      x2: from.x + (to.x - from.x) * t,
+      y2: from.y + (to.y - from.y) * t,
+    };
+  };
+
+  const cornerItems = Array.from(projected.entries()).map(([key, p]) => {
+    const s = parseKey(key);
+    const cornerVec = new THREE.Vector3(s.x, s.y, s.z).normalize();
+    return { key, p, cornerVec };
+  });
+
+  return (
+    <svg width={size} height={size} className="select-none">
+      <defs>
+        <radialGradient id="gizmoBg" cx="35%" cy="30%">
+          <stop offset="0%" stopColor="rgba(30,41,59,0.95)" />
+          <stop offset="100%" stopColor="rgba(2,6,23,0.92)" />
+        </radialGradient>
+      </defs>
+
+      <circle cx={cx} cy={cy} r={52.5} fill="url(#gizmoBg)" stroke="rgba(148,163,184,0.25)" strokeWidth="1" />
+
+      {faceDefs.map(face => (
+        <polygon
+          key={face.key}
+          points={face.points.map(p => `${p.x},${p.y}`).join(' ')}
+          fill={face.color}
+          stroke="rgba(148,163,184,0.28)"
+          strokeWidth="0.9"
+          style={{ pointerEvents: 'none' }}
+        />
+      ))}
+
+      {frontCorner && (() => {
+        const xAxis = axisLine(frontCorner[0], 'x');
+        const yAxis = axisLine(frontCorner[0], 'y');
+        const zAxis = axisLine(frontCorner[0], 'z');
+        return (
+          <g style={{ pointerEvents: 'none' }}>
+            {xAxis && <line x1={xAxis.x1} y1={xAxis.y1} x2={xAxis.x2} y2={xAxis.y2} stroke="rgba(239,68,68,0.95)" strokeWidth="1.8" strokeLinecap="round" />}
+            {yAxis && <line x1={yAxis.x1} y1={yAxis.y1} x2={yAxis.x2} y2={yAxis.y2} stroke="rgba(34,197,94,0.95)" strokeWidth="1.8" strokeLinecap="round" />}
+            {zAxis && <line x1={zAxis.x1} y1={zAxis.y1} x2={zAxis.x2} y2={zAxis.y2} stroke="rgba(59,130,246,0.95)" strokeWidth="1.8" strokeLinecap="round" />}
+          </g>
+        );
+      })()}
+
+      {faceDefs.filter(face => face.depth > -0.15).map(face => {
+        const cxFace = face.points.reduce((sum, p) => sum + p.x, 0) / face.points.length;
+        const cyFace = face.points.reduce((sum, p) => sum + p.y, 0) / face.points.length;
+        const textSize = face.key === 'py' ? 8.2 : 7.6;
+        return (
+          <text
+            key={`label-${face.key}`}
+            x={cxFace}
+            y={cyFace + 2.5}
+            textAnchor="middle"
+            fill={faceLabelColor}
+            stroke="rgba(2,6,23,0.95)"
+            strokeWidth="0.8"
+            paintOrder="stroke"
+            fontSize={textSize}
+            fontWeight="800"
+            letterSpacing="0.55"
+            style={{ pointerEvents: 'none', userSelect: 'none' }}
+          >
+            {faceShortLabelByKey[face.key]}
+          </text>
+        );
+      })}
+
+      {/* Base cube edge wireframe (subtle, always visible) */}
+      {edgeItems.map(({ key, pa, pb }) => (
+        <line
+          key={`edge-base-${key}`}
+          x1={pa.x}
+          y1={pa.y}
+          x2={pb.x}
+          y2={pb.y}
+          stroke="rgba(203,213,225,0.35)"
+          strokeWidth="0.95"
+        />
+      ))}
+
+      {/* Hover highlight overlays */}
+      {hovered?.kind === 'face' && (() => {
+        const face = faceDefs.find(f => f.key === hovered.key);
+        if (!face) return null;
+        return (
+          <polygon
+            points={face.points.map(p => `${p.x},${p.y}`).join(' ')}
+            fill="rgba(248,250,252,0.08)"
+            stroke="rgba(248,250,252,0.9)"
+            strokeWidth="1.5"
+          />
+        );
+      })()}
+      {hovered?.kind === 'edge' && (() => {
+        const edge = edgeItems.find(e => e.key === hovered.key);
+        if (!edge) return null;
+        return (
+          <line
+            x1={edge.pa.x}
+            y1={edge.pa.y}
+            x2={edge.pb.x}
+            y2={edge.pb.y}
+            stroke="rgba(248,250,252,0.95)"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+          />
+        );
+      })()}
+      {hovered?.kind === 'corner' && (() => {
+        const corner = cornerItems.find(c => c.key === hovered.key);
+        if (!corner) return null;
+        return (
+          <circle
+            cx={corner.p.x}
+            cy={corner.p.y}
+            r="5.1"
+            fill="none"
+            stroke="rgba(248,250,252,0.95)"
+            strokeWidth="1.6"
+          />
+        );
+      })()}
+
+      {/* Face hit zones */}
+      {faceDefs.map(face => (
+        <polygon
+          key={`hot-${face.key}`}
+          points={face.points.map(p => `${p.x},${p.y}`).join(' ')}
+          fill="transparent"
+          className="cursor-pointer"
+          data-gizmo-interactive="true"
+          onMouseEnter={() => setHovered({ kind: 'face', key: face.key, label: faceLabelByKey[face.key] || 'Face' })}
+          onMouseLeave={() => setHovered(null)}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSnapDirection?.(face.normal.clone());
+          }}
+        />
+      ))}
+
+      {/* Edge hit zones (invisible until hovered) */}
+      {edgeItems.map(({ key, pa, pb, snapVec }) => (
+        <line
+          key={`edge-hit-${key}`}
+          x1={pa.x}
+          y1={pa.y}
+          x2={pb.x}
+          y2={pb.y}
+          stroke="rgba(0,0,0,0)"
+          strokeWidth="8"
+          className="cursor-pointer"
+          data-gizmo-interactive="true"
+          onMouseEnter={() => setHovered({ kind: 'edge', key, label: 'Snap Edge View' })}
+          onMouseLeave={() => setHovered(null)}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSnapDirection?.(snapVec.clone());
+          }}
+        />
+      ))}
+
+      {/* Corner hit zones (invisible until hovered) */}
+      {cornerItems.map(({ key, p, cornerVec }) => (
+        <circle
+          key={`corner-hit-${key}`}
+          cx={p.x}
+          cy={p.y}
+          r="6.4"
+          fill="rgba(0,0,0,0)"
+          className="cursor-pointer"
+          data-gizmo-interactive="true"
+          onMouseEnter={() => setHovered({ kind: 'corner', key, label: 'Snap Corner View' })}
+          onMouseLeave={() => setHovered(null)}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSnapDirection?.(cornerVec.clone());
+          }}
+        />
+      ))}
+
+      {/* Curved step-rotation arrows around the cube */}
+      <g>
+        <g
+          className="cursor-pointer"
+          data-gizmo-interactive="true"
+          data-gizmo-drag-disabled="true"
+          onMouseEnter={() => setHovered({ kind: 'arrow', key: 'left', label: 'Rotate Left' })}
+          onMouseLeave={() => setHovered(null)}
+          onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onClick={(e) => { e.stopPropagation(); onRotateStep?.('left'); }}
+        >
+          <circle cx="10" cy={cy} r="8" fill="rgba(15,23,42,0.88)" stroke="rgba(148,163,184,0.45)" strokeWidth="0.9" />
+          <path d={`M 13.2 ${cy - 3.8} A 4.8 4.8 0 1 0 13.2 ${cy + 3.8}`} fill="none" stroke="rgba(226,232,240,0.92)" strokeWidth="1.2" strokeLinecap="round" />
+          <path d={`M 10.5 ${cy - 2.7} L 12.9 ${cy - 3.4} L 12.3 ${cy - 1.0} Z`} fill="rgba(226,232,240,0.92)" />
+        </g>
+
+        <g
+          className="cursor-pointer"
+          data-gizmo-interactive="true"
+          data-gizmo-drag-disabled="true"
+          onMouseEnter={() => setHovered({ kind: 'arrow', key: 'right', label: 'Rotate Right' })}
+          onMouseLeave={() => setHovered(null)}
+          onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onClick={(e) => { e.stopPropagation(); onRotateStep?.('right'); }}
+        >
+          <circle cx={size - 10} cy={cy} r="8" fill="rgba(15,23,42,0.88)" stroke="rgba(148,163,184,0.45)" strokeWidth="0.9" />
+          <path d={`M ${size - 13.2} ${cy + 3.8} A 4.8 4.8 0 1 0 ${size - 13.2} ${cy - 3.8}`} fill="none" stroke="rgba(226,232,240,0.92)" strokeWidth="1.2" strokeLinecap="round" />
+          <path d={`M ${size - 10.5} ${cy + 2.7} L ${size - 12.9} ${cy + 3.4} L ${size - 12.3} ${cy + 1.0} Z`} fill="rgba(226,232,240,0.92)" />
+        </g>
+
+        <g
+          className="cursor-pointer"
+          data-gizmo-interactive="true"
+          data-gizmo-drag-disabled="true"
+          onMouseEnter={() => setHovered({ kind: 'arrow', key: 'up', label: 'Rotate Up' })}
+          onMouseLeave={() => setHovered(null)}
+          onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onClick={(e) => { e.stopPropagation(); onRotateStep?.('up'); }}
+        >
+          <circle cx={cx} cy="10" r="8" fill="rgba(15,23,42,0.88)" stroke="rgba(148,163,184,0.45)" strokeWidth="0.9" />
+          <path d={`M ${cx - 3.8} 13.2 A 4.8 4.8 0 1 1 ${cx + 3.8} 13.2`} fill="none" stroke="rgba(226,232,240,0.92)" strokeWidth="1.2" strokeLinecap="round" />
+          <path d={`M ${cx - 2.7} 10.5 L ${cx - 3.4} 12.9 L ${cx - 1.0} 12.3 Z`} fill="rgba(226,232,240,0.92)" />
+        </g>
+
+        <g
+          className="cursor-pointer"
+          data-gizmo-interactive="true"
+          data-gizmo-drag-disabled="true"
+          onMouseEnter={() => setHovered({ kind: 'arrow', key: 'down', label: 'Rotate Down' })}
+          onMouseLeave={() => setHovered(null)}
+          onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onClick={(e) => { e.stopPropagation(); onRotateStep?.('down'); }}
+        >
+          <circle cx={cx} cy={size - 10} r="8" fill="rgba(15,23,42,0.88)" stroke="rgba(148,163,184,0.45)" strokeWidth="0.9" />
+          <path d={`M ${cx + 3.8} ${size - 13.2} A 4.8 4.8 0 1 1 ${cx - 3.8} ${size - 13.2}`} fill="none" stroke="rgba(226,232,240,0.92)" strokeWidth="1.2" strokeLinecap="round" />
+          <path d={`M ${cx + 2.7} ${size - 10.5} L ${cx + 3.4} ${size - 12.9} L ${cx + 1.0} ${size - 12.3} Z`} fill="rgba(226,232,240,0.92)" />
+        </g>
+      </g>
+
+      {hovered?.label && (
+        <g>
+          <rect x={cx - 36} y={size - 20} width="72" height="14" rx="3" fill="rgba(2,6,23,0.95)" stroke="rgba(148,163,184,0.45)" strokeWidth="0.8" />
+          <text x={cx} y={size - 10.2} textAnchor="middle" fill="rgba(226,232,240,0.98)" fontSize="7.8" fontWeight="800">{hovered.label}</text>
+        </g>
+      )}
+    </svg>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main component
+// ─────────────────────────────────────────────────────────────────────────────
+interface Snowflake3DProps {
+  config: SnowflakeConfig;
+  generateMesh: (
+    onProgress: (p: number) => void,
+    overrideQuality?: DesignQuality,
+    overrideConfig?: SnowflakeConfig,
+    generationMode?: 'preview' | 'export' | 'validation' | 'refresh'
+  ) => Promise<THREE.Group>;
+  color: string;
+  undo?: () => void;
+  redo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  initialDiameter?: number;
+  shortcuts?: ShortcutConfig;
+  backgroundColor?: string;
+  isVisible: boolean;
+  identifyBodiesMode?: boolean;
+  onFloatingBodiesChange?: (floatingByLayer: Record<string, boolean>) => void;
+  onDisconnectedPiecesDetected?: () => void;
+  onProcessingChange?: (isProcessing: boolean) => void;
+  emergencyStopSeq?: number;
+  forceRefreshToken?: number;
+  onForceRefresh: () => void;
+  activeLayerId?: string;
+  syncAllLayers?: boolean;
+  highlightActivePlaneOnly?: boolean;
+}
+
+// Worker code at module scope — array of lines avoids Babel TSX template-literal parsing.
+const BODIES_WORKER_CODE = [
+  "",
+  "// ------ Fast connected-bodies analysis ---------------------------------------------------------------------------------------------------------------------------",
+  "// Approach:",
+  "//  1. Deduplicate vertices at tight tolerance (0.01mm) to collapse only",
+  "//     true duplicates from ExtrudeGeometry, reducing 600k --- ~50k nodes.",
+  "//  2. BFS on deduplicated triangle adjacency --- raw topological islands.",
+  "//     Flat extruded shapes that overlap in XY but share no vertices will",
+  "//     remain separate islands here --- that's expected.",
+  "//  3. Per-island: compute XY centroid and AABB.",
+  "//  4. Union-find merge: for each island A, test if its centroid lands inside",
+  "//     any other island B's triangles (AABB pre-filter, then point-in-tri).",
+  "//     Also test B's centroid against A --- bidirectional catches asymmetric overlaps.",
+  "//  5. Guard: if rawCount > MAX_ISLANDS after BFS, skip overlap phase entirely",
+  "//     (geometry is pathologically fragmented; report each island separately).",
+  "//  6. Remap and colorize.",
+  "",
+  "function ptInTri2D(px,py,ax,ay,bx,by,cx,cy){",
+  "  const d1=(px-bx)*(ay-by)-(ax-bx)*(py-by);",
+  "  const d2=(px-cx)*(by-cy)-(bx-cx)*(py-cy);",
+  "  const d3=(px-ax)*(cy-ay)-(cx-ax)*(py-ay);",
+  "  return !((d1<0||d2<0||d3<0)&&(d1>0||d2>0||d3>0));",
+  "}",
+  "",
+  "self.onmessage = function(e) {",
+  "  const {positions, indices, designColor} = e.data;",
+  "  try {",
+  "    const origCount = positions.length / 3;",
+  "    const triCount  = indices ? indices.length / 3 : origCount / 3;",
+  "    const vi = (t,k) => indices ? indices[t*3+k] : t*3+k;",
+  "",
+  "    // ------------ Step 1: tight vertex dedup (0.001mm) ----------------------------------------------------------------------------------",
+  "    // Only collapse true duplicates ------ keeps distinct outline vertices separate.",
+  "    // Use string keys to avoid integer overflow in hash arithmetic.",
+  "    const DEDUP_CELL = 0.001;",
+  "    const posToCanon = new Int32Array(origCount);",
+  "    const hashMap = new Map();",
+  "    let canonCount = 0;",
+  "    for (let i = 0; i < origCount; i++) {",
+  "      const x=positions[i*3], y=positions[i*3+1], z=positions[i*3+2];",
+  "      const key = Math.round(x/DEDUP_CELL)+','",
+  "                + Math.round(y/DEDUP_CELL)+','",
+  "                + Math.round(z/DEDUP_CELL);",
+  "      let c = hashMap.get(key);",
+  "      if (c === undefined) { c = canonCount++; hashMap.set(key, c); }",
+  "      posToCanon[i] = c;",
+  "    }",
+  "",
+  "    // ------------ Step 2: BFS on deduplicated triangle adjacency ------------------------------------------------------------------------------------------------------------------------------------------------",
+  "    const adjHead = new Int32Array(canonCount).fill(-1);",
+  "    const adjNext = []; const adjDest = [];",
+  "    const addEdge = (a,b) => {",
+  "      adjNext.push(adjHead[a]); adjDest.push(b); adjHead[a]=adjNext.length-1;",
+  "      adjNext.push(adjHead[b]); adjDest.push(a); adjHead[b]=adjNext.length-1;",
+  "    };",
+  "    for (let t = 0; t < triCount; t++) {",
+  "      const a=posToCanon[vi(t,0)], b=posToCanon[vi(t,1)], c=posToCanon[vi(t,2)];",
+  "      if(a===b||b===c||a===c) continue;",
+  "      addEdge(a,b); addEdge(b,c); addEdge(a,c);",
+  "    }",
+  "    const canonBody = new Int32Array(canonCount).fill(-1);",
+  "    let rawCount = 0;",
+  "    const queue = new Int32Array(canonCount);",
+  "    for (let s = 0; s < canonCount; s++) {",
+  "      if (canonBody[s] !== -1) continue;",
+  "      let head=0,tail=0; queue[tail++]=s; canonBody[s]=rawCount;",
+  "      while(head<tail){",
+  "        const cur=queue[head++];",
+  "        for(let e=adjHead[cur];e!==-1;e=adjNext[e]){",
+  "          const nb=adjDest[e];",
+  "          if(canonBody[nb]===-1){canonBody[nb]=rawCount;queue[tail++]=nb;}",
+  "        }",
+  "      }",
+  "      rawCount++;",
+  "    }",
+  "    const origBody = new Int32Array(origCount);",
+  "    for (let i = 0; i < origCount; i++) origBody[i] = canonBody[posToCanon[i]] ?? 0;",
+  "",
+  "    // Guard: too many raw islands means something pathological ------ skip overlap phase",
+  "    const MAX_ISLANDS = 2000;",
+  "    console.log('[Worker] origCount=' + origCount + ' canonCount=' + canonCount + ' rawCount=' + rawCount);",
+  "    if (rawCount <= 1 || rawCount > MAX_ISLANDS) {",
+  "      const colorArr = buildBodyColors(origBody, Math.min(rawCount,MAX_ISLANDS), designColor, origCount);",
+  "      self.postMessage({success:true,bodyPerVertex:origBody,bodyCount:rawCount,colorArr},",
+  "        [origBody.buffer,colorArr.buffer]); return;",
+  "    }",
+  "",
+  "    // ------------ Step 3: geometric overlap/touch merge in projected 2D ------",
+  "    // Shared edges are too strict for extruded text meshes; two glyph parts can",
+  "    // physically touch/overlap without reusing identical triangle edges.",
+  "    // Use a per-mesh local 2D basis (PCA) so the same base-plane method",
+  "    // works consistently for cross/tilt without world-axis collapse.",
+  "",
+  "    let cx=0, cy=0, cz=0;",
+  "    for(let i=0;i<origCount;i++){",
+  "      cx += positions[i*3]; cy += positions[i*3+1]; cz += positions[i*3+2];",
+  "    }",
+  "    cx /= Math.max(1, origCount); cy /= Math.max(1, origCount); cz /= Math.max(1, origCount);",
+  "",
+  "    let c00=0,c01=0,c02=0,c11=0,c12=0,c22=0;",
+  "    for(let i=0;i<origCount;i++){",
+  "      const x=positions[i*3]-cx, y=positions[i*3+1]-cy, z=positions[i*3+2]-cz;",
+  "      c00 += x*x; c01 += x*y; c02 += x*z;",
+  "      c11 += y*y; c12 += y*z; c22 += z*z;",
+  "    }",
+  "",
+  "    const matMul = (vx,vy,vz)=>[",
+  "      c00*vx + c01*vy + c02*vz,",
+  "      c01*vx + c11*vy + c12*vz,",
+  "      c02*vx + c12*vy + c22*vz",
+  "    ];",
+  "    const norm3 = (x,y,z)=>Math.hypot(x,y,z);",
+  "",
+  "    const powerIter = (sx,sy,sz,iters=12)=>{",
+  "      let vx=sx, vy=sy, vz=sz;",
+  "      let n=norm3(vx,vy,vz);",
+  "      if(n<1e-12){vx=1;vy=0;vz=0;n=1;}",
+  "      vx/=n; vy/=n; vz/=n;",
+  "      for(let k=0;k<iters;k++){",
+  "        const mv = matMul(vx,vy,vz);",
+  "        n = norm3(mv[0],mv[1],mv[2]);",
+  "        if(n<1e-12) break;",
+  "        vx = mv[0]/n; vy = mv[1]/n; vz = mv[2]/n;",
+  "      }",
+  "      return [vx,vy,vz];",
+  "    };",
+  "",
+  "    const v0 = powerIter(1,0,0);",
+  "    const Av0 = matMul(v0[0],v0[1],v0[2]);",
+  "    const l0 = v0[0]*Av0[0] + v0[1]*Av0[1] + v0[2]*Av0[2];",
+  "",
+  "    const d00 = c00 - l0*v0[0]*v0[0];",
+  "    const d01 = c01 - l0*v0[0]*v0[1];",
+  "    const d02 = c02 - l0*v0[0]*v0[2];",
+  "    const d11 = c11 - l0*v0[1]*v0[1];",
+  "    const d12 = c12 - l0*v0[1]*v0[2];",
+  "    const d22 = c22 - l0*v0[2]*v0[2];",
+  "",
+  "    const matMulDef = (vx,vy,vz)=>[",
+  "      d00*vx + d01*vy + d02*vz,",
+  "      d01*vx + d11*vy + d12*vz,",
+  "      d02*vx + d12*vy + d22*vz",
+  "    ];",
+  "",
+  "    let vx=0,vy=1,vz=0;",
+  "    let n=norm3(vx,vy,vz); vx/=n; vy/=n; vz/=n;",
+  "    for(let k=0;k<12;k++){",
+  "      const mv = matMulDef(vx,vy,vz);",
+  "      n = norm3(mv[0],mv[1],mv[2]);",
+  "      if(n<1e-12) break;",
+  "      vx = mv[0]/n; vy = mv[1]/n; vz = mv[2]/n;",
+  "    }",
+  "",
+  "    // Fallback for near-degenerate cases",
+  "    const dot01 = v0[0]*vx + v0[1]*vy + v0[2]*vz;",
+  "    vx -= dot01*v0[0]; vy -= dot01*v0[1]; vz -= dot01*v0[2];",
+  "    n = norm3(vx,vy,vz);",
+  "    if(n<1e-8){",
+  "      const ax = Math.abs(v0[0]), ay = Math.abs(v0[1]), az = Math.abs(v0[2]);",
+  "      if(ax <= ay && ax <= az){ vx=0; vy=-v0[2]; vz=v0[1]; }",
+  "      else if(ay <= ax && ay <= az){ vx=-v0[2]; vy=0; vz=v0[0]; }",
+  "      else { vx=-v0[1]; vy=v0[0]; vz=0; }",
+  "      n = norm3(vx,vy,vz);",
+  "    }",
+  "    vx/=Math.max(n,1e-12); vy/=Math.max(n,1e-12); vz/=Math.max(n,1e-12);",
+  "",
+  "    const getU = (idx) => {",
+  "      const x=positions[idx*3]-cx, y=positions[idx*3+1]-cy, z=positions[idx*3+2]-cz;",
+  "      return x*v0[0] + y*v0[1] + z*v0[2];",
+  "    };",
+  "    const getV = (idx) => {",
+  "      const x=positions[idx*3]-cx, y=positions[idx*3+1]-cy, z=positions[idx*3+2]-cz;",
+  "      return x*vx + y*vy + z*vz;",
+  "    };",
+  "",
+  "    // Build per-body triangle projected buffers and AABBs",
+  "    const bodyTris = Array.from({length:rawCount},()=>[]);",
+  "    const bodyAabb = Array.from({length:rawCount},()=>({minU:Infinity,minV:Infinity,maxU:-Infinity,maxV:-Infinity}));",
+  "    for(let t=0;t<triCount;t++){",
+  "      const oa=vi(t,0), ob=vi(t,1), oc=vi(t,2);",
+  "      const a=posToCanon[oa], b_v=posToCanon[ob], c=posToCanon[oc];",
+  "      if(a===b_v || b_v===c || a===c) continue;",
+  "      const body = origBody[oa];",
+  "      const au=getU(oa), av=getV(oa);",
+  "      const bu=getU(ob), bv=getV(ob);",
+  "      const cu=getU(oc), cv=getV(oc);",
+  "      bodyTris[body].push(au,av,bu,bv,cu,cv);",
+  "      const bb = bodyAabb[body];",
+  "      if(au<bb.minU) bb.minU=au; if(av<bb.minV) bb.minV=av;",
+  "      if(bu<bb.minU) bb.minU=bu; if(bv<bb.minV) bb.minV=bv;",
+  "      if(cu<bb.minU) bb.minU=cu; if(cv<bb.minV) bb.minV=cv;",
+  "      if(au>bb.maxU) bb.maxU=au; if(av>bb.maxV) bb.maxV=av;",
+  "      if(bu>bb.maxU) bb.maxU=bu; if(bv>bb.maxV) bb.maxV=bv;",
+  "      if(cu>bb.maxU) bb.maxU=cu; if(cv>bb.maxV) bb.maxV=cv;",
+  "    }",
+  "",
+  "    const pointInBody = (pu,pv,body)=>{",
+  "      const bb = bodyAabb[body];",
+  "      const eps = 1e-4;",
+  "      if(pu < bb.minU - eps || pu > bb.maxU + eps || pv < bb.minV - eps || pv > bb.maxV + eps) return false;",
+  "      const tris = bodyTris[body];",
+  "      for(let i=0;i<tris.length;i+=6){",
+  "        if(ptInTri2D(pu,pv,tris[i],tris[i+1],tris[i+2],tris[i+3],tris[i+4],tris[i+5])) return true;",
+  "      }",
+  "      return false;",
+  "    };",
+  "",
+  "    // ------------ Step 4: Union-Find merge on geometric contact ------",
+  "    const parent=Int32Array.from({length:rawCount},(_,i)=>i);",
+  "    const find=x=>{while(parent[x]!==x){parent[x]=parent[parent[x]];x=parent[x];}return x;};",
+  "    const union=(a,b)=>{a=find(a);b=find(b);if(a!==b)parent[a]=b;};",
+  "",
+  "    const SAMPLE_STRIDE = 4;",
+  "    for(let a=0;a<rawCount;a++){",
+  "      const aTris = bodyTris[a];",
+  "      if(aTris.length===0) continue;",
+  "      for(let b=a+1;b<rawCount;b++){",
+  "        if(find(a)===find(b)) continue;",
+  "        const bbA = bodyAabb[a], bbB = bodyAabb[b];",
+  "        const overlap = !(bbA.maxU < bbB.minU || bbB.maxU < bbA.minU || bbA.maxV < bbB.minV || bbB.maxV < bbA.minV);",
+  "        if(!overlap) continue;",
+  "",
+  "        let touching = false;",
+  "",
+  "        for(let i=0;i<aTris.length;i+=6*SAMPLE_STRIDE){",
+  "          const pu=(aTris[i]+aTris[i+2]+aTris[i+4])/3;",
+  "          const pv=(aTris[i+1]+aTris[i+3]+aTris[i+5])/3;",
+  "          if(pointInBody(pu,pv,b)){ touching=true; break; }",
+  "        }",
+  "",
+  "        if(!touching){",
+  "          const bTris = bodyTris[b];",
+  "          for(let i=0;i<bTris.length;i+=6*SAMPLE_STRIDE){",
+  "            const pu=(bTris[i]+bTris[i+2]+bTris[i+4])/3;",
+  "            const pv=(bTris[i+1]+bTris[i+3]+bTris[i+5])/3;",
+  "            if(pointInBody(pu,pv,a)){ touching=true; break; }",
+  "          }",
+  "        }",
+  "",
+  "        if(touching) union(a,b);",
+  "      }",
+  "    }",
+  "",
+  "    // ------------ Step 5: remap ------",
+  "    const rootToId=new Map(); let bodyCount=0;",
+  "    const remap=new Int32Array(rawCount);",
+  "    for(let b=0;b<rawCount;b++){",
+  "      const r=find(b);",
+  "      if(!rootToId.has(r))rootToId.set(r,bodyCount++);",
+  "      remap[b]=rootToId.get(r);",
+  "    }",
+  "    const bodyPerVertex=new Int32Array(origCount);",
+  "    for(let i=0;i<origCount;i++) bodyPerVertex[i]=remap[origBody[i]]??0;",
+  "",
+  "    const colorArr=buildBodyColors(bodyPerVertex,bodyCount,designColor,origCount);",
+  "    console.log('[Worker] Final bodyCount=' + bodyCount + ' after merge');",
+  "    self.postMessage({success:true,bodyPerVertex,bodyCount,colorArr},",
+  "      [bodyPerVertex.buffer,colorArr.buffer]);",
+  "",
+  "  } catch(err) {",
+  "    self.postMessage({success:false,error:String(err)});",
+  "  }",
+  "};",
+  "",
+  "function buildBodyColors(bpv,bodyCount,designColor,origCount){",
+  "  const FLOAT_COLOR='#f97316';",
+  "  const hexToRgb=h=>{const n=parseInt(h.replace('#',''),16);",
+  "    return[(n>>16&255)/255,(n>>8&255)/255,(n&255)/255];};",
+  "  const sizes=new Int32Array(bodyCount);",
+  "  for(let i=0;i<origCount;i++) if(bpv[i]>=0&&bpv[i]<bodyCount) sizes[bpv[i]]++;",
+  "  let mainBody=0;",
+  "  for(let b=1;b<bodyCount;b++) if(sizes[b]>sizes[mainBody]) mainBody=b;",
+  "  const colors=[];",
+  "  const floatRgb=hexToRgb(FLOAT_COLOR);",
+  "  for(let b=0;b<bodyCount;b++)",
+  "    colors.push(b===mainBody?hexToRgb(designColor):floatRgb);",
+  "  const arr=new Float32Array(origCount*3);",
+  "  for(let i=0;i<origCount;i++){",
+  "    const idx=bpv[i]>=0&&bpv[i]<bodyCount?bpv[i]:0;",
+  "    const c=colors[idx];",
+  "    arr[i*3]=c[0];arr[i*3+1]=c[1];arr[i*3+2]=c[2];",
+  "  }",
+  "  return arr;",
+  "}"
+].join("\n");
+
+
+
+const Snowflake3D: React.FC<Snowflake3DProps> = ({
+  config, generateMesh, color,
+  undo, redo, canUndo, canRedo,
+  initialDiameter, isVisible,
+  identifyBodiesMode = false,
+  onFloatingBodiesChange,
+  onDisconnectedPiecesDetected,
+  onProcessingChange,
+  emergencyStopSeq = 0,
+  forceRefreshToken = 0,
+  onForceRefresh,
+  activeLayerId,
+  syncAllLayers = true,
+  highlightActivePlaneOnly = false,
+  backgroundColor = '#020617',
+}) => {
+  const generateMeshRef = useRef(generateMesh);
+  const containerRef  = useRef<HTMLDivElement>(null);
+  const rendererRef   = useRef<THREE.WebGLRenderer | null>(null);
+  const sceneRef      = useRef<THREE.Scene | null>(null);
+  const cameraRef     = useRef<THREE.PerspectiveCamera | null>(null);
+  const controlsRef   = useRef<OrbitControls | null>(null);
+  const meshGroupRef  = useRef<THREE.Group | null>(null);
+  const miniHostRef   = useRef<HTMLDivElement>(null);
+  const miniRendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const miniSceneRef  = useRef<THREE.Scene | null>(null);
+  const miniCameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const miniModelGroupRef = useRef<THREE.Group | null>(null);
+  const miniAnimRef = useRef<number | null>(null);
+  const isVisibleRef  = useRef(isVisible);
+  const frameRef      = useRef(0);
+  const snapAnimRef   = useRef<number | null>(null);
+  const gizmoDragRef  = useRef<{
+    active: boolean;
+    engaged: boolean;
+    moved: boolean;
+    startedOnInteractive: boolean;
+    pointerId: number | null;
+    startX: number;
+    startY: number;
+    x: number;
+    y: number;
+  }>({
+    active: false,
+    engaged: false,
+    moved: false,
+    startedOnInteractive: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    x: 0,
+    y: 0,
+  });
+  const gizmoLastDragAtRef = useRef(0);
+
+  const [loading, setLoading]   = useState(false);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+  const [camQ, setCamQ]         = useState<THREE.Quaternion | null>(null);
+  const [isGizmoDragging, setIsGizmoDragging] = useState(false);
+  const [conflictCount, setConflictCount] = useState(0);
+  const [showSlotDebug, setShowSlotDebug] = useState(true);
+  const [isAnalyzingBodies, setIsAnalyzingBodies] = useState(false);
+  const [slotDisconnectedLayers, setSlotDisconnectedLayers] = useState<string[]>([]);
+  const [slotAnalysisError, setSlotAnalysisError] = useState<string | null>(null);
+  const [slotWarningDismissed, setSlotWarningDismissed] = useState(false);
+  const prevForceRefreshTokenRef = useRef(forceRefreshToken);
+  const hardStopTokenRef = useRef(0);
+  const bodiesWorkersRef = useRef(new Map<Worker, string>());
+  const bodiesAnalysisTokenRef = useRef(0);
+  const completedConfigKeyRef = useRef<string | null>(null);
+  const runBodiesAnalysisRef = useRef<() => void>(() => {});
+  // Bump this counter to trigger applyAppearance after worker completes
+  // const [bodyResultKey, setBodyResultKey] = useState(0);
+
+  // Ref to the in-flight inline worker so we can terminate it on unmount / re-run
+  // const bodiesWorkerRef = useRef<Worker | null>(null);
+
+  // ── Per-layer visibility / transparency state ─────────────────────────────
+  // Initialise once from config.layers.
+  const [planeVisibility, setPlaneVisibility] = useState<Record<string, boolean>>(() => {
+    const m: Record<string, boolean> = {};
+    config.layers.forEach(l => { m[l.id] = l.enabled; });
+    return m;
+  });
+  const [planeTransparency, setPlaneTransparency] = useState<Record<string, number>>(() => {
+    const m: Record<string, number> = {};
+    config.layers.forEach(l => { m[l.id] = 1.0; });
+    return m;
+  });
+  const [planeTransparencyEnabled, setPlaneTransparencyEnabled] = useState<Record<string, boolean>>(() => {
+    const m: Record<string, boolean> = {};
+    config.layers.forEach(l => { m[l.id] = false; });
+    return m;
+  });
+  const prevLayerEnabledRef = useRef<Record<string, boolean>>(() => {
+    const m: Record<string, boolean> = {};
+    config.layers.forEach(l => { m[l.id] = l.enabled; });
+    return m;
+  }) as React.MutableRefObject<Record<string, boolean>>;
+
+  useEffect(() => { isVisibleRef.current = isVisible; }, [isVisible]);
+
+  // Sync visibility state with config:
+  //  • New layer IDs -> default to layer.enabled
+  //  • Existing IDs that become disabled in config -> force hidden
+  //  • Existing IDs that transition disabled->enabled in config -> show
+  //  • Otherwise preserve manual viewport toggles
+  useEffect(() => {
+    setPlaneVisibility(prev => {
+      const next = { ...prev };
+      const prevEnabledMap = prevLayerEnabledRef.current;
+      config.layers.forEach(layer => {
+        if (!(layer.id in prev)) {
+          // Brand-new layer: default to its enabled state
+          next[layer.id] = layer.enabled;
+        } else {
+          const wasEnabledInConfig = prevEnabledMap[layer.id];
+          if (!layer.enabled) {
+            // Config says disabled: force off
+            next[layer.id] = false;
+          } else if (wasEnabledInConfig === false && layer.enabled === true) {
+            // Actual config transition disabled->enabled: auto-show
+            next[layer.id] = true;
+          }
+          // else: keep manual viewport state as-is
+        }
+      });
+      return next;
+    });
+    setPlaneTransparencyEnabled(prev => {
+      const next = { ...prev };
+      config.layers.forEach(l => { if (!(l.id in prev)) next[l.id] = false; });
+      return next;
+    });
+    setPlaneTransparency(prev => {
+      const next = { ...prev };
+      config.layers.forEach(l => { if (!(l.id in prev)) next[l.id] = 1.0; });
+      return next;
+    });
+
+    // Update snapshot used to detect true enabled-state transitions next run.
+    const nextEnabledMap: Record<string, boolean> = {};
+    config.layers.forEach(l => {
+      nextEnabledMap[l.id] = l.enabled;
+    });
+    prevLayerEnabledRef.current = nextEnabledMap;
+  }, [config.layers]);
+
+  const togglePlaneVisibility = (layerId: string) => {
+    setPlaneVisibility(prev => ({ ...prev, [layerId]: !prev[layerId] }));
+  };
+
+  const togglePlaneTransparency = (layerId: string) => {
+    setPlaneTransparencyEnabled(prev => {
+      const on = !prev[layerId];
+      setPlaneTransparency(t => ({ ...t, [layerId]: on ? 0.12 : 1.0 }));
+      return { ...prev, [layerId]: on };
+    });
+  };
+
+  const viewportLayers = config.layers.filter(l => l.enabled);
+  const configKey = useMemo(() => JSON.stringify(config), [config]);
+  const autoIdentifyTriggeredRef = useRef(false);
+
+  useEffect(() => {
+    autoIdentifyTriggeredRef.current = false;
+  }, [configKey]);
+
+  useEffect(() => {
+    generateMeshRef.current = generateMesh;
+  }, [generateMesh]);
+
+  const handleGizmoPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!controlsRef.current) return;
+
+    const targetEl = e.target as Element | null;
+    const startedOnInteractive = !!targetEl?.closest('[data-gizmo-interactive="true"]');
+
+    gizmoDragRef.current = {
+      active: true,
+      engaged: !startedOnInteractive,
+      moved: false,
+      startedOnInteractive,
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      x: e.clientX,
+      y: e.clientY,
+    };
+
+    if (!startedOnInteractive) {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsGizmoDragging(true);
+      (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+    }
+  }, []);
+
+  const handleGizmoPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = gizmoDragRef.current;
+    const controls = controlsRef.current;
+    if (!drag.active || drag.pointerId !== e.pointerId || !controls) return;
+
+    const dx = e.clientX - drag.x;
+    const dy = e.clientY - drag.y;
+    const threshold = 5;
+    const movedFromStart = Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY);
+
+    if (!drag.engaged) {
+      if (drag.startedOnInteractive && movedFromStart < threshold) {
+        return;
+      }
+      drag.engaged = true;
+      setIsGizmoDragging(true);
+      (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+    }
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    drag.x = e.clientX;
+    drag.y = e.clientY;
+    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) drag.moved = true;
+
+    const camera = cameraRef.current;
+    if (!camera) return;
+
+    const offset = camera.position.clone().sub(controls.target);
+    const rotateScale = 0.0085;
+
+    // Trackball-style local-axis rotation: yaw around current camera up,
+    // pitch around current camera right. This avoids world-axis locking.
+    const yaw = new THREE.Quaternion().setFromAxisAngle(
+      camera.up.clone().normalize(),
+      -dx * rotateScale,
+    );
+
+    const rightAxis = offset.clone().cross(camera.up).normalize();
+    if (rightAxis.lengthSq() > 1e-8) {
+      const pitch = new THREE.Quaternion().setFromAxisAngle(
+        rightAxis,
+        -dy * rotateScale,
+      );
+      offset.applyQuaternion(yaw).applyQuaternion(pitch);
+      camera.up.applyQuaternion(yaw).applyQuaternion(pitch).normalize();
+    } else {
+      offset.applyQuaternion(yaw);
+      camera.up.applyQuaternion(yaw).normalize();
+    }
+
+    camera.position.copy(controls.target).add(offset);
+    camera.lookAt(controls.target);
+    controls.update();
+    if (cameraRef.current) setCamQ(cameraRef.current.quaternion.clone());
+  }, []);
+
+  const handleGizmoPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = gizmoDragRef.current;
+    if (!drag.active || drag.pointerId !== e.pointerId) return;
+
+    if (drag.engaged) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    if (drag.moved) gizmoLastDragAtRef.current = performance.now();
+    gizmoDragRef.current = {
+      active: false,
+      engaged: false,
+      moved: false,
+      startedOnInteractive: false,
+      pointerId: null,
+      startX: 0,
+      startY: 0,
+      x: 0,
+      y: 0,
+    };
+    setIsGizmoDragging(false);
+
+    if ((e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) {
+      (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
+    }
+  }, []);
+
+  const snapToDirection = useCallback((direction: THREE.Vector3, up?: THREE.Vector3) => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+
+    if (snapAnimRef.current) {
+      cancelAnimationFrame(snapAnimRef.current);
+      snapAnimRef.current = null;
+    }
+
+    const startPos = camera.position.clone();
+    const target = controls.target.clone();
+    const radius = startPos.distanceTo(target);
+    const endPos = target.clone().add(direction.clone().normalize().multiplyScalar(radius));
+    const startUp = camera.up.clone();
+    const endUp = (up ? up.clone() : camera.up.clone()).normalize();
+
+    const start = performance.now();
+    const duration = 260;
+    const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
+
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const e = easeOut(t);
+
+      camera.position.lerpVectors(startPos, endPos, e);
+      camera.up.copy(startUp).lerp(endUp, e).normalize();
+      camera.lookAt(target);
+      controls.update();
+      setCamQ(camera.quaternion.clone());
+
+      if (t < 1) {
+        snapAnimRef.current = requestAnimationFrame(tick);
+      } else {
+        snapAnimRef.current = null;
+      }
+    };
+
+    snapAnimRef.current = requestAnimationFrame(tick);
+  }, []);
+
+  const handleSnapDirection = useCallback((direction: THREE.Vector3) => {
+    if (performance.now() - gizmoLastDragAtRef.current < 140) return;
+    const dir = direction.clone().normalize();
+    const yDot = Math.abs(dir.dot(new THREE.Vector3(0, 1, 0)));
+    const up = yDot > 0.95
+      ? new THREE.Vector3(0, 0, dir.y >= 0 ? -1 : 1)
+      : new THREE.Vector3(0, 1, 0);
+    snapToDirection(dir, up);
+  }, [snapToDirection]);
+
+  const handleRotateStep = useCallback((dir: 'left' | 'right' | 'up' | 'down') => {
+    if (performance.now() - gizmoLastDragAtRef.current < 140) return;
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+
+    if (snapAnimRef.current) {
+      cancelAnimationFrame(snapAnimRef.current);
+      snapAnimRef.current = null;
+    }
+
+    const startPos = camera.position.clone();
+    const target = controls.target.clone();
+    const startUp = camera.up.clone();
+    const offset = startPos.clone().sub(target);
+    const startSph = new THREE.Spherical().setFromVector3(offset);
+    const endSph = startSph.clone();
+    const step = THREE.MathUtils.degToRad(15);
+
+    if (dir === 'left') endSph.theta += step;
+    if (dir === 'right') endSph.theta -= step;
+    if (dir === 'up') endSph.phi -= step;
+    if (dir === 'down') endSph.phi += step;
+    endSph.phi = THREE.MathUtils.clamp(endSph.phi, 0.05, Math.PI - 0.05);
+
+    const endPos = target.clone().add(new THREE.Vector3().setFromSpherical(endSph));
+
+    const start = performance.now();
+    const duration = 180;
+    const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
+
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const e = easeOut(t);
+      camera.position.lerpVectors(startPos, endPos, e);
+      camera.up.copy(startUp);
+      camera.lookAt(target);
+      controls.update();
+      setCamQ(camera.quaternion.clone());
+
+      if (t < 1) {
+        snapAnimRef.current = requestAnimationFrame(tick);
+      } else {
+        snapAnimRef.current = null;
+      }
+    };
+
+    snapAnimRef.current = requestAnimationFrame(tick);
+  }, []);
+
+  const disposeMiniObject = useCallback((obj: THREE.Object3D) => {
+    obj.traverse(child => {
+      if (!(child instanceof THREE.Mesh)) return;
+      child.geometry?.dispose();
+      if (Array.isArray(child.material)) {
+        child.material.forEach(m => m.dispose());
+      } else {
+        child.material?.dispose();
+      }
+    });
+  }, []);
+
+  const syncMiniModel = useCallback(() => {
+    const miniGroup = miniModelGroupRef.current;
+    const source = meshGroupRef.current;
+    if (!miniGroup) return;
+
+    while (miniGroup.children.length) {
+      const child = miniGroup.children[0];
+      miniGroup.remove(child);
+      disposeMiniObject(child);
+    }
+    if (!source) return;
+
+    const clone = source.clone(true);
+    clone.traverse(child => {
+      if (!(child instanceof THREE.Mesh)) return;
+      child.geometry = child.geometry.clone();
+      const fixedMiniMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+      if (Array.isArray(child.material)) {
+        child.material.forEach(m => m.dispose());
+      } else {
+        child.material.dispose();
+      }
+      child.material = fixedMiniMat;
+      child.castShadow = false;
+      child.receiveShadow = false;
+    });
+
+    clone.updateMatrixWorld(true);
+
+    const box = new THREE.Box3().setFromObject(clone);
+    if (!box.isEmpty()) {
+      const sphere = box.getBoundingSphere(new THREE.Sphere());
+      const safeRadius = Math.max(sphere.radius, 1e-6);
+      const targetRadius = 29.296875;
+      const scale = targetRadius / safeRadius;
+
+      clone.position.copy(sphere.center).multiplyScalar(-1);
+      clone.scale.setScalar(scale);
+    }
+
+    miniGroup.add(clone);
+  }, [disposeMiniObject]);
+
+  useEffect(() => {
+    const host = miniHostRef.current;
+    if (!host) return;
+
+    const scene = new THREE.Scene();
+    miniSceneRef.current = scene;
+
+    const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 600);
+    camera.position.set(0, 0, 134);
+    miniCameraRef.current = camera;
+
+    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: 'low-power' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    renderer.setSize(115, 115, false);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    miniRendererRef.current = renderer;
+    Object.assign(renderer.domElement.style, {
+      width: '100%',
+      height: '100%',
+      display: 'block',
+      position: 'absolute',
+      inset: '0',
+    });
+    host.appendChild(renderer.domElement);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 1));
+
+    const miniGroup = new THREE.Group();
+    miniGroup.position.set(0, 0, 0);
+    miniSceneRef.current.add(miniGroup);
+    miniModelGroupRef.current = miniGroup;
+
+    syncMiniModel();
+
+    const animate = () => {
+      renderer.render(scene, camera);
+      miniAnimRef.current = requestAnimationFrame(animate);
+    };
+    animate();
+
+    return () => {
+      if (miniAnimRef.current) {
+        cancelAnimationFrame(miniAnimRef.current);
+        miniAnimRef.current = null;
+      }
+
+      if (miniModelGroupRef.current) {
+        while (miniModelGroupRef.current.children.length) {
+          const child = miniModelGroupRef.current.children[0];
+          miniModelGroupRef.current.remove(child);
+          disposeMiniObject(child);
+        }
+      }
+
+      renderer.dispose();
+      if (renderer.domElement.parentNode === host) {
+        host.removeChild(renderer.domElement);
+      }
+
+      miniRendererRef.current = null;
+      miniSceneRef.current = null;
+      miniCameraRef.current = null;
+      miniModelGroupRef.current = null;
+    };
+  }, [disposeMiniObject, syncMiniModel]);
+
+  useEffect(() => {
+    if (!camQ || !miniModelGroupRef.current) return;
+    miniModelGroupRef.current.quaternion.copy(camQ).invert();
+  }, [camQ]);
+
+  // ── Apply appearance whenever visibility/transparency changes ────
+  const applyAppearance = useCallback(() => {
+    if (!meshGroupRef.current) return;
+    const enabledLayerCount = config.layers.filter((l) => l.enabled).length;
+    meshGroupRef.current.traverse(child => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const lid: string = child.userData.layerId;
+      if (!lid) return;
+
+      child.visible = planeVisibility[lid] ?? true;
+
+      // Guard: only dispose if material is valid and not already disposed
+      const old = child.material as THREE.MeshStandardMaterial;
+      if (old && !old.disposed) old.dispose();
+
+      if (child.userData.slotDebug) {
+        child.visible = (planeVisibility[lid] ?? true) && showSlotDebug;
+        child.material = new THREE.MeshBasicMaterial({
+          color: 0x10e8a8,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+        });
+        child.renderOrder = 999;
+        return;
+      }
+
+      // Standard appearance (or floating-body color mode when enabled)
+      const hasBodyColors = identifyBodiesMode && !!(child.geometry as THREE.BufferGeometry).getAttribute('color');
+      const ghost = planeTransparencyEnabled[lid] ?? false;
+      const baseLayerColor = new THREE.Color(color || '#38bdf8');
+      const isActiveLayer = !!activeLayerId && lid === activeLayerId;
+      const shouldEmphasizeActiveLayer = !identifyBodiesMode && highlightActivePlaneOnly && !syncAllLayers && enabledLayerCount > 1;
+      const isInactiveLayer = shouldEmphasizeActiveLayer && !isActiveLayer;
+      const layerColor = shouldEmphasizeActiveLayer
+        ? (isActiveLayer ? baseLayerColor.clone().multiplyScalar(1.22) : baseLayerColor.clone().multiplyScalar(0.45))
+        : baseLayerColor;
+      const accentEmissive = layerColor.clone().multiplyScalar(isInactiveLayer ? 0.18 : (shouldEmphasizeActiveLayer && isActiveLayer ? 0.72 : 0.35));
+      const mat = new THREE.MeshStandardMaterial({
+        vertexColors:     hasBodyColors,
+        color:            hasBodyColors ? new THREE.Color(0xffffff) : layerColor,
+        emissive:         hasBodyColors ? new THREE.Color(0x000000) : accentEmissive,
+        emissiveIntensity: hasBodyColors ? 0 : (isInactiveLayer ? 0.006 : (shouldEmphasizeActiveLayer && isActiveLayer ? 0.085 : 0.015)),
+        metalness:        isInactiveLayer ? 0.06 : 0.14,
+        roughness:        isInactiveLayer ? 0.78 : 0.52,
+        envMapIntensity:  isInactiveLayer ? 0.14 : 0.36,
+        transparent:      ghost || isInactiveLayer,
+        opacity:          ghost ? (planeTransparency[lid] ?? 0.12) : (isInactiveLayer ? 0.44 : 1.0),
+        side:             THREE.DoubleSide,
+        flatShading:      false,
+      });
+      child.material = mat;
+    });
+    syncMiniModel();
+  }, [planeVisibility, planeTransparency, planeTransparencyEnabled, color, showSlotDebug, syncMiniModel, identifyBodiesMode, activeLayerId, syncAllLayers, highlightActivePlaneOnly, config.layers]);
+
+  useEffect(() => { applyAppearance(); },
+    [planeVisibility, planeTransparency, planeTransparencyEnabled, showSlotDebug, applyAppearance]);
+
+  // Keep a stable ref to the latest appearance applier so async mesh loads
+  // never apply stale visibility/transparency state captured by an older render.
+  const applyAppearanceRef = useRef(applyAppearance);
+  useEffect(() => {
+    applyAppearanceRef.current = applyAppearance;
+  }, [applyAppearance]);
+
+  const terminateBodiesWorkers = useCallback(() => {
+    bodiesWorkersRef.current.forEach((url, worker) => {
+      worker.terminate();
+      URL.revokeObjectURL(url);
+    });
+    bodiesWorkersRef.current.clear();
+  }, []);
+
+  const clearFloatingBodyHighlights = useCallback((notify = true) => {
+    if (meshGroupRef.current) {
+      meshGroupRef.current.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        if (!child.userData.layerId || child.userData.slotDebug) return;
+        const geo = child.geometry as THREE.BufferGeometry;
+        if (geo.getAttribute('color')) {
+          geo.deleteAttribute('color');
+        }
+        child.userData.hasFloatingBodies = false;
+      });
+      applyAppearanceRef.current();
+    }
+    if (notify) {
+      onFloatingBodiesChange?.({});
+    }
+  }, [onFloatingBodiesChange]);
+
+  const runBodiesAnalysis = useCallback(() => {
+    const automaticSlotCheck = isVisible && config.slotEnabled;
+    if (!meshGroupRef.current || completedConfigKeyRef.current !== configKey || (!identifyBodiesMode && !automaticSlotCheck)) {
+      onFloatingBodiesChange?.({});
+      return;
+    }
+
+    const token = ++bodiesAnalysisTokenRef.current;
+    terminateBodiesWorkers();
+
+    const meshes: THREE.Mesh[] = [];
+    meshGroupRef.current.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const layerId = String(child.userData.layerId ?? '');
+      if (!layerId || child.userData.slotDebug) return;
+
+      const isLayerVisible = planeVisibility[layerId] ?? true;
+      if (!isLayerVisible && !automaticSlotCheck) {
+        const geo = child.geometry as THREE.BufferGeometry;
+        if (geo.getAttribute('color')) {
+          geo.deleteAttribute('color');
+        }
+        child.userData.hasFloatingBodies = false;
+        return;
+      }
+
+      meshes.push(child);
+    });
+
+    if (meshes.length === 0) {
+      onFloatingBodiesChange?.({});
+      setIsAnalyzingBodies(false);
+      return;
+    }
+
+    setIsAnalyzingBodies(true);
+    const floatingByLayer: Record<string, boolean> = {};
+    const disconnectedLayers = new Set<string>();
+    const analysisErrors: string[] = [];
+
+    const jobs = meshes.map((mesh) => new Promise<void>((resolve) => {
+      const geo = mesh.geometry as THREE.BufferGeometry;
+      const posAttr = geo.attributes.position as THREE.BufferAttribute | undefined;
+      if (!posAttr) {
+        mesh.userData.hasFloatingBodies = false;
+        analysisErrors.push(`${mesh.name || 'Plane'}: missing geometry positions`);
+        resolve();
+        return;
+      }
+
+      const idxAttr = geo.index as THREE.BufferAttribute | null;
+      const positions = new Float32Array(posAttr.array as ArrayLike<number>);
+      const indices = idxAttr ? new Uint32Array(idxAttr.array as ArrayLike<number>) : null;
+
+      const blob = new Blob([BODIES_WORKER_CODE], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      let worker: Worker;
+      try {
+        worker = new Worker(url);
+      } catch (error) {
+        URL.revokeObjectURL(url);
+        analysisErrors.push(`${mesh.name || 'Plane'}: ${error instanceof Error ? error.message : String(error)}`);
+        resolve();
+        return;
+      }
+      bodiesWorkersRef.current.set(worker, url);
+
+      const cleanup = () => {
+        URL.revokeObjectURL(url);
+        worker.terminate();
+        bodiesWorkersRef.current.delete(worker);
+      };
+
+      worker.onmessage = (ev) => {
+        cleanup();
+        if (token !== bodiesAnalysisTokenRef.current) {
+          resolve();
+          return;
+        }
+
+        const { success, bodyCount, colorArr, error } = ev.data || {};
+        const layerId = String(mesh.userData.layerId ?? '');
+        if (!success || typeof bodyCount !== 'number') {
+          analysisErrors.push(`${mesh.name || 'Plane'}: ${error || 'body analysis returned no result'}`);
+          resolve();
+          return;
+        }
+        const isFloating = bodyCount > 1;
+        if (isFloating && automaticSlotCheck) disconnectedLayers.add(layerId);
+
+        const visibleForIdentification = identifyBodiesMode && (planeVisibility[layerId] ?? true);
+        mesh.userData.hasFloatingBodies = isFloating && visibleForIdentification;
+        if (layerId && visibleForIdentification) {
+          floatingByLayer[layerId] = (floatingByLayer[layerId] ?? false) || isFloating;
+        }
+
+        if (isFloating && visibleForIdentification && colorArr?.length === posAttr.count * 3) {
+          geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colorArr), 3));
+          geo.attributes.color.needsUpdate = true;
+        } else if (geo.getAttribute('color')) {
+          geo.deleteAttribute('color');
+        }
+
+        resolve();
+      };
+
+      worker.onerror = (event) => {
+        cleanup();
+        if (token === bodiesAnalysisTokenRef.current) {
+          analysisErrors.push(`${mesh.name || 'Plane'}: ${event.message || 'body analysis worker failed'}`);
+          mesh.userData.hasFloatingBodies = false;
+          if ((mesh.geometry as THREE.BufferGeometry).getAttribute('color')) {
+            (mesh.geometry as THREE.BufferGeometry).deleteAttribute('color');
+          }
+        }
+        resolve();
+      };
+
+      const transferList: Transferable[] = [positions.buffer];
+      if (indices) transferList.push(indices.buffer);
+      try {
+        worker.postMessage({ positions, indices, designColor: color || '#38bdf8' }, transferList);
+      } catch (error) {
+        cleanup();
+        analysisErrors.push(`${mesh.name || 'Plane'}: ${error instanceof Error ? error.message : String(error)}`);
+        resolve();
+      }
+    }));
+
+    Promise.allSettled(jobs).then((results) => {
+      if (token !== bodiesAnalysisTokenRef.current) return;
+      results.forEach((result) => {
+        if (result.status === 'rejected') {
+          analysisErrors.push(result.reason instanceof Error ? result.reason.message : String(result.reason));
+        }
+      });
+      setIsAnalyzingBodies(false);
+      onFloatingBodiesChange?.(floatingByLayer);
+      setSlotDisconnectedLayers(automaticSlotCheck ? [...disconnectedLayers] : []);
+      setSlotAnalysisError(automaticSlotCheck && analysisErrors.length ? analysisErrors.join('; ') : null);
+      if (
+        automaticSlotCheck
+        && disconnectedLayers.size > 0
+        && !identifyBodiesMode
+        && !autoIdentifyTriggeredRef.current
+      ) {
+        autoIdentifyTriggeredRef.current = true;
+        onDisconnectedPiecesDetected?.();
+      }
+      if (analysisErrors.length) console.error('Disconnected-body analysis failed:', analysisErrors.join('; '));
+      applyAppearanceRef.current();
+    });
+  }, [color, config.slotEnabled, configKey, identifyBodiesMode, isVisible, onDisconnectedPiecesDetected, onFloatingBodiesChange, planeVisibility, terminateBodiesWorkers]);
+
+  useEffect(() => {
+    runBodiesAnalysisRef.current = runBodiesAnalysis;
+  }, [runBodiesAnalysis]);
+
+  useEffect(() => {
+    onProcessingChange?.(loading || isAnalyzingBodies);
+  }, [loading, isAnalyzingBodies, onProcessingChange]);
+
+  useEffect(() => {
+    return () => {
+      onProcessingChange?.(false);
+    };
+  }, [onProcessingChange]);
+
+  useEffect(() => {
+    bodiesAnalysisTokenRef.current += 1;
+    terminateBodiesWorkers();
+    setIsAnalyzingBodies(false);
+    if (!identifyBodiesMode) {
+      clearFloatingBodyHighlights();
+    }
+    if (identifyBodiesMode || (isVisible && config.slotEnabled)) {
+      runBodiesAnalysisRef.current();
+    } else {
+      setSlotDisconnectedLayers([]);
+      setSlotAnalysisError(null);
+    }
+  }, [identifyBodiesMode, isVisible, config.slotEnabled, configKey, planeVisibility, terminateBodiesWorkers, clearFloatingBodyHighlights]);
+
+  useEffect(() => {
+    return () => {
+      bodiesAnalysisTokenRef.current += 1;
+      terminateBodiesWorkers();
+    };
+  }, [terminateBodiesWorkers]);
+
+  useEffect(() => {
+    hardStopTokenRef.current += 1;
+    bodiesAnalysisTokenRef.current += 1;
+    terminateBodiesWorkers();
+    setIsAnalyzingBodies(false);
+    setLoading(false);
+  }, [emergencyStopSeq, terminateBodiesWorkers]);
+
+  // ── Three.js scene (runs once) ───────────────────────────────────────────
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const w = containerRef.current.clientWidth;
+    const h = containerRef.current.clientHeight;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(backgroundColor);
+    sceneRef.current = scene;
+
+    const camera = new THREE.PerspectiveCamera(40, w / h, 0.1, 2000);
+    camera.position.set(0, 0, 500);
+    camera.lookAt(0, 0, 0);
+    cameraRef.current = camera;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setSize(w, h);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 0.78;
+    renderer.setClearColor(backgroundColor, 1);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    rendererRef.current = renderer;
+    Object.assign(renderer.domElement.style, {
+      width: '100%', height: '100%', display: 'block',
+      position: 'absolute', top: '0', left: '0',
+    });
+    containerRef.current.appendChild(renderer.domElement);
+
+    // ── Three-point studio lighting ──────────────────────────────────────────
+    // Designed for a flat snowflake ornament viewed mostly face-on.
+    // Key: strong warm-white from upper-left-front (main definition)
+    // Fill: soft cool from lower-right-front (lifts shadows, adds depth)
+    // Back/rim: narrow cold blue from behind (separates from background)
+    // Slightly higher ambient light keeps faces closer to 2D color while preserving depth.
+    scene.add(new THREE.AmbientLight(0xffffff, 0.16));
+
+    const key = new THREE.DirectionalLight(0xf9fbff, 1.05);
+    key.position.set(-120, 200, 400);
+    key.castShadow = true;
+    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.camera.near = 1;
+    key.shadow.camera.far = 2000;
+    key.shadow.bias = -0.0005;
+    scene.add(key);
+
+    const fill = new THREE.DirectionalLight(0xecf4ff, 0.34);
+    fill.position.set(300, -80, 350);
+    scene.add(fill);
+
+    const rim = new THREE.DirectionalLight(0x9fc2ff, 0.24);
+    rim.position.set(60, 70, -460);
+    scene.add(rim);
+
+    scene.environment = null;
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+
+    const onControlStart = () => {
+      renderer.shadowMap.autoUpdate = false;
+    };
+    const onControlEnd = () => {
+      renderer.shadowMap.autoUpdate = true;
+      renderer.shadowMap.needsUpdate = true;
+    };
+    controls.addEventListener('start', onControlStart);
+    controls.addEventListener('end', onControlEnd);
+
+    controlsRef.current = controls;
+
+    const animate = () => {
+      requestAnimationFrame(animate);
+      if (!isVisibleRef.current) return;
+      controls.update();
+      if (rendererRef.current && sceneRef.current && cameraRef.current) {
+        rendererRef.current.render(sceneRef.current, cameraRef.current);
+      }
+      // Update gizmo every 2 frames to avoid React overhead
+      if (frameRef.current++ % 2 === 0 && cameraRef.current) {
+        setCamQ(cameraRef.current.quaternion.clone());
+      }
+    };
+    animate();
+
+    const onResize = () => {
+      if (!containerRef.current) return;
+      const nw = containerRef.current.clientWidth;
+      const nh = containerRef.current.clientHeight;
+      camera.aspect = nw / nh;
+      camera.updateProjectionMatrix();
+      renderer.setSize(nw, nh);
+    };
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      controls.removeEventListener('start', onControlStart);
+      controls.removeEventListener('end', onControlEnd);
+      renderer.dispose();
+      containerRef.current?.removeChild(renderer.domElement);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (sceneRef.current) sceneRef.current.background = new THREE.Color(backgroundColor);
+    rendererRef.current?.setClearColor(backgroundColor, 1);
+  }, [backgroundColor]);
+
+  // ── Mesh loading (re-runs when config or generateMesh changes) ────────────
+  const LAYER_BASE_COLORS = ['#38bdf8', '#a78bfa', '#34d399'];
+  
+  useEffect(() => {
+    let cancelled = false;
+    completedConfigKeyRef.current = null;
+    bodiesAnalysisTokenRef.current += 1;
+    terminateBodiesWorkers();
+    setIsAnalyzingBodies(false);
+    setSlotDisconnectedLayers([]);
+    setSlotAnalysisError(null);
+    setSlotWarningDismissed(false);
+    const load = async () => {
+      const loadToken = hardStopTokenRef.current;
+      const isForcedByExternalToken = forceRefreshToken !== prevForceRefreshTokenRef.current;
+      prevForceRefreshTokenRef.current = forceRefreshToken;
+      setLoading(true);
+      setConflictCount(0);
+      try {
+        const mode: 'preview' | 'refresh' = isForcedByExternalToken ? 'refresh' : 'preview';
+        const generatedGroup = await generateMeshRef.current(() => {}, undefined, config, mode);
+        // Keep cached/export geometry immutable by operating on a preview clone.
+        const groupFromGenerator = generatedGroup.clone(true);
+        if (cancelled || loadToken !== hardStopTokenRef.current || !sceneRef.current) return;
+
+        if (meshGroupRef.current) {
+          sceneRef.current.remove(meshGroupRef.current);
+          
+          // Dispose all geometries and materials to prevent memory leaks
+          meshGroupRef.current.traverse(child => {
+            if (child instanceof THREE.Mesh) {
+              child.geometry?.dispose();
+              if (child.material instanceof THREE.Material) {
+                child.material.dispose();
+              } else if (Array.isArray(child.material)) {
+                child.material.forEach(mat => mat.dispose());
+              }
+            }
+          });
+        }
+
+        const baseColor = new THREE.Color(color || '#38bdf8');
+        const accentEmissive = baseColor.clone().multiplyScalar(0.35);
+        const bevelVisualMode = config.bevelEnabled;
+        const baseMat = new THREE.MeshStandardMaterial({
+          color: baseColor,
+          metalness: bevelVisualMode ? 0.2 : 0.14,
+          roughness: bevelVisualMode ? 0.42 : 0.52,
+          emissive: accentEmissive,
+          emissiveIntensity: 0.015,
+          envMapIntensity: bevelVisualMode ? 0.42 : 0.3,
+          side: THREE.DoubleSide,
+          flatShading: false,
+          transparent: true, opacity: 1.0,
+        });
+
+        const enabledLayers = config.layers.filter(l => l.enabled);
+
+        groupFromGenerator.traverse(child => {
+          if (!(child instanceof THREE.Mesh)) return;
+
+          // `Object3D.clone(true)` keeps geometry/material references by default.
+          // Clone per-mesh geometry so preview shading tweaks never affect cache/export.
+          child.geometry = child.geometry.clone();
+
+          child.material = baseMat.clone();
+          child.castShadow = true;
+          child.receiveShadow = true;
+          child.frustumCulled = false;
+
+          // Smooth shading pass for preview.
+          // toCreasedNormals at 45-60° is the key to removing visible faceting
+          // on curved/beveled text surfaces while preserving hard cap edges.
+          // With reduced preview vertex counts (4 curve segments), this is essential.
+          const geometry = child.geometry as THREE.BufferGeometry;
+          const vertexCount = geometry.attributes.position?.count ?? 0;
+          const needsCurvedShading = config.bevelEnabled || (config.globalStrokeWeight || 0) > 0.05;
+          const creaseAngle = config.bevelEnabled ? Math.PI / 4 : Math.PI / 3;
+
+          if (needsCurvedShading && vertexCount > 0 && vertexCount <= 500000) {
+            // toCreasedNormals returns a new non-indexed geometry; dispose the clone.
+            const creased = BufferGeometryUtils.toCreasedNormals(geometry, creaseAngle) as THREE.BufferGeometry;
+            geometry.dispose();
+            child.geometry = creased;
+          } else if (!needsCurvedShading) {
+            // For non-curved shading cases, default normals are sufficient.
+            child.geometry.computeVertexNormals();
+          }
+
+          const lid: string = child.userData.layerId;
+
+          // Reset BFS state — worker will re-run if bodyMode is on
+          if (lid) {
+            child.userData.bodyCount     = undefined;
+            child.userData.bodyPerVertex = undefined;
+            child.userData.bfsAnalysed   = false;
+          }
+        });
+
+        // Centre on Z only — the snowflake geometry is already designed around
+        // XY origin (arms radiate from 0,0), so subtracting the full 3D centroid
+        // would shift the piece off-centre when arms are asymmetric.
+        // We only need to zero out the Z offset introduced by centerZOffset.
+        const box = new THREE.Box3().setFromObject(groupFromGenerator);
+        const ctr = new THREE.Vector3();
+        box.getCenter(ctr);
+        groupFromGenerator.position.set(0, 0, -ctr.z); // XY stays at 0, only Z is centred
+
+        if (SLOT_DEBUG_OVERLAY_ENABLED && config.slotEnabled) {
+          const enabledLayers = config.layers.filter(l => l.enabled);
+          const materialThickness = config.extrusionDepth;
+
+          enabledLayers.forEach((layer, layerIndex) => {
+            let layerMesh: THREE.Mesh | null = null;
+            groupFromGenerator.traverse(child => {
+              if (layerMesh || !(child instanceof THREE.Mesh)) return;
+              if (child.userData.layerId === layer.id && !child.userData.slotDebug) {
+                layerMesh = child;
+              }
+            });
+
+            if (!layerMesh) return;
+
+            const layerBounds = new THREE.Box3().setFromObject(layerMesh);
+            if (layerBounds.isEmpty()) return;
+
+            const layerCenterZ = (layerBounds.min.z + layerBounds.max.z) * 0.5;
+            const debugCutters = createSlotDebugCuttersForLayer(
+              layer,
+              layerIndex,
+              enabledLayers,
+              config,
+              materialThickness,
+              layerCenterZ
+            );
+
+            debugCutters.forEach((geo, cutterIndex) => {
+              const debugMesh = new THREE.Mesh(
+                geo,
+                new THREE.MeshBasicMaterial({
+                  color: 0x10e8a8,
+                  wireframe: true,
+                  transparent: true,
+                  opacity: 0.9,
+                  depthWrite: false,
+                })
+              );
+              debugMesh.userData.layerId = layer.id;
+              debugMesh.userData.slotDebug = true;
+              debugMesh.userData.slotDebugIndex = cutterIndex;
+              debugMesh.name = `${layer.name} Slot Debug ${cutterIndex + 1}`;
+              debugMesh.renderOrder = 999;
+              groupFromGenerator.add(debugMesh);
+            });
+          });
+        }
+
+        if (CONFLICT_DEBUG_OVERLAY_ENABLED && config.slotEnabled && config.slotMode === '3-plane') {
+          const conflicts = createConflictDebugVolumes(groupFromGenerator);
+          conflicts.meshes.forEach((mesh) => groupFromGenerator.add(mesh));
+          setConflictCount(conflicts.count);
+        }
+
+        sceneRef.current.add(groupFromGenerator);
+        meshGroupRef.current = groupFromGenerator;
+        completedConfigKeyRef.current = configKey;
+        setGenerationError(null);
+        // Apply the latest appearance state (not a stale closure captured at
+        // effect start) so plane visibility remains accurate after regen.
+        applyAppearanceRef.current();
+        runBodiesAnalysisRef.current();
+        // If body mode is already on, re-run analysis against the new mesh
+        // if (bodyMode) launchBodiesWorkerRef.current?.();
+      } catch (err) {
+        if (cancelled || loadToken !== hardStopTokenRef.current) return;
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          console.info('Snowflake3D: mesh generation cancelled', err);
+          return;
+        }
+        console.error('Snowflake3D: mesh gen failed', err);
+        const message = err instanceof Error ? err.message : String(err);
+        setGenerationError(message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    const t = setTimeout(load, 100);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [configKey, forceRefreshToken, terminateBodiesWorkers]);
+
+  // ── Render ───────────────────────────────────────────────────────────────
+
+  return (
+    <div className="relative w-full h-full">
+      <div ref={containerRef} className="w-full h-full rounded-xl overflow-hidden" style={{ backgroundColor }} />
+
+      {/* Loading overlay */}
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80 rounded-xl pointer-events-none z-50">
+          <div className="text-white text-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-sky-400 mx-auto mb-2" />
+            <div className="text-sm text-slate-300">Generating…</div>
+          </div>
+        </div>
+      )}
+      {!loading && generationError && (
+        <div className="absolute bottom-4 left-4 z-50 max-w-[min(32rem,calc(100%-2rem))]">
+          <div role="alert" className="rounded-lg border border-red-400/50 bg-red-950/95 p-3 text-sm text-red-100 shadow-xl">
+            <div className="flex items-start gap-3">
+              <div className="min-w-0 flex-1">
+                <p>3D generation failed. The displayed model may be out of date; check it before exporting.</p>
+                <p className="mt-1 max-h-24 overflow-auto break-words text-xs text-red-200">{generationError}</p>
+              </div>
+              <button
+                type="button"
+                aria-label="Dismiss 3D generation error"
+                onClick={() => setGenerationError(null)}
+                className="rounded px-2 py-1 text-red-100 hover:bg-red-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
+              >
+                &times;
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setGenerationError(null);
+                onForceRefresh();
+              }}
+              className="mt-2 rounded border border-red-300/50 px-3 py-1 text-xs font-semibold hover:bg-red-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
+            >
+              Retry 3D generation
+            </button>
+          </div>
+        </div>
+      )}
+      {!loading && !generationError && config.slotEnabled && !slotWarningDismissed
+        && (slotDisconnectedLayers.length > 0 || slotAnalysisError) && (
+        <div className="absolute bottom-16 left-4 z-40 max-w-[min(30rem,calc(100%-2rem))]">
+          <div role="status" className="rounded-lg border border-amber-400/50 bg-slate-950/95 p-3 text-sm text-amber-100 shadow-xl">
+            <div className="flex items-start gap-3">
+              <div className="min-w-0 flex-1">
+                {slotDisconnectedLayers.length > 0 && (
+                  <>
+                    <p className="font-semibold">
+                      Disconnected pieces detected with slots enabled: {slotDisconnectedLayers.map(
+                        (id) => config.layers.find((layer) => layer.id === id)?.name || id
+                      ).join(', ')}.
+                    </p>
+                    <p className="mt-1 text-xs text-amber-100/90">
+                      Slots may separate a plane. Consider rotating the design elements relative to the slot direction
+                      so the cuts follow a longer arm, then check the pieces and fit again. Camera rotation does not change the cuts.
+                      Pieces may also have been disconnected before slotting.
+                    </p>
+                  </>
+                )}
+                {slotAnalysisError && (
+                  <p className="mt-1 text-xs text-amber-100/90">
+                    Could not check every plane for disconnected pieces: {slotAnalysisError}. Try the check again.
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                aria-label="Dismiss slot connectivity warning"
+                onClick={() => setSlotWarningDismissed(true)}
+                className="rounded px-2 py-1 hover:bg-amber-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
+              >
+                &times;
+              </button>
+            </div>
+            {slotAnalysisError && (
+              <button
+                type="button"
+                onClick={() => runBodiesAnalysisRef.current()}
+                className="mt-2 rounded border border-amber-300/50 px-3 py-1 text-xs font-semibold hover:bg-amber-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
+              >
+                Retry connectivity check
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── TOP-LEFT: diameter + plane controls ─────────────────────────── */}
+      <div className="absolute top-4 left-4 z-40 flex flex-col gap-2">
+        {/* Diameter */}
+        <div className="bg-slate-900/85 backdrop-blur px-3 py-2 rounded-lg border border-white/10 shadow-xl">
+          <span className="text-[9px] font-extrabold uppercase tracking-widest text-slate-500 block leading-none mb-0.5">Diameter</span>
+          <span className="text-lg font-bold text-white leading-none">
+            {(initialDiameter ?? 0).toFixed(1)}
+            <span className="text-xs text-sky-400 ml-1">mm</span>
+          </span>
+        </div>
+
+        {CONFLICT_DEBUG_OVERLAY_ENABLED && config.slotEnabled && config.slotMode === '3-plane' && (
+          <div className={`backdrop-blur px-3 py-2 rounded-lg border shadow-xl ${
+            conflictCount > 0
+              ? 'bg-red-900/65 border-red-400/45'
+              : 'bg-emerald-900/45 border-emerald-400/35'
+          }`}>
+            <span className="text-[9px] font-extrabold uppercase tracking-widest text-slate-200 block leading-none mb-0.5">Conflict Check</span>
+            <span className={`text-xs font-bold leading-none ${conflictCount > 0 ? 'text-red-200' : 'text-emerald-200'}`}>
+              {conflictCount > 0 ? `${conflictCount} conflict cell${conflictCount === 1 ? '' : 's'}` : 'No conflict cells'}
+            </span>
+          </div>
+        )}
+
+        {viewportLayers.length > 0 && (
+          <div data-tutorial="planes-panel" className="bg-slate-900/85 backdrop-blur px-3 py-2.5 rounded-lg border border-white/10 shadow-xl min-w-[220px]">
+            <div className="text-[9px] font-extrabold uppercase tracking-widest text-slate-500 mb-2">Planes</div>
+            <div className="space-y-1.5">
+              {viewportLayers.map((layer) => {
+                const isShown = planeVisibility[layer.id] ?? true;
+                const isGhost = planeTransparencyEnabled[layer.id] ?? false;
+                return (
+                  <div key={layer.id} className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold text-slate-200 truncate">{layer.name}</span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => togglePlaneVisibility(layer.id)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-colors ${
+                          isShown
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/30 hover:bg-emerald-500/30'
+                            : 'bg-slate-700/60 text-slate-300 border-slate-500/40 hover:bg-slate-600/70'
+                        }`}
+                        title={isShown ? 'Hide plane' : 'Show plane'}
+                      >
+                        {isShown ? 'ON' : 'OFF'}
+                      </button>
+                      <button
+                        onClick={() => togglePlaneTransparency(layer.id)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-colors ${
+                          isGhost
+                            ? 'bg-sky-500/20 text-sky-300 border-sky-400/30 hover:bg-sky-500/30'
+                            : 'bg-slate-700/60 text-slate-300 border-slate-500/40 hover:bg-slate-600/70'
+                        }`}
+                        title={isGhost ? 'Disable ghost mode' : 'Enable ghost mode'}
+                      >
+                        Ghost
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── BOTTOM-LEFT: undo / redo ──────────────────────────────────────── */}
+      {(canUndo || canRedo) && (
+        <div className="absolute bottom-4 left-4 z-40 flex gap-2">
+          <button onClick={undo} disabled={!canUndo}
+            className="p-2 bg-slate-800/80 backdrop-blur rounded-lg text-white disabled:opacity-30 hover:bg-sky-500 transition-all shadow-lg border border-white/5">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+            </svg>
+          </button>
+          <button onClick={redo} disabled={!canRedo}
+            className="p-2 bg-slate-800/80 backdrop-blur rounded-lg text-white disabled:opacity-30 hover:bg-sky-500 transition-all shadow-lg border border-white/5">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M21 10h-10a8 8 0 00-8 8v2M21 10l-6 6m6-6l-6-6" />
+            </svg>
+          </button>
+        </div>
+      )}
+
+      {/* ── BOTTOM-RIGHT: gizmo + home + ID Bodies ────────────────────────
+           All placed bottom-right, well clear of the 2D/3D toggle
+           which lives top-right of the parent container. */}
+      <div data-tutorial="camera-controls" className="absolute bottom-4 right-4 z-40 flex flex-col items-end gap-2">
+
+        {/* Dynamic orientation gizmo */}
+        <div
+          className={`relative w-[115px] h-[115px] p-0 select-none flex items-center justify-center ${isGizmoDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+          style={{ touchAction: 'none' }}
+          onPointerDownCapture={handleGizmoPointerDown}
+          onPointerMoveCapture={handleGizmoPointerMove}
+          onPointerUpCapture={handleGizmoPointerUp}
+          onPointerCancelCapture={handleGizmoPointerUp}
+        >
+          <div
+            ref={miniHostRef}
+            className="absolute inset-0 pointer-events-none rounded-full overflow-hidden"
+          />
+          <XYZGizmo
+            camQ={camQ}
+            onSnapDirection={handleSnapDirection}
+            onRotateStep={handleRotateStep}
+          />
+        </div>
+
+        {/* Reset camera home + force refresh — side by side */}
+        <div className="flex gap-2">
+          <button
+            onClick={() => controlsRef.current?.reset()}
+            title="Reset camera"
+            className="p-2.5 bg-slate-900/85 backdrop-blur hover:bg-sky-500 text-slate-300 hover:text-white rounded-xl border border-white/10 shadow-xl transition-all active:scale-90"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+                d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+            </svg>
+          </button>
+
+          <button
+            onClick={onForceRefresh}
+            title="Force refresh 3D model"
+            className="p-2.5 bg-slate-900/85 backdrop-blur hover:bg-emerald-500 text-slate-300 hover:text-white rounded-xl border border-white/10 shadow-xl transition-all active:scale-90"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </button>
+        </div>
+
+        {isAnalyzingBodies && (
+          <div className="px-3 py-1.5 rounded-lg text-[10px] font-black uppercase bg-slate-900/85 text-sky-300 border border-white/10 shadow-xl">
+            Analyzing Bodies...
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default Snowflake3D;
