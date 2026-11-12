@@ -8840,8 +8840,8 @@ const App: React.FC = () => {
           } as React.CSSProperties}
         >
             {/* Header */}
-            <div className="appearance-panel h-14 border-b border-white/10 backdrop-blur-md shrink-0 z-50 relative">
-                <div className="h-full max-w-[1920px] mx-auto px-4 flex items-center justify-center">
+            <div className="appearance-panel app-header border-b border-white/10 backdrop-blur-md shrink-0 z-50 relative">
+              <div className="h-full max-w-[1920px] mx-auto px-4 flex items-center justify-center">
                     <div className="w-full">
                         <Header
                             projectName={config.projectName}
@@ -8878,9 +8878,9 @@ const App: React.FC = () => {
                 </div>
             </div>
 
-            <div className="flex-1 flex overflow-hidden">
+            <div className="app-main flex-1 min-h-0 flex overflow-hidden">
                 {/* Control Panel */}
-                <div data-tutorial="panel" className="appearance-panel w-[420px] flex flex-col border-r border-white/10 backdrop-blur-sm shrink-0 z-40">
+              <div data-tutorial="panel" className="appearance-panel control-panel-shell w-[420px] flex flex-col border-r border-white/10 backdrop-blur-sm shrink-0 z-40">
                     <ControlPanel
                         hubBevelLimit={hubBevelLimit}
                         config={config}
@@ -8934,7 +8934,7 @@ const App: React.FC = () => {
                 </div>
 
                 {/* Preview Area */}
-                <div data-tutorial="preview" className="flex-1 relative overflow-hidden" style={{ backgroundColor: appearance.backgroundColor }}>
+                <div data-tutorial="preview" className="preview-shell min-w-0 flex-1 relative overflow-hidden" style={{ backgroundColor: appearance.backgroundColor }}>
                     <div className={`absolute inset-0 w-full h-full transition-opacity duration-300 ${viewMode === '2d' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
                         <SnowflakePreview
                             config={config}

@@ -110,14 +110,14 @@ const Header: React.FC<HeaderProps> = ({
 
   return (
     <div className="w-full">
-      <div className="flex items-center justify-between">
+      <div className="app-header-content flex items-center justify-between gap-3">
         {/* Left Side: Title and Info */}
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-4 min-w-0">
           <div className="w-10 h-10 bg-transparent flex items-center justify-center text-3xl text-white">
             ❄️
           </div>
           <div className="flex flex-col justify-center">
-            <h1 className="text-lg font-black bg-clip-text text-transparent bg-gradient-to-r from-white to-sky-200 tracking-tight leading-none mb-0.5">
+            <h1 className="text-lg font-black bg-clip-text text-transparent bg-gradient-to-r from-white to-sky-200 tracking-tight leading-none mb-0.5 truncate">
               Ultimate Snowflake Generator
             </h1>
             <div className="flex items-center space-x-2">
@@ -143,7 +143,7 @@ const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* Right Side: Inline Controls */}
-        <div className="flex items-center gap-2">
+        <div className="app-header-actions flex items-center gap-2">
           {/* Reset Button */}
           <button
             onClick={onResetApp}
@@ -213,7 +213,7 @@ const Header: React.FC<HeaderProps> = ({
           </div>
 
           {/* Project Name Input */}
-          <div className="relative group w-48 h-9">
+          <div className="relative group w-48 h-9 app-project-name">
             <input
             type="text"
             value={localName}
