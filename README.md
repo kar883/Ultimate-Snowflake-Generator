@@ -12,8 +12,6 @@
 - Linux installer: [Snowflake-Generator-Linux-Installer-1.1.5.deb](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.5/Snowflake-Generator-Linux-Installer-1.1.5.deb)
 - All release assets: [GitHub Releases](https://github.com/kar883/Ultimate-Snowflake-Generator/releases)
 
-The macOS downloads are for Apple Silicon (ARM64).
-
 The web edition runs in your browser; your projects and preferences remain in that browser unless you export or share them. No account or app-hosted project storage is required. GitHub Pages must be enabled for this repository before the web link is available.
 
 ### Windows security warning
