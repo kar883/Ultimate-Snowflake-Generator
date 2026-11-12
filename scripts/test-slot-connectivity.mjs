@@ -34,7 +34,7 @@ try {
   const { BODIES_WORKER_CODE } = await vite.ssrLoadModule('/src/components/Snowflake3D.tsx');
   const { simplifyStraightSegments } = await vite.ssrLoadModule('/src/utils/simplifyStraightSegments.ts');
   const { createSlotProfileOutline, manifoldRemoveTinyComponents, manifoldSubtract, manifoldUnionGeometries } = await vite.ssrLoadModule('/src/manifoldCSG.ts');
-  const { getTopologyReport } = await vite.ssrLoadModule('/src/surgicalSlotRepair.ts');
+  const { getTopologyReport, surgicalSlotRepair } = await vite.ssrLoadModule('/src/surgicalSlotRepair.ts');
   const { createDefaultConfig } = await vite.ssrLoadModule('/src/defaults.ts');
   const bodyCount = (geometry) => {
     let response;
@@ -98,6 +98,34 @@ try {
   } finally {
     cleanedComponents.dispose();
     mixedComponents.dispose();
+  }
+
+  const openCube = new THREE.BufferGeometry();
+  openCube.setAttribute('position', new THREE.Float32BufferAttribute([
+    -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1,
+    -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1,
+  ], 3));
+  const cubeIndices = [
+    0, 2, 1, 0, 3, 2,
+    4, 5, 6, 4, 6, 7,
+    0, 1, 5, 0, 5, 4,
+    1, 2, 6, 1, 6, 5,
+    2, 3, 7, 2, 7, 6,
+    3, 0, 4, 3, 4, 7,
+  ];
+  cubeIndices.splice(0, 3);
+  openCube.setIndex(cubeIndices);
+  assert.equal(getTopologyReport(openCube).boundaryEdges, 3, 'repair fixture should contain one open triangular seam');
+  const repairedOpenCube = surgicalSlotRepair(openCube);
+  try {
+    assert.equal(
+      getTopologyReport(repairedOpenCube).isManifold,
+      true,
+      'surgical repair should close a three-edge seam left by strict slot subtraction'
+    );
+  } finally {
+    if (repairedOpenCube !== openCube) repairedOpenCube.dispose();
+    openCube.dispose();
   }
 
   const nearSeamBox = new THREE.BoxGeometry(20, 20, 5);
@@ -258,6 +286,81 @@ try {
   } finally {
     contourBridges.forEach((geometry) => geometry.dispose());
     contourSource.dispose();
+  }
+
+  const bridgeWidthConfig = structuredClone(contourConfig);
+  bridgeWidthConfig.slotMode = '3-plane';
+  bridgeWidthConfig.layers.forEach((layer) => {
+    layer.enabled = true;
+    layer.slotBridgeEnabled = true;
+    layer.slotBridges = [];
+    layer.primary.rotationOffset = 0;
+  });
+  const bridgeWidthSource = new THREE.BoxGeometry(120, 120, bridgeWidthConfig.extrusionDepth);
+  const bridgeWidthGeometries = bridgeWidthConfig.layers.map((layer, layerIndex) =>
+    createBakedBridgePlanesForLayer(
+      layer,
+      layerIndex,
+      bridgeWidthConfig.layers,
+      bridgeWidthConfig,
+      bridgeWidthConfig.extrusionDepth,
+      0,
+      bridgeWidthConfig.extrusionDepth,
+      -60,
+      60,
+      bridgeWidthSource,
+      190
+    )
+  );
+  const projectedBridgeWidth = (geometry, angleDegrees) => {
+    const positions = geometry.attributes.position;
+    const angle = angleDegrees * Math.PI / 180;
+    const localY = (index) =>
+      -positions.getX(index) * Math.sin(angle) + positions.getY(index) * Math.cos(angle);
+    let min = Number.POSITIVE_INFINITY;
+    let max = Number.NEGATIVE_INFINITY;
+    for (let i = 0; i < positions.count; i += 1) {
+      const y = localY(i);
+      min = Math.min(min, y);
+      max = Math.max(max, y);
+    }
+    return max - min;
+  };
+  const bridgeThickness = (geometry) => {
+    geometry.computeBoundingBox();
+    return geometry.boundingBox.max.z - geometry.boundingBox.min.z;
+  };
+  try {
+    const [baseBridges, crossBridges, tiltBridges] = bridgeWidthGeometries;
+    assert.ok(baseBridges.length >= 1, '3-plane base should generate an automatic bridge');
+    assert.ok(crossBridges.length >= 2, '3-plane cross should generate main and tip-in bridges');
+    assert.ok(tiltBridges.length >= 1, '3-plane tilt should generate an automatic bridge');
+    const baseWidth = projectedBridgeWidth(baseBridges[0], 0);
+    const crossMainWidth = projectedBridgeWidth(crossBridges[0], 0);
+    const crossTipInWidth = projectedBridgeWidth(crossBridges[1], 0);
+    const tiltMainWidth = projectedBridgeWidth(tiltBridges[0], 0);
+    for (const [name, geometry] of [
+      ['base', baseBridges[0]],
+      ['cross main', crossBridges[0]],
+      ['cross tip-in', crossBridges[1]],
+      ['tilt', tiltBridges[0]],
+    ]) {
+      assert.ok(
+        Math.abs(bridgeThickness(geometry) - bridgeWidthConfig.extrusionDepth) < 0.001,
+        `${name} bridge thickness should match the main extrusion (${bridgeThickness(geometry).toFixed(3)} vs ${bridgeWidthConfig.extrusionDepth.toFixed(3)} mm)`
+      );
+    }
+    assert.ok(
+      Math.abs(baseWidth - tiltMainWidth) < 0.05,
+      `automatic base and tilt bridge widths should be aligned (${baseWidth.toFixed(3)} vs ${tiltMainWidth.toFixed(3)} mm)`
+    );
+    assert.ok(
+      Math.abs(crossMainWidth - crossTipInWidth) < 0.05,
+      `cross tip-in and main bridge widths should be aligned (${crossMainWidth.toFixed(3)} vs ${crossTipInWidth.toFixed(3)} mm)`
+    );
+  } finally {
+    bridgeWidthGeometries.flat().forEach((geometry) => geometry.dispose());
+    bridgeWidthSource.dispose();
   }
 
   const scaledGeometry = new THREE.BoxGeometry(10, 20, 6);

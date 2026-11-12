@@ -40,6 +40,16 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Rename macOS release artifacts
+      shell: bash
+      run: |
+        for file in dist-electron/*.dmg; do
+          [ -e "$file" ] && mv "$file" "dist-electron/Snowflake-Generator-macOS-Installer-${{ github.event.inputs.version }}.dmg"
+        done
+        for file in dist-electron/*-mac.zip; do
+          [ -e "$file" ] && mv "$file" "dist-electron/Snowflake-Generator-macOS-Portable-${{ github.event.inputs.version }}.zip"
+        done
+
     - name: Upload macOS artifacts
       uses: actions/upload-artifact@v5
       with:
@@ -59,15 +69,15 @@ jobs:
           A beautiful 3D snowflake design generator for art and 3D printing.
 
           ### Downloads:
-          - macOS installer: Snowflake Generator-${{ github.event.inputs.version }}.dmg
-          - macOS portable: Snowflake Generator-${{ github.event.inputs.version }}-mac.zip
-          - Windows installer: Snowflake Generator Setup ${{ github.event.inputs.version }}.exe
-          - Windows portable: Snowflake Generator-${{ github.event.inputs.version }}-win.zip
+          - macOS installer: Snowflake-Generator-macOS-Installer-${{ github.event.inputs.version }}.dmg
+          - macOS portable: Snowflake-Generator-macOS-Portable-${{ github.event.inputs.version }}.zip
+          - Windows installer: Snowflake-Generator-Windows-Installer-${{ github.event.inputs.version }}.exe
+          - Windows portable: Snowflake-Generator-Windows-Portable-${{ github.event.inputs.version }}.zip
 
           Enjoy creating beautiful snowflake designs.
         files: |
-          dist-electron/*.dmg
-          dist-electron/*-mac.zip
+          dist-electron/*macOS-Installer*.dmg
+          dist-electron/*macOS-Portable*.zip
         draft: false
         prerelease: false
       env:

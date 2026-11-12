@@ -53,29 +53,33 @@ npm run electron:build
 After building, check `dist-electron/` for:
 
 ### Windows
-- **Snowflake Generator Setup 1.0.0.exe** (Installer)
+- **Snowflake-Generator-Windows-Installer-1.1.5.exe** (Installer)
   - User-friendly installer with uninstall support
   - Creates Start Menu shortcuts
   - Size: ~200-300 MB
   
-- **Snowflake Generator 1.0.0.exe** (Portable)
+- **Snowflake-Generator-Windows-Portable-1.1.5.zip** (Portable)
   - No installation required
   - Run directly from USB/network
   - Size: ~200-300 MB
 
 ### macOS
-- **Snowflake Generator-1.0.0.dmg** (Disk Image Installer)
+- **Snowflake-Generator-macOS-Installer-1.1.5.dmg** (Disk Image Installer)
   - Standard macOS installation experience
   - Drag-and-drop to Applications
   - Size: ~200-300 MB
   
-- **Snowflake Generator-1.0.0.zip** (Archive)
+- **Snowflake-Generator-macOS-Portable-1.1.5.zip** (Archive)
   - Portable archive
   - Extract and run
   - Size: ~200-300 MB
 
-- **Snowflake Generator-1.0.0-arm64.dmg** (Apple Silicon)
-- **Snowflake Generator-1.0.0-x64.dmg** (Intel Mac)
+- **Snowflake-Generator-macOS-Installer-1.1.5.dmg** (Apple Silicon or Intel, depending on build)
+
+### Linux
+- **Snowflake-Generator-Linux-Portable-1.1.5.AppImage** (Portable)
+- **Snowflake-Generator-Linux-Installer-1.1.5.deb** (Debian/Ubuntu installer)
+- **Snowflake-Generator-Linux-Portable-1.1.5.tar.gz** (Portable archive)
 
 ## Distribution Strategies
 

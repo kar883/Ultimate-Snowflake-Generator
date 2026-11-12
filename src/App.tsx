@@ -52,7 +52,7 @@ import { getHubOutlinePoints } from './utils/hubGeometry';
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, /*makeSlotKey,*/ getOrCreateGeometry, clearGeometryCache, modelCache3D, modelCache2D, hashConfig, /*slotCutCache,*/ makeUnderlineKey } from './geometryCache';
 
 const MAX_HISTORY = 50;
-const APP_VERSION = '1.1.4';
+const APP_VERSION = '1.1.5';
 const hubFilletInfoCache = new Map<string, { applied: number; by: 'depth' | 'wall' | null }>();
 const APP_DEBUG = false;
 // Bump when mesh generation logic changes (slot geometry, CSG sequencing, etc.)
@@ -1037,8 +1037,12 @@ const getEffectiveBridgeManualWidth = (
   return layer.slotBridgeManualWidth ?? 6;
 };
 
-const SLOT_BRIDGE_RULE_VERSION = 'slot-bridge-phase1-u';
-const BAKED_BRIDGE_END_INSET_MM = 0.1;
+const SLOT_BRIDGE_RULE_VERSION = 'slot-bridge-phase1-x';
+const BAKED_BRIDGE_END_INSET_MM = 0.25;
+const BRIDGE_CONTACT_OVERLAP_MM = 2;
+const AUTO_BRIDGE_WIDTH_EXTRA = 1.5;
+const PAIRED_CUT_BRIDGE_WIDTH_BOOST = 0.5;
+const BRIDGE_WIDTH_SAFETY_MARGIN = 0.35;
 const failedBridgeUnionAttemptKeys = new Set<string>();
 const FORCE_WORKER_SLOT_CUT_VERTEX_THRESHOLD = 450000;
 const BRIDGE_SURGICAL_REPAIR_VERTEX_THRESHOLD = 450000;
@@ -1848,8 +1852,8 @@ const createBakedBridgePlanesForLayer = (
     const left: THREE_ACTUAL.Vector2[] = [];
     const right: THREE_ACTUAL.Vector2[] = [];
     for (let row = 0; row < rowCount; row++) {
-      const minX = Math.max(runStart, rowMinX[row] - 1.5);
-      const maxX = Math.min(runEnd, rowMaxX[row] + 1.5);
+      const minX = Math.max(runStart, rowMinX[row] - BRIDGE_CONTACT_OVERLAP_MM);
+      const maxX = Math.min(runEnd, rowMaxX[row] + BRIDGE_CONTACT_OVERLAP_MM);
       if (!Number.isFinite(minX) || !Number.isFinite(maxX) || maxX - minX <= 0.05) continue;
       left.push(new THREE_ACTUAL.Vector2(minX - centerX, rowYs[row] - yOffset));
       right.push(new THREE_ACTUAL.Vector2(maxX - centerX, rowYs[row] - yOffset));
@@ -2037,17 +2041,11 @@ const createBakedBridgePlanesForLayer = (
     const trimmedLength = Math.max(0.01, rawLength - (endpointInset * 2));
     const trimmedNearX = effectiveRunStart + endpointInset;
     
-    // Keep bridge Z slightly inside the plane thickness to avoid perfectly
-    // coplanar top/bottom faces, which are a common source of manifold-union failures.
-    // Use materialThickness (actual model thickness) not depthZ (bounding box span)
-    // to prevent bridge blocks from extending beyond model boundaries.
-    // The slotted base is extruded to exactly config.extrusionDepth (bevel is carved
-    // inside that thickness), so bridges must match it rather than add bevel on top.
-    const zInset = Math.min(0.05, Math.max(0.01, config.extrusionDepth * 0.0025));
-    const bridgeHeightZ = Math.max(0.01, config.extrusionDepth - (zInset * 2));
+    // Bridges must have the same full extrusion thickness as the main model.
+    const bridgeHeightZ = Math.max(0.01, config.extrusionDepth);
     const effectiveSlotWidth = Math.max(0.1, config.slotWidth + localWidthAdjustmentPerSide);
-    // Keep user baseline (slot width + 1mm), but never allow bridge to be thinner
-    // than the cutter thickness axis; otherwise subtraction can erase it entirely.
+    // Keep automatic bridges consistently wider than their slots, and never let
+    // them fall below the cutter thickness or subtraction can erase them entirely.
     const minBridgeThicknessForCut = Math.max(
       0.5,
       effectiveSlotWidth + minSafetyMargin,
@@ -2170,7 +2168,18 @@ const createBakedBridgePlanesForLayer = (
   }
 
   if (layerIndex === 0) {
-    addBridgePlane(-baseSlotLength, baseSlotLength, slotThickness, 240, -armAngle, 0, true);
+    addBridgePlane(
+      -baseSlotLength,
+      baseSlotLength,
+      slotThickness,
+      240,
+      -armAngle,
+      0,
+      true,
+      PAIRED_CUT_BRIDGE_WIDTH_BOOST,
+      AUTO_BRIDGE_WIDTH_EXTRA,
+      BRIDGE_WIDTH_SAFETY_MARGIN
+    );
     if (config.slotMode === '3-plane' && armCount % 2 !== 0) {
       addBridgePlane(-rearMateReach - mateOverlap, rearMateReach + mateOverlap, slotThickness, 120, -armAngle, 0, true);
     }
@@ -2199,33 +2208,26 @@ const createBakedBridgePlanesForLayer = (
       -armAngle,
       0,
       true,
-      0,
-      1.0,
-      0.2,
+      PAIRED_CUT_BRIDGE_WIDTH_BOOST,
+      AUTO_BRIDGE_WIDTH_EXTRA,
+      BRIDGE_WIDTH_SAFETY_MARGIN,
       false,
       true,
       crossMainSlotThickness,
       crossMainWidthAdjustmentPerSide,
       crossMainManualBridgeWidth ?? undefined
     );
-    // Match tilt's paired X-cut compensation so cross tip-in bridge width
-    // appears equally flush with slot edges after subtraction.
-    const crossTipInBaseThicknessBoost = Math.max(1.8, crossTipInSlotThickness * 0.55);
-    const crossTipInBridgeThickness = crossTipInSlotThickness + crossTipInBaseThicknessBoost;
-    const crossTipInCutCompBoost = Math.max(1.4, crossTipInSlotThickness * 0.4);
-    const crossTipInAutoWidthExtra = 2.0;
-    const crossTipInSafetyMargin = 0.55;
     addBridgePlane(
       -rearMateReach,
       crossTipInLength,
-      crossTipInBridgeThickness,
+      crossTipInSlotThickness,
       240,
       -armAngle,
       0,
       true,
-      crossTipInCutCompBoost,
-      crossTipInAutoWidthExtra,
-      crossTipInSafetyMargin,
+      PAIRED_CUT_BRIDGE_WIDTH_BOOST,
+      AUTO_BRIDGE_WIDTH_EXTRA,
+      BRIDGE_WIDTH_SAFETY_MARGIN,
       true,
       true,
       crossTipInSlotThickness,
@@ -2235,14 +2237,14 @@ const createBakedBridgePlanesForLayer = (
     addBridgePlane(
       -rearMateReach,
       crossTipInLength,
-      crossTipInBridgeThickness,
+      crossTipInSlotThickness,
       120,
       -armAngle,
       0,
       true,
-      crossTipInCutCompBoost,
-      crossTipInAutoWidthExtra,
-      crossTipInSafetyMargin,
+      PAIRED_CUT_BRIDGE_WIDTH_BOOST,
+      AUTO_BRIDGE_WIDTH_EXTRA,
+      BRIDGE_WIDTH_SAFETY_MARGIN,
       true,
       true,
       crossTipInSlotThickness,
@@ -2268,16 +2270,8 @@ const createBakedBridgePlanesForLayer = (
     const tiltExtensionBridge = Math.min(0.4, Math.max(0.15, tiltExtensionSlotThickness * 0.08));
     const tiltExtensionHalfChannel = Math.max(0.12, (tiltExtensionSlotThickness - tiltExtensionBridge) / 2);
 
-    // Tilt plane gets dual-angle main cutters (240 + 120), so it needs a
-    // stronger compensation than base/cross to keep visible bridge width.
-    const uniformTiltBoost = Math.max(1.25, tiltMainSlotThickness * 0.35);
-    const uniformTiltAutoWidthExtra = 2.0;
-    const uniformTiltSafetyMargin = 0.55;
-    // Tilt bridges face dual-angle X-cut (240Ã‚Â° + 120Ã‚Â°), so boost thickness to survive both cutters
-    const tiltBridgeThicknessBoost = Math.max(1.8, tiltMainSlotThickness * 0.55);
-    const tiltBridgeThickness = tiltMainSlotThickness + tiltBridgeThicknessBoost;
-    // Center run is where the 240/120 cutters overlap the most, so bias extra there.
-    const tiltCenterCutCompBoost = Math.max(1.4, tiltMainSlotThickness * 0.4);
+    const tiltBridgeThickness = tiltMainSlotThickness;
+    const tiltCenterCutCompBoost = PAIRED_CUT_BRIDGE_WIDTH_BOOST;
     // Preserve a guaranteed empty hub zone on tilt bridges so no bridge bars
     // intrude into the center void.
     const tiltHubKeepout = Math.max(2.8, tiltMainSlotThickness * 0.9);
@@ -2294,8 +2288,8 @@ const createBakedBridgePlanesForLayer = (
       0,
       true,
       tiltCenterCutCompBoost,
-      uniformTiltAutoWidthExtra,
-      uniformTiltSafetyMargin,
+      AUTO_BRIDGE_WIDTH_EXTRA,
+      BRIDGE_WIDTH_SAFETY_MARGIN,
       true,
       true,
       tiltMainSlotThickness,
@@ -2310,9 +2304,9 @@ const createBakedBridgePlanesForLayer = (
       -armAngle,
       -((tiltExtensionBridge / 2) + (tiltExtensionHalfChannel / 2)),
       true,
-      uniformTiltBoost,
-      uniformTiltAutoWidthExtra,
-      uniformTiltSafetyMargin,
+      PAIRED_CUT_BRIDGE_WIDTH_BOOST,
+      AUTO_BRIDGE_WIDTH_EXTRA,
+      BRIDGE_WIDTH_SAFETY_MARGIN,
       true,
       true,
       tiltExtensionSlotThickness,
@@ -2327,9 +2321,9 @@ const createBakedBridgePlanesForLayer = (
       -armAngle,
       (tiltExtensionBridge / 2) + (tiltExtensionHalfChannel / 2),
       true,
-      uniformTiltBoost,
-      uniformTiltAutoWidthExtra,
-      uniformTiltSafetyMargin,
+      PAIRED_CUT_BRIDGE_WIDTH_BOOST,
+      AUTO_BRIDGE_WIDTH_EXTRA,
+      BRIDGE_WIDTH_SAFETY_MARGIN,
       true,
       true,
       tiltExtensionSlotThickness,
@@ -2633,10 +2627,25 @@ const applyWatertightSlotCuts = async (
 
       let exactFailure = describeTopologyFailure(`${layer.name} manifold-exact slot result`, exactOut);
       if (exactFailure) {
+        let repairDetail = exactFailure;
+        const surgicallyRepaired = surgicalSlotRepair(exactOut.clone());
+        const surgicalRepairFailure = describeTopologyFailure(
+          `${layer.name} surgically repaired manifold-exact slot result`,
+          surgicallyRepaired
+        );
+        if (!surgicalRepairFailure) {
+          exactOut.dispose();
+          exactOut = surgicallyRepaired;
+          exactFailure = null;
+        } else {
+          repairDetail = surgicalRepairFailure;
+          surgicallyRepaired.dispose();
+        }
+
         // Float32 conversion can open tiny seams that need a wider weld than
         // the normal manifold import tolerance.
-        let repairDetail = '';
         for (const baseWeldTolerance of [1e-5, 1e-4, 5e-4]) {
+          if (!exactFailure) break;
           let repaired: THREE_ACTUAL.BufferGeometry;
           try {
             repaired = await manifoldSubtract(exactOut, [], {
@@ -2660,8 +2669,10 @@ const applyWatertightSlotCuts = async (
           repaired.dispose();
         }
         if (exactFailure) {
-          exactOut.dispose();
-          throw new Error(`${exactFailure}; Manifold mesh repair failed: ${repairDetail}`);
+          exactOut.userData.slotTopologyWarning = `${exactFailure}; Manifold mesh repair failed: ${repairDetail}`;
+          console.warn(
+            `[slot-csg] ${exactFailure}; keeping the generated mesh for display/export with a slicer-repair warning`
+          );
         }
       }
       return exactOut;
@@ -4266,6 +4277,7 @@ const App: React.FC = () => {
   const slotCutInFlightRef = useRef<Map<string, Promise<THREE_ACTUAL.BufferGeometry>>>(new Map());
   const slotCutAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const slotCutIsPreviewRef = useRef<Map<string, boolean>>(new Map());
+  const slotTopologyWarningsRef = useRef(new Set<string>());
   const tiltLayerSnapshotRef = useRef<LayerConfig | null>(null);
   const tiltAutoManagedRef = useRef(false);
   const [isComputingSlots, setIsComputingSlots] = useState(false);
@@ -6330,8 +6342,17 @@ const App: React.FC = () => {
                 },
                 signal
               );
+              const topologyWarning = cut.userData?.slotTopologyWarning;
+              if (typeof topologyWarning === 'string' && !slotTopologyWarningsRef.current.has(slotCutKey)) {
+                slotTopologyWarningsRef.current.add(slotCutKey);
+                showNotification(
+                  `${layer.name} slot geometry is open. It will display and export, but you may need to repair the mesh in your slicer before printing.`,
+                  'warning',
+                  10000
+                );
+              }
               let cleanedCut = cut;
-              if (cleanedCut !== sourceGeo) {
+              if (cleanedCut !== sourceGeo && typeof topologyWarning !== 'string') {
                 try {
                   cleanedCut = await manifoldRemoveTinyComponents(cleanedCut);
                   if (cleanedCut !== cut) cut.dispose();

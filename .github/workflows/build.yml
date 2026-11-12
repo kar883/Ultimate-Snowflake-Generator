@@ -56,6 +56,43 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Rename Windows release artifacts
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        $version = node -p "require('./package.json').version"
+        $exe = Get-ChildItem dist-electron -Filter '*.exe' | Select-Object -First 1
+        $zip = Get-ChildItem dist-electron -Filter '*-win.zip' | Select-Object -First 1
+        if ($exe) { Rename-Item $exe.FullName "Snowflake-Generator-Windows-Installer-$version.exe" }
+        if ($zip) { Rename-Item $zip.FullName "Snowflake-Generator-Windows-Portable-$version.zip" }
+
+    - name: Rename macOS release artifacts
+      if: matrix.os == 'macos-latest'
+      shell: bash
+      run: |
+        VERSION=$(node -p "require('./package.json').version")
+        for file in dist-electron/*.dmg; do
+          [ -e "$file" ] && mv "$file" "dist-electron/Snowflake-Generator-macOS-Installer-${VERSION}.dmg"
+        done
+        for file in dist-electron/*-mac.zip; do
+          [ -e "$file" ] && mv "$file" "dist-electron/Snowflake-Generator-macOS-Portable-${VERSION}.zip"
+        done
+
+    - name: Rename Linux release artifacts
+      if: matrix.os == 'ubuntu-latest'
+      shell: bash
+      run: |
+        VERSION=$(node -p "require('./package.json').version")
+        for file in dist-electron/*.AppImage; do
+          [ -e "$file" ] && mv "$file" "dist-electron/Snowflake-Generator-Linux-Portable-${VERSION}.AppImage"
+        done
+        for file in dist-electron/*.deb; do
+          [ -e "$file" ] && mv "$file" "dist-electron/Snowflake-Generator-Linux-Installer-${VERSION}.deb"
+        done
+        for file in dist-electron/*.tar.gz; do
+          [ -e "$file" ] && mv "$file" "dist-electron/Snowflake-Generator-Linux-Portable-${VERSION}.tar.gz"
+        done
+
     - name: Upload artifacts
       uses: actions/upload-artifact@v5
       with:
@@ -85,13 +122,13 @@ jobs:
       run: |
         VERSION=$(node -p "require('./package.json').version")
         cd dist-web
-        zip -r "../Snowflake.Generator-${VERSION}-web.zip" .
+        zip -r "../Snowflake-Generator-Web-Portable-${VERSION}.zip" .
 
     - name: Upload web build
       uses: actions/upload-artifact@v5
       with:
         name: web-build
-        path: Snowflake.Generator-*-web.zip
+        path: Snowflake-Generator-Web-Portable-*.zip
 
   release:
     needs: [build, build-web]
@@ -109,14 +146,14 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          release-assets/**/*Setup*.exe
-          release-assets/**/*-win.zip
-          release-assets/**/*.dmg
-          release-assets/**/*-mac.zip
-          release-assets/**/*.AppImage
-          release-assets/**/*.deb
-          release-assets/**/*.tar.gz
-          release-assets/**/*-web.zip
+          release-assets/**/*Windows-Installer*.exe
+          release-assets/**/*Windows-Portable*.zip
+          release-assets/**/*macOS-Installer*.dmg
+          release-assets/**/*macOS-Portable*.zip
+          release-assets/**/*Linux-Portable*.AppImage
+          release-assets/**/*Linux-Installer*.deb
+          release-assets/**/*Linux-Portable*.tar.gz
+          release-assets/**/*Web-Portable*.zip
           !release-assets/**/*.blockmap
           !release-assets/**/builder-debug.yml
           !release-assets/**/builder-effective-config.yaml
