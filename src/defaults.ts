@@ -105,7 +105,13 @@ export const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isE
   slotWidthTiltExtensionOffset: 0,
   protectMatingClearance: true,
   slotBridges: [],
-  images: []
+  images: [],
+  hangingRing: {
+    enabled: false,
+    x: 0,
+    y: 0,
+    radius: 6,
+  }
 });
 
 // Default Global Configuration - matches original App.tsx initialState

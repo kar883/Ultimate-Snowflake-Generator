@@ -112,6 +112,13 @@ export interface ImageConfig {
   layoutMode?: 'radial' | 'centered';
 }
 
+export interface HangingRingConfig {
+  enabled: boolean;
+  x: number;
+  y: number;
+  radius: number;
+}
+
 export const createDefaultImage = (
   id: string,
   name: string,
@@ -190,6 +197,7 @@ export interface LayerConfig {
   protectMatingClearance?: boolean;
   slotBridges?: SlotBridgeConfig[];
   images: ImageConfig[];
+  hangingRing?: HangingRingConfig;
 }
 
 export type DesignQuality = 'low' | 'med' | 'high';

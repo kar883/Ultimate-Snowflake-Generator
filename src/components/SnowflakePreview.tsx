@@ -10,6 +10,7 @@ import { useSvgRotationWorker } from '../hooks/useSvgRotationWorker';
 import { useTranslation } from '../translations';
 import { fontPreloader } from '../utils/fontPreloader';
 import { getAdjustedGlyphPathCommands, makePathFromCommands } from '../utils/textControl';
+import { DeferredNumberInput } from './ControlPanel';
 
 // Helper function to get translated description
 const getDescription = (key: string, t?: (key: string) => string): string => {
@@ -47,6 +48,7 @@ interface SnowflakePreviewProps {
   syncAllLayers?: boolean;
   highlightActivePlaneOnly?: boolean;
   backgroundColor?: string;
+  onUpdateConfig?: (updates: Partial<SnowflakeConfig>, commitTo3D?: boolean) => void;
 }
 
 const seededRandom = (seed: number) => {
@@ -67,7 +69,7 @@ const getLayerTextGroups = (layer: LayerConfig): TextGroupConfig[] => {
 };
 
 const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
-  config, globalColor, globalBevel, globalBevelAmount, globalThickness, slotEnabled, slotLength, slotWidth, svgRef, dynamicFonts, undo, redo, canUndo, canRedo, calculatedDiameter, shortcuts, fontsPreloaded, activeLayerId, syncAllLayers = true, highlightActivePlaneOnly = false, backgroundColor = '#020617'
+  config, globalColor, globalBevel, globalBevelAmount, globalThickness, slotEnabled, slotLength, slotWidth, svgRef, dynamicFonts, undo, redo, canUndo, canRedo, calculatedDiameter, shortcuts, fontsPreloaded, activeLayerId, syncAllLayers = true, highlightActivePlaneOnly = false, backgroundColor = '#020617', onUpdateConfig
 }) => {
   const { t } = useTranslation(config.language || 'en');
   // Use a ref for the font cache so loading a font never triggers an infinite
@@ -99,6 +101,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   const [isGeneratingSvg, setIsGeneratingSvg] = useState(false);
   const [initialPreviewReady, setInitialPreviewReady] = useState(false);
   const [measurementsVisible, setMeasurementsVisible] = useState(true);
+  const ringDrag = useRef<{ layerId: string; startX: number; startY: number; originX: number; originY: number; rotation: number } | null>(null);
 
   // SVG rotation worker disabled for performance - using simple CSS transform instead
   // const { rotatedPaths, isRotating, rotateSvg } = useSvgRotationWorker();
@@ -290,6 +293,23 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
+    if (ringDrag.current && onUpdateConfig) {
+      const { layerId, startX, startY, originX, originY, rotation } = ringDrag.current;
+      const scale = Math.max(0.1, viewTransform.scale * inPlaneScale);
+      const screenX = (e.clientX - startX) / scale;
+      const screenY = (e.clientY - startY) / scale;
+      const angle = (rotation * Math.PI) / 180;
+      const unrotatedX = Math.cos(angle) * screenX + Math.sin(angle) * screenY;
+      const unrotatedY = -Math.sin(angle) * screenX + Math.cos(angle) * screenY;
+      const nextX = originX + unrotatedX;
+      const nextY = originY - unrotatedY;
+      onUpdateConfig({
+        layers: config.layers.map((layer) => layer.id === layerId
+          ? { ...layer, hangingRing: { ...(layer.hangingRing ?? { enabled: true, x: 0, y: 0, radius: 6 }), x: nextX, y: nextY } }
+          : layer),
+      });
+      return;
+    }
     if (!isDragging.current) return;
     hasUserInteracted.current = true;
     const dx = e.clientX - lastPos.current.x;
@@ -299,6 +319,13 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   };
 
   const handleMouseUp = () => {
+    if (ringDrag.current && onUpdateConfig) {
+      const { layerId } = ringDrag.current;
+      onUpdateConfig({
+        layers: config.layers.map((layer) => layer.id === layerId ? { ...layer } : layer),
+      }, true);
+    }
+    ringDrag.current = null;
     isDragging.current = false;
   };
 
@@ -828,24 +855,93 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
     >
-      <div className="absolute top-4 left-4 z-20">
-        <button
-          type="button"
-          onMouseDown={(event) => event.stopPropagation()}
-          onClick={() => setMeasurementsVisible((visible) => !visible)}
-          aria-pressed={measurementsVisible}
-          aria-label={`${t('Measurements')} ${measurementsVisible ? t('ON') : t('OFF')}`}
-          className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold shadow-lg backdrop-blur transition-colors ${
-            measurementsVisible
-              ? 'border-sky-400/40 bg-slate-900/80 text-sky-200 hover:bg-slate-800'
-              : 'border-white/10 bg-slate-900/80 text-slate-400 hover:bg-slate-800'
-          }`}
+      <div className="absolute top-4 left-4 z-20 flex items-center gap-2">
+        <InfoTooltip
+          label={t('Measurements')}
+          description="Show or hide the 2D model dimensions."
+          placement="bottom"
         >
-          <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 4v16m0 0H4m2 0h2M4 6l2-2 2 2M10 18h10m0 0v-2m0 2v2m0-4 2 2-2 2" />
-          </svg>
-          {t('Measurements')} {measurementsVisible ? t('ON') : t('OFF')}
-        </button>
+          <button
+            type="button"
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={() => setMeasurementsVisible((visible) => !visible)}
+            aria-pressed={measurementsVisible}
+            aria-label={`${t('Measurements')} ${measurementsVisible ? t('ON') : t('OFF')}`}
+            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold shadow-lg backdrop-blur transition-colors ${
+              measurementsVisible
+                ? 'border-sky-400/40 bg-slate-900/80 text-sky-200 hover:bg-slate-800'
+                : 'border-white/10 bg-slate-900/80 text-slate-400 hover:bg-slate-800'
+            }`}
+          >
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 4v16m0 0H4m2 0h2M4 6l2-2 2 2M10 18h10m0 0v-2m0 2v2m0-4 2 2-2 2" />
+            </svg>
+            {t('Measurements')} {measurementsVisible ? t('ON') : t('OFF')}
+          </button>
+        </InfoTooltip>
+        <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-slate-900/80 px-3 py-2 text-xs font-bold text-slate-300 shadow-lg backdrop-blur">
+          <InfoTooltip
+            label="Hanging ring"
+            description="Toggle the ring for the active plane. When enabled, drag the green ring in the 2D preview to position it."
+            placement="bottom"
+          >
+            <button
+              type="button"
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={() => {
+                const layer = config.layers[config.activeLayerIndex];
+                if (!layer || !onUpdateConfig) return;
+                const current = layer.hangingRing ?? { enabled: false, x: 0, y: 0, radius: 6 };
+                onUpdateConfig({
+                  layers: config.layers.map((candidate, index) => index === config.activeLayerIndex
+                    ? { ...candidate, hangingRing: { ...current, enabled: !current.enabled } }
+                    : candidate),
+                });
+              }}
+              className={`rounded border px-2 py-1 transition-colors ${config.layers[config.activeLayerIndex]?.hangingRing?.enabled
+                ? 'border-amber-400/50 text-amber-200 hover:bg-slate-800'
+                : 'border-white/10 text-slate-400 hover:bg-slate-800'}`}
+              aria-pressed={config.layers[config.activeLayerIndex]?.hangingRing?.enabled ?? false}
+            >
+              Hanging ring {config.layers[config.activeLayerIndex]?.hangingRing?.enabled ? 'ON' : 'OFF'}
+            </button>
+          </InfoTooltip>
+          {config.layers[config.activeLayerIndex]?.hangingRing?.enabled && (
+            <label className="flex items-center gap-2" title="Drag the ring in the 2D preview to position it">
+              <DeferredNumberInput
+                value={2 * (config.layers[config.activeLayerIndex].hangingRing?.radius ?? 6)}
+                min={6}
+                max={40}
+                step={1}
+                suffix="mm"
+                onChange={(outerDiameter) => {
+                  if (!onUpdateConfig) return;
+                  onUpdateConfig({
+                    layers: config.layers.map((candidate, index) => index === config.activeLayerIndex
+                      ? { ...candidate, hangingRing: { ...(candidate.hangingRing ?? { enabled: true, x: 0, y: 0, radius: 6 }), radius: outerDiameter / 2 } }
+                      : candidate),
+                  });
+                }}
+              />
+              <span className="flex items-center whitespace-nowrap text-[10px] font-semibold text-slate-400">
+                <InfoTooltip label="Inner diameter" description="The diameter of the opening through the hanging ring." placement="bottom" className="inline-flex">
+                  <span>ID {(
+                    2 * (
+                      (config.layers[config.activeLayerIndex].hangingRing?.radius ?? 6)
+                      - Math.max(0.8, Math.min(2.5, (config.layers[config.activeLayerIndex].hangingRing?.radius ?? 6) * 0.25))
+                    )
+                  ).toFixed(1)} mm</span>
+                </InfoTooltip>
+                <span className="mx-1">·</span>
+                <InfoTooltip label="Outer diameter" description="The diameter measured across the outside edge of the hanging ring." placement="bottom" className="inline-flex">
+                  <span>OD {(
+                    2 * (config.layers[config.activeLayerIndex].hangingRing?.radius ?? 6)
+                  ).toFixed(1)} mm</span>
+                </InfoTooltip>
+              </span>
+            </label>
+          )}
+        </div>
       </div>
       <svg width="100%" height="100%" className="cursor-move" ref={svgRef}>
         <pattern id="grid" width="100" height="100" patternUnits="userSpaceOnUse">
@@ -926,6 +1022,30 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
                         }}
                       >
                         {renderHubs(layer.hubs, layerColor)}
+                        {layer.hangingRing?.enabled && (
+                          <circle
+                            cx={layer.hangingRing.x}
+                            cy={layer.hangingRing.y}
+                            r={layer.hangingRing.radius}
+                            fill="none"
+                            stroke="#22c55e"
+                            strokeWidth={Math.max(1.5, Math.min(4, layer.hangingRing.radius * 0.45))}
+                            className="cursor-grab"
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              ringDrag.current = {
+                                layerId: layer.id,
+                                startX: event.clientX,
+                                startY: event.clientY,
+                                originX: layer.hangingRing?.x ?? 0,
+                                originY: layer.hangingRing?.y ?? 0,
+                                rotation: zRotation,
+                              };
+                            }}
+                            aria-label={`${layer.name} hanging ring`}
+                          />
+                        )}
                         {renderImages(layer.images || [], layerColor)}
                         {renderAbstracts(layer.abstracts, layerColor)}
                         {getLayerTextGroups(layer).map((group, index) => (

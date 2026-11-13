@@ -4,12 +4,12 @@
 
 ## Download
 - Web app: [Open in your browser](https://kar883.github.io/Ultimate-Snowflake-Generator/)
-- Windows installer: [Snowflake-Generator-Windows-Installer-1.1.5.exe](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.5/Snowflake-Generator-Windows-Installer-1.1.5.exe)
-- Windows portable: [Snowflake-Generator-Windows-Portable-1.1.5.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.5/Snowflake-Generator-Windows-Portable-1.1.5.zip)
-- macOS installer: [Snowflake-Generator-macOS-Installer-1.1.5.dmg](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.5/Snowflake-Generator-macOS-Installer-1.1.5.dmg)
-- macOS portable: [Snowflake-Generator-macOS-Portable-1.1.5.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.5/Snowflake-Generator-macOS-Portable-1.1.5.zip)
-- Linux portable: [Snowflake-Generator-Linux-Portable-1.1.5.AppImage](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.5/Snowflake-Generator-Linux-Portable-1.1.5.AppImage)
-- Linux installer: [Snowflake-Generator-Linux-Installer-1.1.5.deb](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.5/Snowflake-Generator-Linux-Installer-1.1.5.deb)
+- Windows installer: [Snowflake-Generator-Windows-Installer-1.1.6.exe](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.6/Snowflake-Generator-Windows-Installer-1.1.6.exe)
+- Windows portable: [Snowflake-Generator-Windows-Portable-1.1.6.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.6/Snowflake-Generator-Windows-Portable-1.1.6.zip)
+- macOS installer: [Snowflake-Generator-macOS-Installer-1.1.6.dmg](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.6/Snowflake-Generator-macOS-Installer-1.1.6.dmg)
+- macOS portable: [Snowflake-Generator-macOS-Portable-1.1.6.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.6/Snowflake-Generator-macOS-Portable-1.1.6.zip)
+- Linux portable: [Snowflake-Generator-Linux-Portable-1.1.6.AppImage](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.6/Snowflake-Generator-Linux-Portable-1.1.6.AppImage)
+- Linux installer: [Snowflake-Generator-Linux-Installer-1.1.6.deb](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.6/Snowflake-Generator-Linux-Installer-1.1.6.deb)
 - All release assets: [GitHub Releases](https://github.com/kar883/Ultimate-Snowflake-Generator/releases)
 
 The web edition runs in your browser; your projects and preferences remain in that browser unless you export or share them. No account or app-hosted project storage is required. GitHub Pages must be enabled for this repository before the web link is available.
@@ -28,6 +28,7 @@ Inspired by [Jexom's OpenSCAD snowflake](https://www.thingiverse.com/thing:27022
 - Create designs/snowflakes from repeating text, per-letter adjustments, hubs, oscillating outlines, abstract patterns and fractals, and imported SVG artwork. SVG artwork can be repeated radially or placed once in the center.
 - Build one-, two-, or three-plane designs using Base, Cross, and Tilt planes. Choose whether edits apply to all planes or only the active plane.
 - Cut assembly slots in 2-plane or 3-plane mode. Optional slot bridges can help keep pieces connected; they can be disabled. **Slots work best with even arm counts.** With an odd number of arms, the planes may not interlock or remain connected as reliably; the app warns when you enable slots for an odd-arm design.
+- Add a hanging ring to any plane from the 2D preview. Toggle it on for the active plane, adjust its size using the inner/outer diameter readout in mm, and drag the green ring into position; it is included in that plane’s 3D extrusion and exports.
 - Preview designs in 2D and 3D, inspect disconnected bodies, and adjust global geometry and appearance settings.
 - Export combined or individual planes as STL or 3MF, batch-export planes, and export 2D artwork as SVG or DXF. Save and load project JSON files.
 - Automatic export estimation (file size, triangle count, export time) and warnings for potential issues (disconnected bodies).
@@ -59,6 +60,7 @@ Use the **Settings** button in the app header to open the basic or advanced gett
 
 ## Tips
 - Start with simple text and 1 plane to get familiar, then explore more complex features.
+- To add a hanging ring, switch to the 2D view, select the target plane, turn on **Hanging ring**, adjust the diameter slider, and drag the green ring onto the desired arm. The ring position is saved with the plane.
 - Do most of your modeling in the 2D view to keep things fast and turn off "auto regenerate 3D" for faster editing. With auto regeneration off, use the 3D viewer's force-refresh button to rebuild from the latest settings, including slot and plane changes. Turn auto regeneration back on for real-time updates.
 - Use **ID Bodies** in the 3D preview to inspect disconnected bodies before exporting for 3D printing. A connectivity warning does not necessarily mean slots caused the separation.
 - Fillets and chamfers on existing model edges are retained when slots are cut. Newly cut slot edges remain sharp to preserve the mating clearance.

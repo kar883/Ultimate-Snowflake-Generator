@@ -226,6 +226,8 @@ const STEPS: TutorialStep[] = [
     activate: '[data-tutorial="view-3d"]',
     details: [
       'Planes card: ON/OFF hides or shows a plane; Ghost makes it transparent. These are preview-only.',
+      'Hanging ring: in the top-left of the 2D preview, toggle the ring for the active plane. When enabled, use the slider to change its size; the control shows the inner and outer diameters in mm.',
+      'Drag the green hanging ring directly on the 2D model to position it. The ring is included in that plane’s 3D extrusion and exports.',
       'ID Bodies checks for disconnected pieces: green means connected; red highlights loose parts.',
       'Orbit by dragging or using the orientation gizmo; click an axis to snap to a view. Home resets the camera.',
       'Force refresh rebuilds the model. Auto Regen controls automatic rebuilds; Undo / Redo are at the bottom left.',

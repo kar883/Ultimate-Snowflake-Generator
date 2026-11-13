@@ -1169,7 +1169,7 @@ interface DeferredNumberInputProps {
   suffix?: string;
 }
 
-const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, max, step, onChange, className, disabled, suffix }) => {
+export const DeferredNumberInput: React.FC<DeferredNumberInputProps> = ({ value, min, max, step, onChange, className, disabled, suffix }) => {
   const decimals = step < 1 ? (step < 0.1 ? 2 : 1) : 0;
   const safeValue = typeof value === 'number' && !isNaN(value) ? value : (min || 0);
 

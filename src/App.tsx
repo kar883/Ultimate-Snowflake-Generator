@@ -52,12 +52,12 @@ import { getHubOutlinePoints } from './utils/hubGeometry';
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, /*makeSlotKey,*/ getOrCreateGeometry, clearGeometryCache, modelCache3D, modelCache2D, hashConfig, /*slotCutCache,*/ makeUnderlineKey } from './geometryCache';
 
 const MAX_HISTORY = 50;
-const APP_VERSION = '1.1.5';
+const APP_VERSION = '1.1.6';
 const hubFilletInfoCache = new Map<string, { applied: number; by: 'depth' | 'wall' | null }>();
 const APP_DEBUG = false;
 // Bump when mesh generation logic changes (slot geometry, CSG sequencing, etc.)
 // so cached groups from older algorithms are not reused.
-const GEOMETRY_ALGO_VERSION = 'slot-2026-11-11-centered-profile-cross-tip-in-flipped-blade';
+const GEOMETRY_ALGO_VERSION = 'slot-2026-11-11-centered-profile-cross-tip-in-flipped-blade-ring';
 // Feature-flagged slot strategy: build slot openings in profile space and extrude once.
 const ENABLE_BAKED_PROFILE_SLOT_PATH = true;
 const DEFAULT_BAKED_PROFILE_SLOT_ENABLED = true;
@@ -4622,6 +4622,11 @@ const App: React.FC = () => {
         const bevelPadding = config.bevelEnabled ? config.bevelAmount : 0;
 
         for (const layer of enabledLayers) {
+            if (layer.hangingRing?.enabled) {
+                const ringRadius = Math.max(3, Math.min(20, layer.hangingRing.radius));
+                const ringDistance = Math.hypot(layer.hangingRing.x, layer.hangingRing.y) + ringRadius + bevelPadding;
+                if (ringDistance > maxR) maxR = ringDistance;
+            }
             // Hubs
             for (const h of layer.hubs) {
                 if (h.enabled) {
@@ -5334,6 +5339,7 @@ const App: React.FC = () => {
       hubs: layer.hubs,
       abstracts: layer.abstracts,
       images: layer.images,
+      hangingRing: layer.hangingRing,
       slotLengthAdjustment: layer.slotLengthAdjustment,
       slotWidthOffset: layer.slotWidthOffset,
       slotManualWidthEnabled: layer.slotManualWidthEnabled,
@@ -6288,6 +6294,28 @@ const App: React.FC = () => {
       }
       await processHubs(layer.hubs);
       processAbstracts(layer.abstracts);
+      if (layer.hangingRing?.enabled) {
+        const ringRadius = Math.max(3, Math.min(20, layer.hangingRing.radius));
+        const ringTubeRadius = Math.max(0.8, Math.min(2.5, ringRadius * 0.25));
+        const ringPlaneRotation = config.slotEnabled && slotContextIndex === 0 ? Math.PI : 0;
+        const ringX = layer.hangingRing.x * Math.cos(ringPlaneRotation) - layer.hangingRing.y * Math.sin(ringPlaneRotation);
+        const ringY = layer.hangingRing.x * Math.sin(ringPlaneRotation) + layer.hangingRing.y * Math.cos(ringPlaneRotation);
+        const ringShape = new THREE_ACTUAL.Shape();
+        ringShape.absarc(0, 0, ringRadius, 0, Math.PI * 2, false);
+        const ringHole = new THREE_ACTUAL.Path();
+        ringHole.absarc(0, 0, Math.max(0.5, ringRadius - ringTubeRadius), 0, Math.PI * 2, true);
+        ringShape.holes.push(ringHole);
+        const ringGeo = new THREE_ACTUAL.ExtrudeGeometry(ringShape, extrudeSettings);
+        ringGeo.translate(ringX, ringY, -effectiveDepth / 2);
+        layerGeometries.push(ringGeo);
+        addShapeInstances(
+          [ringShape],
+          composeMatrix2D(
+            makeTranslationMatrix2D(layer.hangingRing.x, layer.hangingRing.y),
+            makeRotationMatrix2D(ringPlaneRotation),
+          ),
+        );
+      }
 
       await updateProgress();
 
@@ -8833,7 +8861,7 @@ const App: React.FC = () => {
 
   return (
         <div
-          className={`flex flex-col h-screen text-white overflow-hidden font-sans selection:bg-sky-500/30 ${appearance.reduceMotion ? 'appearance-reduce-motion' : ''} ${appearance.highContrast ? 'appearance-high-contrast' : ''}`}
+          className={`app-root flex flex-col h-screen text-white overflow-hidden font-sans selection:bg-sky-500/30 ${appearance.reduceMotion ? 'appearance-reduce-motion' : ''} ${appearance.highContrast ? 'appearance-high-contrast' : ''}`}
           style={{
             backgroundColor: appearance.backgroundColor,
             '--app-panel-color': appearance.panelColor,
@@ -8881,6 +8909,9 @@ const App: React.FC = () => {
             <div className="app-main flex-1 min-h-0 flex overflow-hidden">
                 {/* Control Panel */}
               <div data-tutorial="panel" className="appearance-panel control-panel-shell w-[420px] flex flex-col border-r border-white/10 backdrop-blur-sm shrink-0 z-40">
+                    <div className="mobile-panel-grab hidden" aria-hidden="true">
+                      <span />
+                    </div>
                     <ControlPanel
                         hubBevelLimit={hubBevelLimit}
                         config={config}
@@ -8958,6 +8989,7 @@ const App: React.FC = () => {
                             syncAllLayers={config.syncAllLayers}
                             highlightActivePlaneOnly={config.highlightActivePlaneOnly}
                             backgroundColor={appearance.backgroundColor}
+                            onUpdateConfig={handleUpdateConfig}
                         />
                     </div>
                     <div className={`absolute inset-0 w-full h-full transition-opacity duration-300 ${viewMode === '3d' ? 'opacity-100 z-10' : 'opacity-0 z-0'}`}>
