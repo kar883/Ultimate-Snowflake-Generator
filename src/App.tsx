@@ -4110,6 +4110,18 @@ const App: React.FC = () => {
 
   const [exportLoading, setExportLoading] = useState(false);
   const [exportLoadingKey, setExportLoadingKey] = useState<string | null>(null);
+  const exportRunSeqRef = useRef(0);
+  const beginExport = useCallback((key: string) => {
+    const runSeq = ++exportRunSeqRef.current;
+    setExportLoading(true);
+    setExportLoadingKey(key);
+    return runSeq;
+  }, []);
+  const finishExport = useCallback((runSeq: number) => {
+    if (runSeq !== exportRunSeqRef.current) return;
+    setExportLoading(false);
+    setExportLoadingKey(null);
+  }, []);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiProgress, setAiProgress] = useState(0);
   const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d');
@@ -7364,8 +7376,7 @@ const App: React.FC = () => {
     }
 
     const actionStart = performance.now();
-    setExportLoading(true);
-    setExportLoadingKey('combined-stl');
+    const exportRunSeq = beginExport('combined-stl');
     try {
         const qualityToUse = quality || config.quality;
         const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
@@ -7389,8 +7400,7 @@ const App: React.FC = () => {
       console.error("Export Failed", e);
       handleError(e, 'STL Export');
     } finally {
-      setExportLoading(false);
-      setExportLoadingKey(null);
+      finishExport(exportRunSeq);
     }
   };
 
@@ -7405,8 +7415,7 @@ const App: React.FC = () => {
     }
 
     const actionStart = performance.now();
-    setExportLoading(true);
-    setExportLoadingKey('combined-3mf');
+    const exportRunSeq = beginExport('combined-3mf');
     try {
       const qualityToUse = quality || config.quality;
       const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
@@ -7429,8 +7438,7 @@ const App: React.FC = () => {
       console.error("Export Failed", e);
       handleError(e, '3MF Export');
     } finally {
-      setExportLoading(false);
-      setExportLoadingKey(null);
+      finishExport(exportRunSeq);
     }
   };
 
@@ -7446,8 +7454,7 @@ const App: React.FC = () => {
     }
 
     const actionStart = performance.now();
-    setExportLoading(true);
-    setExportLoadingKey(`layer-${layerIndex}`);
+    const exportRunSeq = beginExport(`layer-${layerIndex}`);
     try {
         const qualityToUse = quality || config.quality;
         const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
@@ -7473,8 +7480,7 @@ const App: React.FC = () => {
       console.error(e);
       handleError(e, 'Layer STL Export');
     } finally {
-      setExportLoading(false);
-      setExportLoadingKey(null);
+      finishExport(exportRunSeq);
     }
   };
 
@@ -7490,8 +7496,7 @@ const App: React.FC = () => {
     }
 
     const actionStart = performance.now();
-    setExportLoading(true);
-    setExportLoadingKey(`layer-${layerIndex}`);
+    const exportRunSeq = beginExport(`layer-${layerIndex}`);
     try {
       const qualityToUse = quality || config.quality;
       const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
@@ -7516,14 +7521,12 @@ const App: React.FC = () => {
       console.error(e);
       handleError(e, 'Layer 3MF Export');
     } finally {
-      setExportLoading(false);
-      setExportLoadingKey(null);
+      finishExport(exportRunSeq);
     }
   };
 
   const handleExportAllLayersZip = async (quality?: DesignQuality) => {
-      setExportLoading(true);
-      setExportLoadingKey('all-zip');
+      const exportRunSeq = beginExport('all-zip');
       try {
         const qualityToUse = quality || config.quality;
         const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
@@ -7573,8 +7576,7 @@ const App: React.FC = () => {
         console.error(e);
         handleError(e, 'ZIP Export');
       } finally {
-        setExportLoading(false);
-        setExportLoadingKey(null);
+        finishExport(exportRunSeq);
       }
   };
 
@@ -7593,8 +7595,7 @@ const App: React.FC = () => {
     }
 
     const actionStart = performance.now();
-    setExportLoading(true);
-    setExportLoadingKey('layers-batch-stl');
+    const exportRunSeq = beginExport('layers-batch-stl');
     try {
       const qualityToUse = quality || config.quality;
       const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
@@ -7634,8 +7635,7 @@ const App: React.FC = () => {
       console.error(e);
       handleError(e, 'Selected STL Export');
     } finally {
-      setExportLoading(false);
-      setExportLoadingKey(null);
+      finishExport(exportRunSeq);
     }
   };
 
@@ -7654,8 +7654,7 @@ const App: React.FC = () => {
     }
 
     const actionStart = performance.now();
-    setExportLoading(true);
-    setExportLoadingKey('layers-batch-3mf');
+    const exportRunSeq = beginExport('layers-batch-3mf');
     try {
       const qualityToUse = quality || config.quality;
       const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
@@ -7694,14 +7693,12 @@ const App: React.FC = () => {
       console.error(e);
       handleError(e, 'Selected 3MF Export');
     } finally {
-      setExportLoading(false);
-      setExportLoadingKey(null);
+      finishExport(exportRunSeq);
     }
   };
 
   const handleExport2D = async (layerIndex: number, format: 'svg' | 'dxf') => {
-    setExportLoading(true);
-    setExportLoadingKey(`layer-${layerIndex}`);
+    const exportRunSeq = beginExport(`layer-${layerIndex}`);
     try {
       const layer = config.layers[layerIndex];
       if (!layer) {
@@ -7848,8 +7845,7 @@ const App: React.FC = () => {
       console.error(e);
       handleError(e, '2D Export');
     } finally {
-      setExportLoading(false);
-      setExportLoadingKey(null);
+      finishExport(exportRunSeq);
     }
   };
 
@@ -8046,11 +8042,17 @@ const App: React.FC = () => {
               slotBridges: getClearanceProtectedBridges(normalizedLayer, slotThickness),
             };
           }),
-          projectName: fileName || (typeof loaded.projectName === 'string' ? loaded.projectName : factory.projectName),
+          projectName: typeof loaded.projectName === 'string' && loaded.projectName.trim()
+            ? loaded.projectName
+            : fileName || factory.projectName,
           highlightActivePlaneOnly: typeof loaded.highlightActivePlaneOnly === 'boolean'
             ? loaded.highlightActivePlaneOnly
             : false,
         };
+        exportRunSeqRef.current += 1;
+        setExportLoading(false);
+        setExportLoadingKey(null);
+        emergencyStopAllProcessing();
         cancelPending3DUpdates();
         tiltAutoManagedRef.current = false;
         tiltLayerSnapshotRef.current = null;
