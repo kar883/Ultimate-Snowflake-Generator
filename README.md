@@ -22,7 +22,7 @@ These proof-of-concept prints show assembled snowflakes created with the generat
 ![Finished snowflake 4](Pictures/Snowflake%204.jpg)
 ![Finished snowflake 5](Pictures/Snowflake%205.jpg)
 
-The web edition runs in your browser; your projects and preferences remain in that browser unless you export or share them. No account or app-hosted project storage is required. GitHub Pages must be enabled for this repository before the web link is available.
+The web edition runs in your browser; your projects and preferences remain in that browser unless you export or share them. No account or app-hosted project storage is required.
 
 ### Windows security warning
 The installer isn't code-signed, so Windows SmartScreen may show "Windows protected your PC" when you run it. This is expected for unsigned apps. To continue, click **More info**, then **Run anyway**. You can review the source code in this repository, or use the Windows ZIP version if you prefer not to run an installer.
@@ -42,6 +42,14 @@ Inspired by [Jexom's OpenSCAD snowflake](https://www.thingiverse.com/thing:27022
 - Preview designs in 2D and 3D, inspect disconnected bodies, and adjust global geometry and appearance settings.
 - Export combined or individual planes as STL or 3MF, batch-export planes, and export 2D artwork as SVG or DXF. Save and load project JSON files.
 - Automatic export estimation (file size, triangle count, export time) and warnings for potential issues (disconnected bodies).
+
+## Assembly
+
+Test-fit the printed planes before applying adhesive. For a three-plane snowflake, assemble the **Base** plane first, then slide in the **Cross** plane, followed by the **Tilt** plane. Align each plane with its matching slots and press the pieces together gently; do not force a misaligned joint.
+
+Assembly order pictures will be added here in a future update.
+
+If the fit is a little loose, a few drops of super glue at the joints can hold the assembled snowflake together nicely. Let the glue set fully before handling or hanging the finished piece. You can also adjust the slot tolerance in the **Planes** tab and re-export the planes for a tighter or looser fit.
 
 ## Tutorials
 Use the **Settings** button in the app header to open the basic or advanced getting-started tutorial. The advanced walkthrough explains the options in the control-panel tabs and key app settings.

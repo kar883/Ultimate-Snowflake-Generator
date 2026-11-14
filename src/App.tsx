@@ -5504,6 +5504,8 @@ const App: React.FC = () => {
       const extrudeSettings = slotUsesBeveledSolids
         ? { ...baseExtrudeSettings, depth: effectiveDepth - 2 * slotBevelThickness, bevelThickness: slotBevelThickness }
         : baseExtrudeSettings;
+      let maxLayerBevelThickness = extrudeSettings.bevelEnabled ? extrudeSettings.bevelThickness : 0;
+      let maxLayerBevelSize = extrudeSettings.bevelEnabled ? extrudeSettings.bevelSize : 0;
       const layerGeometries: THREE_ACTUAL.BufferGeometry[] = [];
       const scaleIndependentGeometries = new Set<THREE_ACTUAL.BufferGeometry>();
       const layerShapeInstances: ShapeInstance2D[] = [];
@@ -5597,6 +5599,8 @@ const App: React.FC = () => {
           ? 1
           : Math.min(3, Math.max(2, bevelSegCap)),
       };
+      maxLayerBevelThickness = Math.max(maxLayerBevelThickness, textExtrudeSettings.bevelThickness);
+      maxLayerBevelSize = Math.max(maxLayerBevelSize, textExtrudeSettings.bevelSize);
       if (slotUsesBeveledSolids) {
         textExtrudeSettings.depth = effectiveDepth - 2 * textExtrudeSettings.bevelThickness;
       }
@@ -6339,8 +6343,17 @@ const App: React.FC = () => {
         const ringHole = new THREE_ACTUAL.Path();
         ringHole.absarc(0, 0, Math.max(0.5, ringRadius - ringTubeRadius), 0, Math.PI * 2, true);
         ringShape.holes.push(ringHole);
-        const ringGeo = new THREE_ACTUAL.ExtrudeGeometry(ringShape, extrudeSettings);
-        ringGeo.translate(layer.hangingRing.x, layer.hangingRing.y, -effectiveDepth / 2);
+        const ringExtrudeSettings = {
+          ...extrudeSettings,
+          bevelEnabled: maxLayerBevelThickness > 1e-5,
+          depth: slotUsesBeveledSolids
+            ? Math.max(0.001, effectiveDepth - 2 * maxLayerBevelThickness)
+            : extrudeSettings.depth,
+          bevelThickness: maxLayerBevelThickness,
+          bevelSize: maxLayerBevelSize,
+        };
+        const ringGeo = new THREE_ACTUAL.ExtrudeGeometry(ringShape, ringExtrudeSettings);
+        ringGeo.translate(layer.hangingRing.x, layer.hangingRing.y, -ringExtrudeSettings.depth / 2);
         layerGeometries.push(ringGeo);
         scaleIndependentGeometries.add(ringGeo);
         addShapeInstances(

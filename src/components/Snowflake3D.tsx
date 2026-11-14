@@ -1976,8 +1976,9 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   // ── Three.js scene (runs once) ───────────────────────────────────────────
   useEffect(() => {
     if (!containerRef.current) return;
-    const w = containerRef.current.clientWidth;
-    const h = containerRef.current.clientHeight;
+    const container = containerRef.current;
+    const w = Math.max(1, container.clientWidth);
+    const h = Math.max(1, container.clientHeight);
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(backgroundColor);
@@ -1988,9 +1989,11 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     camera.lookAt(0, 0, 0);
     cameraRef.current = camera;
 
+    let animationFrame = 0;
+    let renderFailed = false;
     const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     renderer.setSize(w, h);
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 0.78;
     renderer.setClearColor(backgroundColor, 1);
@@ -2001,7 +2004,19 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
       width: '100%', height: '100%', display: 'block',
       position: 'absolute', top: '0', left: '0',
     });
-    containerRef.current.appendChild(renderer.domElement);
+    container.appendChild(renderer.domElement);
+
+    const onContextLost = (event: Event) => {
+      event.preventDefault();
+      setGenerationError('The 3D graphics context was lost. Click Retry 3D generation to restore the preview.');
+    };
+    const onContextRestored = () => {
+      renderFailed = false;
+      setGenerationError(null);
+      resizeRenderer();
+    };
+    renderer.domElement.addEventListener('webglcontextlost', onContextLost, false);
+    renderer.domElement.addEventListener('webglcontextrestored', onContextRestored, false);
 
     // ── Three-point studio lighting ──────────────────────────────────────────
     // Designed for a flat snowflake ornament viewed mostly face-on.
@@ -2047,11 +2062,17 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     controlsRef.current = controls;
 
     const animate = () => {
-      requestAnimationFrame(animate);
+      animationFrame = requestAnimationFrame(animate);
       if (!isVisibleRef.current) return;
       controls.update();
-      if (rendererRef.current && sceneRef.current && cameraRef.current) {
-        rendererRef.current.render(sceneRef.current, cameraRef.current);
+      if (!renderFailed && rendererRef.current && sceneRef.current && cameraRef.current) {
+        try {
+          rendererRef.current.render(sceneRef.current, cameraRef.current);
+        } catch (error) {
+          renderFailed = true;
+          console.error('Snowflake3D: render failed', error);
+          setGenerationError('The 3D preview could not render. Click Retry 3D generation to try again.');
+        }
       }
       // Update gizmo every 2 frames to avoid React overhead
       if (frameRef.current++ % 2 === 0 && cameraRef.current) {
@@ -2060,21 +2081,31 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     };
     animate();
 
-    const onResize = () => {
-      if (!containerRef.current) return;
-      const nw = containerRef.current.clientWidth;
-      const nh = containerRef.current.clientHeight;
+    const resizeRenderer = () => {
+      const nw = container.clientWidth;
+      const nh = container.clientHeight;
+      if (nw < 1 || nh < 1) return;
       camera.aspect = nw / nh;
       camera.updateProjectionMatrix();
       renderer.setSize(nw, nh);
     };
-    window.addEventListener('resize', onResize);
+    const resizeObserver = new ResizeObserver(resizeRenderer);
+    resizeObserver.observe(container);
+    window.addEventListener('resize', resizeRenderer);
     return () => {
-      window.removeEventListener('resize', onResize);
+      cancelAnimationFrame(animationFrame);
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', resizeRenderer);
       controls.removeEventListener('start', onControlStart);
       controls.removeEventListener('end', onControlEnd);
+      renderer.domElement.removeEventListener('webglcontextlost', onContextLost);
+      renderer.domElement.removeEventListener('webglcontextrestored', onContextRestored);
       renderer.dispose();
-      containerRef.current?.removeChild(renderer.domElement);
+      if (renderer.domElement.parentNode === container) container.removeChild(renderer.domElement);
+      if (rendererRef.current === renderer) rendererRef.current = null;
+      if (sceneRef.current === scene) sceneRef.current = null;
+      if (cameraRef.current === camera) cameraRef.current = null;
+      if (controlsRef.current === controls) controlsRef.current = null;
     };
   }, []);
 
