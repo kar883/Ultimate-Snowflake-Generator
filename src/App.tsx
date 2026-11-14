@@ -52,7 +52,7 @@ import { getHubOutlinePoints } from './utils/hubGeometry';
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, /*makeSlotKey,*/ getOrCreateGeometry, clearGeometryCache, modelCache3D, modelCache2D, hashConfig, /*slotCutCache,*/ makeUnderlineKey } from './geometryCache';
 
 const MAX_HISTORY = 50;
-const APP_VERSION = '1.1.6';
+const APP_VERSION = '1.1.7';
 const hubFilletInfoCache = new Map<string, { applied: number; by: 'depth' | 'wall' | null }>();
 const APP_DEBUG = false;
 // Bump when mesh generation logic changes (slot geometry, CSG sequencing, etc.)

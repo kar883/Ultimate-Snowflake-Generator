@@ -53,33 +53,33 @@ npm run electron:build
 After building, check `dist-electron/` for:
 
 ### Windows
-- **Snowflake-Generator-Windows-Installer-1.1.6.exe** (Installer)
+- **Snowflake-Generator-Windows-Installer-1.1.7.exe** (Installer)
   - User-friendly installer with uninstall support
   - Creates Start Menu shortcuts
   - Size: ~200-300 MB
   
-- **Snowflake-Generator-Windows-Portable-1.1.6.zip** (Portable)
+- **Snowflake-Generator-Windows-Portable-1.1.7.zip** (Portable)
   - No installation required
   - Run directly from USB/network
   - Size: ~200-300 MB
 
 ### macOS
-- **Snowflake-Generator-macOS-Installer-1.1.6.dmg** (Disk Image Installer)
+- **Snowflake-Generator-macOS-Installer-1.1.7.dmg** (Disk Image Installer)
   - Standard macOS installation experience
   - Drag-and-drop to Applications
   - Size: ~200-300 MB
   
-- **Snowflake-Generator-macOS-Portable-1.1.6.zip** (Archive)
+- **Snowflake-Generator-macOS-Portable-1.1.7.zip** (Archive)
   - Portable archive
   - Extract and run
   - Size: ~200-300 MB
 
-- **Snowflake-Generator-macOS-Installer-1.1.6.dmg** (Apple Silicon or Intel, depending on build)
+- **Snowflake-Generator-macOS-Installer-1.1.7.dmg** (Apple Silicon or Intel, depending on build)
 
 ### Linux
-- **Snowflake-Generator-Linux-Portable-1.1.6.AppImage** (Portable)
-- **Snowflake-Generator-Linux-Installer-1.1.6.deb** (Debian/Ubuntu installer)
-- **Snowflake-Generator-Linux-Portable-1.1.6.tar.gz** (Portable archive)
+- **Snowflake-Generator-Linux-Portable-1.1.7.AppImage** (Portable)
+- **Snowflake-Generator-Linux-Installer-1.1.7.deb** (Debian/Ubuntu installer)
+- **Snowflake-Generator-Linux-Portable-1.1.7.tar.gz** (Portable archive)
 
 ## Distribution Strategies
 
