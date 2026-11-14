@@ -1010,10 +1010,8 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
                   >
                     {layer.name}
                   </text>
-                  <g
-                    transform={`scale(1, -1) rotate(${zRotation})`}
-                  >
-                    <circle cx="0" cy="0" r="2" fill="#ef4444" />
+                  <circle cx="0" cy="0" r="2" fill="#ef4444" />
+                  <g transform="scale(1, -1)">
                     {layer.hangingRing?.enabled && (
                       <circle
                         cx={layer.hangingRing.x}
@@ -1032,12 +1030,16 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
                             startY: event.clientY,
                             originX: layer.hangingRing?.x ?? 0,
                             originY: layer.hangingRing?.y ?? 0,
-                            rotation: zRotation,
+                            rotation: 0,
                           };
                         }}
                         aria-label={`${layer.name} hanging ring`}
                       />
                     )}
+                  </g>
+                  <g
+                    transform={`scale(1, -1) rotate(${zRotation})`}
+                  >
                     <g transform={`scale(${inPlaneScale})`}>
                       <g
                         ref={(element) => {

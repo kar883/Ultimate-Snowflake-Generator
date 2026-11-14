@@ -57,7 +57,7 @@ const hubFilletInfoCache = new Map<string, { applied: number; by: 'depth' | 'wal
 const APP_DEBUG = false;
 // Bump when mesh generation logic changes (slot geometry, CSG sequencing, etc.)
 // so cached groups from older algorithms are not reused.
-const GEOMETRY_ALGO_VERSION = 'slot-2026-11-11-centered-profile-cross-tip-in-flipped-blade-ring-independent-scale';
+const GEOMETRY_ALGO_VERSION = 'slot-2026-11-11-centered-profile-cross-tip-in-flipped-blade-ring-independent-scale-ring-side';
 // Feature-flagged slot strategy: build slot openings in profile space and extrude once.
 const ENABLE_BAKED_PROFILE_SLOT_PATH = true;
 const DEFAULT_BAKED_PROFILE_SLOT_ENABLED = true;
@@ -6334,23 +6334,19 @@ const App: React.FC = () => {
       if (layer.hangingRing?.enabled) {
         const ringRadius = Math.max(3, Math.min(20, layer.hangingRing.radius));
         const ringTubeRadius = Math.max(0.8, Math.min(2.5, ringRadius * 0.25));
-        const ringPlaneRotation = config.slotEnabled && slotContextIndex === 0 ? Math.PI : 0;
-        const ringX = layer.hangingRing.x * Math.cos(ringPlaneRotation) - layer.hangingRing.y * Math.sin(ringPlaneRotation);
-        const ringY = layer.hangingRing.x * Math.sin(ringPlaneRotation) + layer.hangingRing.y * Math.cos(ringPlaneRotation);
         const ringShape = new THREE_ACTUAL.Shape();
         ringShape.absarc(0, 0, ringRadius, 0, Math.PI * 2, false);
         const ringHole = new THREE_ACTUAL.Path();
         ringHole.absarc(0, 0, Math.max(0.5, ringRadius - ringTubeRadius), 0, Math.PI * 2, true);
         ringShape.holes.push(ringHole);
         const ringGeo = new THREE_ACTUAL.ExtrudeGeometry(ringShape, extrudeSettings);
-        ringGeo.translate(ringX, ringY, -effectiveDepth / 2);
+        ringGeo.translate(layer.hangingRing.x, layer.hangingRing.y, -effectiveDepth / 2);
         layerGeometries.push(ringGeo);
         scaleIndependentGeometries.add(ringGeo);
         addShapeInstances(
           [ringShape],
           composeMatrix2D(
             makeTranslationMatrix2D(layer.hangingRing.x, layer.hangingRing.y),
-            makeRotationMatrix2D(ringPlaneRotation),
           ),
           0,
           false,
