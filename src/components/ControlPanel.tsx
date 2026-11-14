@@ -2524,7 +2524,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                              {groupData.underline.capType !== 'none' && renderSlider(t('Cap Length'), groupData.underline.capWidth, 2, 30, 0.1, (v, c) => updateSelectedGroup({ underline: { ...groupData.underline, capWidth: v } }, c), "mm", false, 10)}
                              {renderSlider(t('Underline Thickness'), groupData.underline.thickness, 0.1, 5, 0.1, (v, c) => updateSelectedGroup({ underline: { ...groupData.underline, thickness: v } }, c), "mm", false, 1.5)}
                              {renderSlider(t('Underline Start'), groupData.underline.startXOffset, -50, 200, 0.1, (v, c) => updateSelectedGroup({ underline: { ...groupData.underline, startXOffset: v } }, c), "mm", false, 0)}
-                             {renderSlider(t('Underline Length'), groupData.underline.length, 10, 200, 0.1, (v, c) => updateSelectedGroup({ underline: { ...groupData.underline, length: v } }, c), "mm", false, 50)}
+                             {renderSlider(t('Underline Length'), groupData.underline.length, 0, 200, 0.1, (v, c) => updateSelectedGroup({ underline: { ...groupData.underline, length: v } }, c), "mm", false, 50)}
                              {renderSlider(t('Underline Mirror Offset'), groupData.underline.yOffset, -200, 200, 0.1, (v, c) => updateSelectedGroup({ underline: { ...groupData.underline, yOffset: v } }, c), "mm", false, -5)}
                           </div>
                       )}

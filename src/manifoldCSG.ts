@@ -43,6 +43,7 @@ export interface ShapeInstance2D {
   shape: THREE.Shape;
   transform?: THREE.Matrix3;
   strokeWidth?: number;
+  scaleWithPlane?: boolean;
 }
 
 export const createSlotProfileOutline = (profile: SlotProfile2D): Array<[number, number]> => {

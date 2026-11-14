@@ -57,7 +57,7 @@ const hubFilletInfoCache = new Map<string, { applied: number; by: 'depth' | 'wal
 const APP_DEBUG = false;
 // Bump when mesh generation logic changes (slot geometry, CSG sequencing, etc.)
 // so cached groups from older algorithms are not reused.
-const GEOMETRY_ALGO_VERSION = 'slot-2026-11-11-centered-profile-cross-tip-in-flipped-blade-ring';
+const GEOMETRY_ALGO_VERSION = 'slot-2026-11-11-centered-profile-cross-tip-in-flipped-blade-ring-independent-scale';
 // Feature-flagged slot strategy: build slot openings in profile space and extrude once.
 const ENABLE_BAKED_PROFILE_SLOT_PATH = true;
 const DEFAULT_BAKED_PROFILE_SLOT_ENABLED = true;
@@ -74,11 +74,13 @@ const scaleGeometryInPlane = (geometry: THREE_ACTUAL.BufferGeometry, scale: numb
 const scaleShapeInstancesInPlane = (instances: ShapeInstance2D[], scale: number): ShapeInstance2D[] => {
   if (scale === 1) return instances;
   const scaleTransform = new THREE_ACTUAL.Matrix3().set(scale, 0, 0, 0, scale, 0, 0, 0, 1);
-  return instances.map((instance) => ({
-    ...instance,
-    transform: instance.transform.clone().premultiply(scaleTransform),
-    strokeWidth: instance.strokeWidth * scale,
-  }));
+  return instances.map((instance) => instance.scaleWithPlane === false
+    ? instance
+    : {
+        ...instance,
+        transform: instance.transform.clone().premultiply(scaleTransform),
+        strokeWidth: instance.strokeWidth * scale,
+      });
 };
 const APPEARANCE_STORAGE_KEY = 'snowflake_appearance_settings';
 const DEFAULT_APPEARANCE: AppearanceSettings = {
@@ -1037,10 +1039,11 @@ const getEffectiveBridgeManualWidth = (
   return layer.slotBridgeManualWidth ?? 6;
 };
 
-const SLOT_BRIDGE_RULE_VERSION = 'slot-bridge-phase1-x';
+const SLOT_BRIDGE_RULE_VERSION = 'slot-bridge-phase1-structural-width';
 const BAKED_BRIDGE_END_INSET_MM = 0.25;
 const BRIDGE_CONTACT_OVERLAP_MM = 2;
 const AUTO_BRIDGE_WIDTH_EXTRA = 1.5;
+const MIN_STRUCTURAL_BRIDGE_RESIDUAL_MM = 3;
 const PAIRED_CUT_BRIDGE_WIDTH_BOOST = 0.5;
 const BRIDGE_WIDTH_SAFETY_MARGIN = 0.35;
 const failedBridgeUnionAttemptKeys = new Set<string>();
@@ -2051,6 +2054,11 @@ const createBakedBridgePlanesForLayer = (
       effectiveSlotWidth + minSafetyMargin,
       localSlotThickness + minSafetyMargin
     );
+    const structuralWidthExtra = Math.max(
+      autoWidthExtra,
+      MIN_STRUCTURAL_BRIDGE_RESIDUAL_MM,
+      materialThickness * 0.75
+    );
     // In manual mode, keep only a tiny safety delta above cutter thickness so
     // user-entered width visibly controls the bridge profile.
     const minManualBridgeThicknessForCut = Math.max(
@@ -2059,8 +2067,8 @@ const createBakedBridgePlanesForLayer = (
     );
     const autoBridgeThickness = Math.max(
       minBridgeThicknessForCut,
-      effectiveSlotWidth + autoWidthExtra,
-      localSlotThickness + autoWidthExtra
+      effectiveSlotWidth + structuralWidthExtra,
+      localSlotThickness + structuralWidthExtra
     );
     // Honor per-run requested thickness (used by tilt X-cut compensation).
     // Previously this parameter was effectively ignored unless manual width was enabled.
@@ -5482,15 +5490,17 @@ const App: React.FC = () => {
         ? { ...baseExtrudeSettings, depth: effectiveDepth - 2 * slotBevelThickness, bevelThickness: slotBevelThickness }
         : baseExtrudeSettings;
       const layerGeometries: THREE_ACTUAL.BufferGeometry[] = [];
+      const scaleIndependentGeometries = new Set<THREE_ACTUAL.BufferGeometry>();
       const layerShapeInstances: ShapeInstance2D[] = [];
       const addShapeInstances = (
         shapes: THREE_ACTUAL.Shape[],
         transform: THREE_ACTUAL.Matrix3,
-        strokeWidth = 0
+        strokeWidth = 0,
+        scaleWithPlane = true
       ) => {
         if (!config.slotEnabled || shapes.length === 0) return;
         shapes.forEach((shape) => {
-          layerShapeInstances.push({ shape, transform: transform.clone(), strokeWidth });
+          layerShapeInstances.push({ shape, transform: transform.clone(), strokeWidth, scaleWithPlane });
         });
       };
 
@@ -6320,19 +6330,26 @@ const App: React.FC = () => {
         const ringGeo = new THREE_ACTUAL.ExtrudeGeometry(ringShape, extrudeSettings);
         ringGeo.translate(ringX, ringY, -effectiveDepth / 2);
         layerGeometries.push(ringGeo);
+        scaleIndependentGeometries.add(ringGeo);
         addShapeInstances(
           [ringShape],
           composeMatrix2D(
             makeTranslationMatrix2D(layer.hangingRing.x, layer.hangingRing.y),
             makeRotationMatrix2D(ringPlaneRotation),
           ),
+          0,
+          false,
         );
       }
 
       await updateProgress();
 
       if (layerGeometries.length > 0) {
-        layerGeometries.forEach((geometry) => scaleGeometryInPlane(geometry, inPlaneScale));
+        layerGeometries.forEach((geometry) => {
+          if (!scaleIndependentGeometries.has(geometry)) {
+            scaleGeometryInPlane(geometry, inPlaneScale);
+          }
+        });
         const layerPreset = getSlotPlanePreset(slotContextLayers, slotContextIndex, config.slotMode);
         const effectiveRotationX = config.slotEnabled && layerPreset
           ? layerPreset.rotationX

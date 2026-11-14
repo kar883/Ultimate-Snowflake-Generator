@@ -295,7 +295,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
   const handleMouseMove = (e: React.MouseEvent) => {
     if (ringDrag.current && onUpdateConfig) {
       const { layerId, startX, startY, originX, originY, rotation } = ringDrag.current;
-      const scale = Math.max(0.1, viewTransform.scale * inPlaneScale);
+      const scale = Math.max(0.1, viewTransform.scale);
       const screenX = (e.clientX - startX) / scale;
       const screenY = (e.clientY - startY) / scale;
       const angle = (rotation * Math.PI) / 180;
@@ -1014,6 +1014,30 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
                     transform={`scale(1, -1) rotate(${zRotation})`}
                   >
                     <circle cx="0" cy="0" r="2" fill="#ef4444" />
+                    {layer.hangingRing?.enabled && (
+                      <circle
+                        cx={layer.hangingRing.x}
+                        cy={layer.hangingRing.y}
+                        r={layer.hangingRing.radius}
+                        fill="none"
+                        stroke="#22c55e"
+                        strokeWidth={Math.max(1.5, Math.min(4, layer.hangingRing.radius * 0.45))}
+                        className="cursor-grab"
+                        onMouseDown={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          ringDrag.current = {
+                            layerId: layer.id,
+                            startX: event.clientX,
+                            startY: event.clientY,
+                            originX: layer.hangingRing?.x ?? 0,
+                            originY: layer.hangingRing?.y ?? 0,
+                            rotation: zRotation,
+                          };
+                        }}
+                        aria-label={`${layer.name} hanging ring`}
+                      />
+                    )}
                     <g transform={`scale(${inPlaneScale})`}>
                       <g
                         ref={(element) => {
@@ -1022,30 +1046,6 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
                         }}
                       >
                         {renderHubs(layer.hubs, layerColor)}
-                        {layer.hangingRing?.enabled && (
-                          <circle
-                            cx={layer.hangingRing.x}
-                            cy={layer.hangingRing.y}
-                            r={layer.hangingRing.radius}
-                            fill="none"
-                            stroke="#22c55e"
-                            strokeWidth={Math.max(1.5, Math.min(4, layer.hangingRing.radius * 0.45))}
-                            className="cursor-grab"
-                            onMouseDown={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              ringDrag.current = {
-                                layerId: layer.id,
-                                startX: event.clientX,
-                                startY: event.clientY,
-                                originX: layer.hangingRing?.x ?? 0,
-                                originY: layer.hangingRing?.y ?? 0,
-                                rotation: zRotation,
-                              };
-                            }}
-                            aria-label={`${layer.name} hanging ring`}
-                          />
-                        )}
                         {renderImages(layer.images || [], layerColor)}
                         {renderAbstracts(layer.abstracts, layerColor)}
                         {getLayerTextGroups(layer).map((group, index) => (
