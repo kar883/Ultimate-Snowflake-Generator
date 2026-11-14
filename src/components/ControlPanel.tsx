@@ -81,7 +81,7 @@ const DESCRIPTIONS: Record<string, string> = {
   "Model Color": "The base color applied to the 3D mesh and 2D preview.",
   "Edge Profile": "Adds rounded or slanted edges to the 3D model for a more realistic look.",
   "Reset View": "Reset the 2D view to fit the content.",
-  "Export": "Export the current design in the selected format.",
+  "Export": "Export the current design in the selected format. For selected planes, STL exports separate files; multi-plane 3MF exports one file with the planes laid flat side by side.",
   "Extrusion Depth": "The thickness of the snowflake planes in millimeters.",
   "In-Plane Scale": "Scales all plane geometry around the shared center without changing material thickness or slot width.",
   "Global Boldness": "Makes all text, abstracts, hubs, and underlines appear bolder. Higher values make them thicker. Note: 3D boldness may not work properly with all fonts - some complex or decorative fonts may not render correctly.",
@@ -647,7 +647,13 @@ const ExportMenu: React.FC<ExportMenuProps> = ({
 
            {hasPlaneActions && has3DFormat && (
              <>
-               <div className="px-2 pt-1 pb-0.5 text-[8px] font-black uppercase text-slate-500 tracking-wider">Single Plane</div>
+               <InfoTooltip
+                 label="Plane Selection"
+                 description="Select one or more active planes. STL exports selected planes as separate files; multi-plane 3MF exports them laid flat side by side in one file."
+                 className="block px-2 pt-1 pb-0.5 text-[8px] font-black uppercase text-slate-500 tracking-wider"
+               >
+                 Plane Selection
+               </InfoTooltip>
                <div className="grid grid-cols-1 gap-1 bg-slate-900/60 p-1 rounded-md">
                  {planeActions!.map((action, idx) => {
                    const isPlaneActive = action.isActive !== false;

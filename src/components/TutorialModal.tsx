@@ -294,7 +294,7 @@ const STEPS: TutorialStep[] = [
       'Hovering STL or 3MF shows an estimate of triangle count, file size and export time for the current selection.',
       'Quality (Low / Med / High): how finely curves are tessellated. Higher is smoother but gives larger files and takes longer to export.',
       'Export button: writes the chosen format. With no planes selected it exports the combined model.',
-      'Single Plane: pick one or more planes (Base, Cross, Tilt) to export only those as separate files, handy for printing each plane flat. Planes that are switched off cannot be selected.',
+      'Plane Selection: pick one or more planes (Base, Cross, Tilt) to export only those. STL exports remain separate files; a multi-plane 3MF export places the selected planes flat side by side in one file. Planes that are switched off cannot be selected.',
       'Clear Selection: returns to exporting the combined model.',
     ],
   },

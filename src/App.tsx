@@ -6956,6 +6956,42 @@ const App: React.FC = () => {
     return exportObject;
   };
 
+  const createFlatSideBySideExportGroup = (meshes: THREE_ACTUAL.Mesh[]): THREE_ACTUAL.Group => {
+    const layout = new THREE_ACTUAL.Group();
+    const gap = 5;
+    let nextX = 0;
+
+    meshes.forEach((mesh) => {
+      const flatMesh = normalizeExportObjectToBed(mesh) as THREE_ACTUAL.Mesh;
+      flatMesh.updateMatrixWorld(true);
+      const bounds = new THREE_ACTUAL.Box3().setFromObject(flatMesh);
+
+      if (!Number.isFinite(bounds.min.x) || !Number.isFinite(bounds.min.y)) {
+        flatMesh.traverse((child) => {
+          if (child instanceof THREE_ACTUAL.Mesh) child.geometry.dispose();
+        });
+        throw new Error('Cannot lay out selected 3MF planes: generated mesh has no finite XY bounds');
+      }
+
+      flatMesh.position.x += nextX - bounds.min.x;
+      flatMesh.position.y += -(bounds.min.y + bounds.max.y) / 2;
+      flatMesh.updateMatrixWorld(true);
+      const laidOutBounds = new THREE_ACTUAL.Box3().setFromObject(flatMesh);
+      nextX = laidOutBounds.max.x + gap;
+      layout.add(flatMesh);
+    });
+
+    return layout;
+  };
+
+  const disposeTemporaryExportGroup = (group: THREE_ACTUAL.Group): void => {
+    group.traverse((child) => {
+      if (child instanceof THREE_ACTUAL.Mesh) {
+        child.geometry.dispose();
+      }
+    });
+  };
+
   // Ã¢â€â‚¬Ã¢â€â‚¬ Diagnostic helper Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   // Logs a 3-stage topology report to the browser console for each mesh found in
   // the export object so we can pinpoint exactly where topology defects are introduced.
@@ -7705,30 +7741,25 @@ const App: React.FC = () => {
       const targetLayerIds = selectedLayers.map(({ layer }) => layer.id);
       const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode, { targetLayerIds });
       const exporter = new ThreeMFExporter();
-      let totalTriangles = 0;
-      let totalBytes = 0;
-      let exportedAny = false;
-
-      for (let i = 0; i < selectedLayers.length; i++) {
-        const { layer } = selectedLayers[i];
+      const selectedMeshes = selectedLayers.map(({ layer }) => {
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
         if (!mesh) {
           throw new Error(`Generated export mesh not found for layer "${layer.name}"`);
         }
-        if (i > 0) await yieldToMainThread();
-        logPreExportTopology(mesh, `batch-3mf/${layer.name}`);
-        const blob = await exporter.parse(mesh, getExportCleanupOptions(quality));
-        const actualTriangles = countTrianglesInObject(mesh);
-        totalTriangles += actualTriangles;
-        totalBytes += blob.size;
-        exportedAny = true;
-        const qLabel = quality ? `_${quality}` : '';
-        await downloadBlob(blob, `${config.projectName}_${layer.name.replace(/\s+/g, '_')}${qLabel}.3mf`);
-      }
+        return mesh;
+      });
+      selectedMeshes.forEach((mesh, index) => logPreExportTopology(mesh, `batch-3mf/${selectedLayers[index].layer.name}`));
 
-      if (exportedAny) {
+      const layout = createFlatSideBySideExportGroup(selectedMeshes);
+      try {
+        const blob = await exporter.parse(layout, getExportCleanupOptions(quality));
+        const actualTriangles = countTrianglesInObject(layout);
+        const qLabel = quality ? `_${quality}` : '';
+        await downloadBlob(blob, `${config.projectName}_Selected_Planes${qLabel}.3mf`);
         const actualSeconds = Math.max(0.1, (performance.now() - actionStart) / 1000);
-        updateEstimateCalibration('3mf', qualityToUse, config.slotEnabled, selectedLayers.map(({ layer }) => layer), totalTriangles, totalBytes, actualSeconds);
+        updateEstimateCalibration('3mf', qualityToUse, config.slotEnabled, selectedLayers.map(({ layer }) => layer), actualTriangles, blob.size, actualSeconds);
+      } finally {
+        disposeTemporaryExportGroup(layout);
       }
     } catch (e) {
       console.error(e);

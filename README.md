@@ -40,7 +40,7 @@ Inspired by [Jexom's OpenSCAD snowflake](https://www.thingiverse.com/thing:27022
 - Cut assembly slots in 2-plane or 3-plane mode. Optional slot bridges can help keep pieces connected; they can be disabled. **Slots work best with even arm counts.** With an odd number of arms, the planes may not interlock or remain connected as reliably; the app warns when you enable slots for an odd-arm design.
 - Add a hanging ring to any plane from the 2D preview. Toggle it on for the active plane, adjust its size using the inner/outer diameter readout in mm, and drag the green ring into position; it is included in that plane’s 3D extrusion and exports.
 - Preview designs in 2D and 3D, inspect disconnected bodies, and adjust global geometry and appearance settings.
-- Export combined or individual planes as STL or 3MF, batch-export planes, and export 2D artwork as SVG or DXF. Save and load project JSON files.
+- Export combined or individual planes as STL or 3MF, batch-export planes, and export 2D artwork as SVG or DXF. Selecting multiple planes for STL creates separate files; selecting multiple planes for 3MF creates one file with the planes laid flat side by side. Save and load project JSON files.
 - Automatic export estimation (file size, triangle count, export time) and warnings for potential issues (disconnected bodies).
 
 ## Assembly
