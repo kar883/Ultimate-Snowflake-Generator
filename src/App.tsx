@@ -4720,8 +4720,23 @@ const App: React.FC = () => {
       updates.globalStrokeWeight = Math.max(0, Math.min(10, updates.globalStrokeWeight));
     }
     if ('inPlaneScale' in updates && typeof updates.inPlaneScale === 'number') {
-      updates.inPlaneScale = normalizeInPlaneScale(updates.inPlaneScale);
-      if (updates.inPlaneScale !== normalizeInPlaneScale(config.inPlaneScale)) {
+      const previousInPlaneScale = normalizeInPlaneScale(config.inPlaneScale);
+      const nextInPlaneScale = normalizeInPlaneScale(updates.inPlaneScale);
+      updates.inPlaneScale = nextInPlaneScale;
+      if (nextInPlaneScale !== previousInPlaneScale) {
+        const positionScale = nextInPlaneScale / previousInPlaneScale;
+        const layersToUpdate = Array.isArray(updates.layers) ? updates.layers : config.layers;
+        updates.layers = layersToUpdate.map((layer) => {
+          if (!layer.hangingRing) return layer;
+          return {
+            ...layer,
+            hangingRing: {
+              ...layer.hangingRing,
+              x: layer.hangingRing.x * positionScale,
+              y: layer.hangingRing.y * positionScale,
+            },
+          };
+        });
         modelCache3D.clear();
         modelCache2D.clear();
         clearSlotCutResultCache();
