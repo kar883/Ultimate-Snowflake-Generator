@@ -50,6 +50,8 @@ import { getHubOutlinePoints } from './utils/hubGeometry';
 // @ts-ignore
 // import { fillHolesManifold } from './holeFillingRepair'; // Temporarily commented
 import { geometryCache, makeTextKey, makeHubKey, makeAbstractKey, /*makeSlotKey,*/ getOrCreateGeometry, clearGeometryCache, modelCache3D, modelCache2D, hashConfig, /*slotCutCache,*/ makeUnderlineKey } from './geometryCache';
+import { clearSlotCache } from './slotGeometryCache';
+import { improvedSlotCutCache } from './improvedSlotCache';
 
 const MAX_HISTORY = 50;
 const APP_VERSION = '1.1.7';
@@ -6956,23 +6958,28 @@ const App: React.FC = () => {
     return exportObject;
   };
 
-  const createFlatSideBySideExportGroup = (meshes: THREE_ACTUAL.Mesh[]): THREE_ACTUAL.Group => {
+  const createFlatSideBySideExportGroup = (
+    planes: Array<{ mesh: THREE_ACTUAL.Mesh; rotationXDeg: number; rotationYDeg: number }>
+  ): THREE_ACTUAL.Group => {
     const layout = new THREE_ACTUAL.Group();
     const gap = 5;
     let nextX = 0;
 
-    meshes.forEach((mesh) => {
-      const flatMesh = normalizeExportObjectToBed(mesh) as THREE_ACTUAL.Mesh;
+    planes.forEach(({ mesh, rotationXDeg, rotationYDeg }) => {
+      const flatMesh = mesh.clone(true);
+      const flattenedGeometry = (flatMesh.geometry as THREE_ACTUAL.BufferGeometry).clone();
+      flattenedGeometry.rotateY((-rotationYDeg * Math.PI) / 180);
+      flattenedGeometry.rotateX((-rotationXDeg * Math.PI) / 180);
+      flatMesh.geometry = flattenedGeometry;
       flatMesh.updateMatrixWorld(true);
       const bounds = new THREE_ACTUAL.Box3().setFromObject(flatMesh);
 
       if (!Number.isFinite(bounds.min.x) || !Number.isFinite(bounds.min.y)) {
-        flatMesh.traverse((child) => {
-          if (child instanceof THREE_ACTUAL.Mesh) child.geometry.dispose();
-        });
+        flattenedGeometry.dispose();
         throw new Error('Cannot lay out selected 3MF planes: generated mesh has no finite XY bounds');
       }
 
+      flatMesh.position.z += -bounds.min.z + 0.001;
       flatMesh.position.x += nextX - bounds.min.x;
       flatMesh.position.y += -(bounds.min.y + bounds.max.y) / 2;
       flatMesh.updateMatrixWorld(true);
@@ -7741,16 +7748,26 @@ const App: React.FC = () => {
       const targetLayerIds = selectedLayers.map(({ layer }) => layer.id);
       const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode, { targetLayerIds });
       const exporter = new ThreeMFExporter();
-      const selectedMeshes = selectedLayers.map(({ layer }) => {
+      const enabledLayers = config.layers.filter((layer) => layer.enabled);
+      const selectedPlanes = selectedLayers.map(({ layer }) => {
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
         if (!mesh) {
           throw new Error(`Generated export mesh not found for layer "${layer.name}"`);
         }
-        return mesh;
+        const enabledLayerIndex = enabledLayers.findIndex((enabledLayer) => enabledLayer.id === layer.id);
+        const layerPreset = config.slotEnabled && enabledLayerIndex >= 0
+          ? getSlotPlanePreset(enabledLayers, enabledLayerIndex, config.slotMode)
+          : null;
+        return {
+          mesh,
+          rotationXDeg: layerPreset?.rotationX ?? layer.rotation3D.x,
+          rotationYDeg: layer.rotation3D.y,
+          layer,
+        };
       });
-      selectedMeshes.forEach((mesh, index) => logPreExportTopology(mesh, `batch-3mf/${selectedLayers[index].layer.name}`));
+      selectedPlanes.forEach(({ mesh, layer }) => logPreExportTopology(mesh, `batch-3mf/${layer.name}`));
 
-      const layout = createFlatSideBySideExportGroup(selectedMeshes);
+      const layout = createFlatSideBySideExportGroup(selectedPlanes);
       try {
         const blob = await exporter.parse(layout, getExportCleanupOptions(quality));
         const actualTriangles = countTrianglesInObject(layout);
@@ -8880,14 +8897,15 @@ const App: React.FC = () => {
 
   const forceRegenerate3D = useCallback(() => {
     cancelPending3DUpdates();
-    cancelAllSlotCuts({ includePreview: true });
+    emergencyStopAllProcessing();
     clearGeometryCache();
     clearSlotCutResultCache();
-    modelCache3D.clear();
+    clearSlotCache();
+    improvedSlotCutCache.clear();
     setConfig3D(config);
     setRendered3DIfChanged(config);
     setForceRefresh3DToken((prev) => prev + 1);
-  }, [config, cancelPending3DUpdates, cancelAllSlotCuts, clearSlotCutResultCache, setRendered3DIfChanged]);
+  }, [config, cancelPending3DUpdates, emergencyStopAllProcessing, clearGeometryCache, clearSlotCutResultCache, setRendered3DIfChanged]);
   forceRegenerateRef.current = forceRegenerate3D;
 
   useKeyboardShortcuts(shortcuts, {
