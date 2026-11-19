@@ -4,12 +4,12 @@
 
 ## Download
 - Web app: [Open in your browser](https://kar883.github.io/Ultimate-Snowflake-Generator/)
-- Windows installer: [Snowflake-Generator-Windows-Installer-1.1.7.exe](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.7/Snowflake-Generator-Windows-Installer-1.1.7.exe)
-- Windows portable: [Snowflake-Generator-Windows-Portable-1.1.7.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.7/Snowflake-Generator-Windows-Portable-1.1.7.zip)
-- macOS installer: [Snowflake-Generator-macOS-Installer-1.1.7.dmg](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.7/Snowflake-Generator-macOS-Installer-1.1.7.dmg)
-- macOS portable: [Snowflake-Generator-macOS-Portable-1.1.7.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.7/Snowflake-Generator-macOS-Portable-1.1.7.zip)
-- Linux portable: [Snowflake-Generator-Linux-Portable-1.1.7.AppImage](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.7/Snowflake-Generator-Linux-Portable-1.1.7.AppImage)
-- Linux installer: [Snowflake-Generator-Linux-Installer-1.1.7.deb](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.7/Snowflake-Generator-Linux-Installer-1.1.7.deb)
+- Windows installer: [Snowflake-Generator-Windows-Installer-1.1.8.exe](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.8/Snowflake-Generator-Windows-Installer-1.1.8.exe)
+- Windows portable: [Snowflake-Generator-Windows-Portable-1.1.8.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.8/Snowflake-Generator-Windows-Portable-1.1.8.zip)
+- macOS installer: [Snowflake-Generator-macOS-Installer-1.1.8.dmg](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.8/Snowflake-Generator-macOS-Installer-1.1.8.dmg)
+- macOS portable: [Snowflake-Generator-macOS-Portable-1.1.8.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.8/Snowflake-Generator-macOS-Portable-1.1.8.zip)
+- Linux portable: [Snowflake-Generator-Linux-Portable-1.1.8.AppImage](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.8/Snowflake-Generator-Linux-Portable-1.1.8.AppImage)
+- Linux installer: [Snowflake-Generator-Linux-Installer-1.1.8.deb](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.8/Snowflake-Generator-Linux-Installer-1.1.8.deb)
 - All release assets: [GitHub Releases](https://github.com/kar883/Ultimate-Snowflake-Generator/releases)
 
 ## Finished product examples

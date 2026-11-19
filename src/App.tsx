@@ -54,7 +54,7 @@ import { clearSlotCache } from './slotGeometryCache';
 import { improvedSlotCutCache } from './improvedSlotCache';
 
 const MAX_HISTORY = 50;
-const APP_VERSION = '1.1.7';
+const APP_VERSION = '1.1.8';
 const hubFilletInfoCache = new Map<string, { applied: number; by: 'depth' | 'wall' | null }>();
 const APP_DEBUG = false;
 // Bump when mesh generation logic changes (slot geometry, CSG sequencing, etc.)
