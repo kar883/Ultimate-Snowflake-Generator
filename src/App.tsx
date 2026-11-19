@@ -21,7 +21,7 @@ const loadTutorialDisabled = (): boolean => {
 import UpdateNotification from './components/UpdateNotification';
 import * as THREE_ACTUAL from 'three';
 import { STLExporter, ThreeMFExporter } from './stlExporter';
-// import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader';
+import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
 import opentype from 'opentype.js';
 import JSZip from 'jszip';
@@ -5330,14 +5330,14 @@ const App: React.FC = () => {
       }
     }
 
-    // `extrusionDepth` represents the overall material thickness INCLUDING any bevel.
-    // Compute bevel as a per-side value and clamp it so it never exceeds half
-    // the total thickness (to avoid negative core depth).
-    const bevelPerSide = config.bevelEnabled ? Math.min(config.bevelAmount, config.extrusionDepth / 2) : 0;
     const effectiveDepth = Math.max(0.001, config.extrusionDepth);
+    // Keep extrusionDepth as the total material thickness; bevels consume part
+    // of the core depth instead of extending the mesh beyond it.
+    const maxBevelPerSide = Math.max(0, (effectiveDepth - 0.001) / 2);
+    const bevelPerSide = config.bevelEnabled ? Math.min(config.bevelAmount, maxBevelPerSide) : 0;
 
     const baseExtrudeSettings = {
-      depth: effectiveDepth,
+      depth: Math.max(0.001, effectiveDepth - (2 * bevelPerSide)),
       bevelEnabled: config.bevelEnabled,
       bevelThickness: bevelPerSide,
       bevelSize: bevelPerSide, // Standard expansion
@@ -5593,19 +5593,18 @@ const App: React.FC = () => {
       const textExtrudeSettings = {
         ...extrudeSettings,
         bevelEnabled: true, // Always enable when boldness is applied
-        bevelThickness: slotUsesBeveledSolids
-          ? Math.min(bevelPerSide + boldnessBevel, Math.max(0, (effectiveDepth - 0.001) / 2))
-          : bevelPerSide + boldnessBevel,
+        bevelThickness: Math.min(bevelPerSide + boldnessBevel, maxBevelPerSide),
         bevelSize: bevelPerSide + boldnessBevel,
-        bevelSegments: slotUsesBeveledSolids && config.bevelType === 'chamfer'
+        bevelSegments: config.bevelEnabled && config.bevelType === 'chamfer'
           ? 1
           : Math.min(3, Math.max(2, bevelSegCap)),
+        depth: Math.max(
+          0.001,
+          effectiveDepth - (2 * Math.min(bevelPerSide + boldnessBevel, maxBevelPerSide))
+        ),
       };
       maxLayerBevelThickness = Math.max(maxLayerBevelThickness, textExtrudeSettings.bevelThickness);
       maxLayerBevelSize = Math.max(maxLayerBevelSize, textExtrudeSettings.bevelSize);
-      if (slotUsesBeveledSolids) {
-        textExtrudeSettings.depth = effectiveDepth - 2 * textExtrudeSettings.bevelThickness;
-      }
 
       if (shouldApplyBoldness) {
         console.log('Ã°Å¸Å½Â¨ Applying boldness via bevel expansion:', {
@@ -6213,7 +6212,6 @@ const App: React.FC = () => {
       };
 
       // Ã¢â€â‚¬Ã¢â€â‚¬ processImages: extrude imported SVG paths as arm instances Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
-      /*
       const processImages = (images: ImageConfig[]) => {
         if (!images || images.length === 0) return;
         const centerZOffset = -extrudeSettings.depth / 2;
@@ -6329,7 +6327,6 @@ const App: React.FC = () => {
           }
         });
       };
-      */
 
       const textGroups = getLayerTextGroups(layer);
       for (const textGroup of textGroups) {
@@ -6337,6 +6334,7 @@ const App: React.FC = () => {
       }
       await processHubs(layer.hubs);
       processAbstracts(layer.abstracts);
+      processImages(layer.images);
       if (layer.hangingRing?.enabled) {
         const ringRadius = Math.max(3, Math.min(20, layer.hangingRing.radius));
         const ringTubeRadius = Math.max(0.8, Math.min(2.5, ringRadius * 0.25));
@@ -6348,9 +6346,7 @@ const App: React.FC = () => {
         const ringExtrudeSettings = {
           ...extrudeSettings,
           bevelEnabled: maxLayerBevelThickness > 1e-5,
-          depth: slotUsesBeveledSolids
-            ? Math.max(0.001, effectiveDepth - 2 * maxLayerBevelThickness)
-            : extrudeSettings.depth,
+          depth: Math.max(0.001, effectiveDepth - 2 * maxLayerBevelThickness),
           bevelThickness: maxLayerBevelThickness,
           bevelSize: maxLayerBevelSize,
         };
@@ -6504,7 +6500,7 @@ const App: React.FC = () => {
             }
           } else {
           let unioned2DLayerGeo: THREE_ACTUAL.BufferGeometry | null = null;
-          const canUseFlat2DPreUnion = true;
+          const canUseFlat2DPreUnion = !slotUsesBeveledSolids;
           // For interactive slot preview, always prefer worker-first cutting.
           // Manifold on very dense text meshes can OOM and stall the UI.
           const preferWorkerPreviewCut = !config.manifoldExact && (interactiveSlotPreview || forceWorkerSlotCut);
@@ -6538,7 +6534,7 @@ const App: React.FC = () => {
             if (config.manifoldExact && layerShapeInstances.length === 0) {
               throw new Error(`Manifold-exact: no 2D shapes available for ${layer.name}`);
             }
-            if (canUseFlat2DPreUnion && layerShapeInstances.length > 0 && (!slotUsesBeveledSolids || config.manifoldExact)) {
+            if (canUseFlat2DPreUnion && layerShapeInstances.length > 0) {
               unioned2DLayerGeo = await buildFlat2DUnion();
             }
           } catch (shapeUnionErr) {
@@ -6563,7 +6559,7 @@ const App: React.FC = () => {
             } catch (unionErr) {
               if (config.manifoldExact) {
                 try {
-                  if (layerShapeInstances.length === 0) throw unionErr;
+                  if (slotUsesBeveledSolids || layerShapeInstances.length === 0) throw unionErr;
                   unioned2DLayerGeo = await buildFlat2DUnion();
                 } catch (fallbackErr) {
                   if (generationMode !== 'export' && generationMode !== 'validation') {

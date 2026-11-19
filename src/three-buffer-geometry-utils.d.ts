@@ -21,3 +21,12 @@ declare module 'three/examples/jsm/utils/BufferGeometryUtils' {
     creaseAngle?: number
   ): BufferGeometry;
 }
+
+declare module 'three/examples/jsm/loaders/SVGLoader' {
+  import type { Shape } from 'three';
+
+  export class SVGLoader {
+    parse(data: string): { paths: unknown[] };
+    static createShapes(path: unknown): Shape[];
+  }
+}

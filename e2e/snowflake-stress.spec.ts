@@ -727,6 +727,96 @@ test.describe('Slot mechanics', () => {
     await assertHealthy(page, 'slotted star edge profiles');
   });
 
+  test('un-slotted chamfer reaches text and feature meshes share extrusion depth', async ({ page }) => {
+    test.setTimeout(10 * 60_000);
+    await openApp(page);
+    const saved = await captureDownload(page, () => page.locator('[data-tutorial="save"]').click(), '.json');
+    const config: SnowflakeConfig = JSON.parse(saved.buffer.toString('utf8'));
+    Object.assign(config, {
+      extrusionDepth: 3, bevelAmount: 0.6, bevelSegments: 5, slotEnabled: false,
+      bevelEnabled: true, globalStrokeWeight: 0, quality: 'low',
+    });
+
+    config.layers.forEach((layer, index) => {
+      layer.enabled = index === 0;
+      layer.rotation3D = { x: 0, y: 0, z: 0 };
+      layer.primary.enabled = false;
+      layer.secondary.enabled = false;
+      layer.secondaryEnabled = false;
+      layer.textGroups = [];
+      layer.abstracts = [];
+      layer.images = [];
+      layer.hubs = [];
+      if (layer.hangingRing) layer.hangingRing.enabled = false;
+    });
+
+    const layer = config.layers[0];
+    const loadFeatureConfig = async (label: string, feature: 'text' | 'hub' | 'abstract' | 'image', style: 'fillet' | 'chamfer' = 'fillet') => {
+      config.projectName = label;
+      config.bevelType = style;
+      layer.primary = { ...layer.primary, enabled: feature === 'text', text: 'Snow', arms: 1, thickness: 1 };
+      layer.textGroups = feature === 'text' ? [{ ...layer.primary }] : [];
+      layer.hubs = feature === 'hub' ? [{
+        id: 'depth-test-hub', enabled: true, shape: 'circle', sides: 6,
+        outerRadius: 20, hollow: false, wallThickness: 3, starRatio: 0.5,
+        rotationOffset: 0, oscillationEnabled: false, oscillationAmplitude: 0, oscillationFrequency: 6,
+      }] : [];
+      layer.abstracts = feature === 'abstract' ? [{
+        id: 'depth-test-abstract', enabled: true, type: 'sine', arms: 6,
+        rotationOffset: 0, innerRadius: 5, outerRadius: 20, amplitude: 2,
+        frequency: 2, thickness: 1, mirrorEnabled: false, mirrorOffset: 0,
+      }] : [];
+      layer.images = feature === 'image' ? [{
+        id: 'depth-test-image', name: 'Depth test', enabled: true,
+        svgPaths: ['M 0 0 L 10 0 L 10 10 L 0 10 Z'], svgWidth: 10, svgHeight: 10,
+        arms: 1, rotationOffset: 0, mirrorEnabled: false, mirrorOffset: 0,
+        flipEnabled: false, svgRotation: 0, scale: 1, innerRadius: 20,
+        yOffset: 0, thickness: 0, layoutMode: 'radial',
+      }] : [];
+
+      await page.locator('input[type="file"][accept=".json"]').setInputFiles({
+        name: `${label}.json`, mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(config)),
+      });
+      await expect(page.getByRole('textbox', { name: 'PROJECT NAME' })).toHaveValue(label);
+      await openExportMenu(page);
+      const menu = page.locator('[data-tutorial="export-menu"]');
+      const file = await captureDownload(
+        page,
+        () => menu.getByRole('button', { name: /^Export(?: Selected)?/ }).last().click(),
+        '.stl',
+      );
+      const data = file.buffer;
+      const triangles = data.readUInt32LE(80);
+      expect(triangles, `${label} should export geometry`).toBeGreaterThan(0);
+      let minZ = Infinity;
+      let maxZ = -Infinity;
+      const zLevels = new Set<string>();
+      for (let offset = 84; offset < data.length; offset += 50) {
+        for (let vertex = 0; vertex < 3; vertex++) {
+          const z = data.readFloatLE(offset + 12 + vertex * 12 + 8);
+          minZ = Math.min(minZ, z);
+          maxZ = Math.max(maxZ, z);
+          zLevels.add(z.toFixed(3));
+        }
+      }
+      return { minZ, maxZ, zLevels: zLevels.size };
+    };
+
+    const filletText = await loadFeatureConfig('depth-test-fillet-text', 'text');
+    const chamferText = await loadFeatureConfig('depth-test-chamfer-text', 'text', 'chamfer');
+    const filletHub = await loadFeatureConfig('depth-test-fillet-hub', 'hub');
+    const chamferHub = await loadFeatureConfig('depth-test-chamfer-hub', 'hub', 'chamfer');
+    const abstract = await loadFeatureConfig('depth-test-abstract', 'abstract');
+    const image = await loadFeatureConfig('depth-test-image', 'image');
+
+    for (const mesh of [filletText, chamferText, filletHub, chamferHub, abstract, image]) {
+      expect(mesh.maxZ - mesh.minZ).toBeCloseTo(3, 3);
+    }
+    expect(filletText.zLevels).toBeGreaterThan(chamferText.zLevels);
+    expect(filletHub.zLevels).toBeGreaterThan(chamferHub.zLevels);
+    await assertHealthy(page, 'un-slotted extrusion profiles');
+  });
+
   test('toggling slots changes the 3D viewport', async ({ page }) => {
     test.setTimeout(300_000);
     await openApp(page);
