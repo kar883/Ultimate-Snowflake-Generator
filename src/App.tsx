@@ -54,7 +54,7 @@ import { clearSlotCache } from './slotGeometryCache';
 import { improvedSlotCutCache } from './improvedSlotCache';
 
 const MAX_HISTORY = 50;
-const APP_VERSION = '1.1.8';
+const APP_VERSION = '1.1.9';
 const hubFilletInfoCache = new Map<string, { applied: number; by: 'depth' | 'wall' | null }>();
 const APP_DEBUG = false;
 // Bump when mesh generation logic changes (slot geometry, CSG sequencing, etc.)
@@ -7056,21 +7056,8 @@ const App: React.FC = () => {
     // it can hold geometry that was generated for visualization rather than export.
     if (config.slotEnabled) return null;
 
-    const makePreviewKey = (cfg: SnowflakeConfig) => hashConfig(cfg)
-      + '|q:' + qualityToUse
-      + '|targets:all'
-      + '|slotPath:' + ((cfg.slotBakedProfileEnabled ?? DEFAULT_BAKED_PROFILE_SLOT_ENABLED) ? 'baked' : 'legacy')
-      + '|algo:' + GEOMETRY_ALGO_VERSION;
-
-    // Prefer the currently rendered 3D snapshot cache key first.
-    const renderedKey = makePreviewKey(rendered3DConfig);
-    const renderedCached = modelCache3D.get(renderedKey);
-    if (renderedCached) return renderedCached;
-
-    // Fallback to editable config key to preserve compatibility while typing.
-    const configKey = makePreviewKey(config);
-    return modelCache3D.get(configKey) || null;
-  }, [config, rendered3DConfig]);
+    return modelCache3D.get(makeModelCacheKey(config, qualityToUse)) || null;
+  }, [config, makeModelCacheKey]);
 
   const persistEstimateCalibration = useCallback(() => {
     try {
@@ -7463,7 +7450,7 @@ const App: React.FC = () => {
       const fallbackMode: MeshGenerationMode = (config.slotEnabled || qualityToUse !== rendered3DConfig.quality) ? 'export' : 'preview';
 
         await yieldToMainThread();
-      const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode);
+      const group = previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode);
 
         await yieldToMainThread();
         logPreExportTopology(group, 'combined-stl');
@@ -7502,7 +7489,7 @@ const App: React.FC = () => {
       const fallbackMode: MeshGenerationMode = (config.slotEnabled || qualityToUse !== rendered3DConfig.quality) ? 'export' : 'preview';
 
       await yieldToMainThread();
-      const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode);
+      const group = previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode);
 
       await yieldToMainThread();
       logPreExportTopology(group, 'combined-3mf');
@@ -7541,7 +7528,7 @@ const App: React.FC = () => {
       const fallbackMode: MeshGenerationMode = (config.slotEnabled || qualityToUse !== rendered3DConfig.quality) ? 'export' : 'preview';
 
         await yieldToMainThread();
-      const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode, { targetLayerIds: [layer.id] });
+      const group = previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode, { targetLayerIds: [layer.id] });
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
         if (!mesh) {
           throw new Error(`Generated export mesh not found for layer "${layer.name}"`);
@@ -7583,7 +7570,7 @@ const App: React.FC = () => {
       const fallbackMode: MeshGenerationMode = (config.slotEnabled || qualityToUse !== rendered3DConfig.quality) ? 'export' : 'preview';
 
       await yieldToMainThread();
-      const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode, { targetLayerIds: [layer.id] });
+      const group = previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode, { targetLayerIds: [layer.id] });
       const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
       if (!mesh) {
         throw new Error(`Generated export mesh not found for layer "${layer.name}"`);
@@ -7612,7 +7599,7 @@ const App: React.FC = () => {
         const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
         const fallbackMode: MeshGenerationMode = (config.slotEnabled || qualityToUse !== rendered3DConfig.quality) ? 'export' : 'preview';
           await yieldToMainThread();
-        const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode);
+        const group = previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode);
           const zip = new JSZip();
 
             if (identifyBodiesMode) {
@@ -7683,18 +7670,20 @@ const App: React.FC = () => {
 
       await yieldToMainThread();
       const targetLayerIds = selectedLayers.map(({ layer }) => layer.id);
-      const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode, { targetLayerIds });
+      const group = previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode, { targetLayerIds });
       const exporter = new STLExporter();
       let totalTriangles = 0;
       let totalBytes = 0;
-      let exportedAny = false;
-
-      for (let i = 0; i < selectedLayers.length; i++) {
-        const { layer } = selectedLayers[i];
+      const selectedMeshes = selectedLayers.map(({ layer }) => {
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
         if (!mesh) {
           throw new Error(`Generated export mesh not found for layer "${layer.name}"`);
         }
+        return { layer, mesh };
+      });
+
+      for (let i = 0; i < selectedMeshes.length; i++) {
+        const { layer, mesh } = selectedMeshes[i];
         if (i > 0) await yieldToMainThread();
         logPreExportTopology(mesh, `batch-stl/${layer.name}`);
         const result = await exporter.parseAsync(normalizeExportObjectToBed(mesh), getExportCleanupOptions(quality));
@@ -7702,18 +7691,16 @@ const App: React.FC = () => {
         const actualTriangles = Math.max(0, Math.floor((blob.size - 84) / 50));
         totalTriangles += actualTriangles;
         totalBytes += blob.size;
-        exportedAny = true;
         const qLabel = quality ? `_${quality}` : '';
         await downloadBlob(blob, `${config.projectName}_${layer.name.replace(/\s+/g, '_')}${qLabel}.stl`);
       }
 
-      if (exportedAny) {
-        const actualSeconds = Math.max(0.1, (performance.now() - actionStart) / 1000);
-        updateEstimateCalibration('stl', qualityToUse, config.slotEnabled, selectedLayers.map(({ layer }) => layer), totalTriangles, totalBytes, actualSeconds);
-      }
+      const actualSeconds = Math.max(0.1, (performance.now() - actionStart) / 1000);
+      updateEstimateCalibration('stl', qualityToUse, config.slotEnabled, selectedLayers.map(({ layer }) => layer), totalTriangles, totalBytes, actualSeconds);
     } catch (e) {
       console.error(e);
       handleError(e, 'Selected STL Export');
+      showNotification(e instanceof Error ? e.message : 'Selected STL export failed', 'error', 8000);
     } finally {
       finishExport(exportRunSeq);
     }
@@ -7742,7 +7729,7 @@ const App: React.FC = () => {
 
       await yieldToMainThread();
       const targetLayerIds = selectedLayers.map(({ layer }) => layer.id);
-      const group = previewGroup || await generateMesh(() => {}, qualityToUse, undefined, fallbackMode, { targetLayerIds });
+      const group = previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode, { targetLayerIds });
       const exporter = new ThreeMFExporter();
       const enabledLayers = config.layers.filter((layer) => layer.enabled);
       const selectedPlanes = selectedLayers.map(({ layer }) => {
@@ -7777,6 +7764,7 @@ const App: React.FC = () => {
     } catch (e) {
       console.error(e);
       handleError(e, 'Selected 3MF Export');
+      showNotification(e instanceof Error ? e.message : 'Selected 3MF export failed', 'error', 8000);
     } finally {
       finishExport(exportRunSeq);
     }

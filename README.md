@@ -4,12 +4,12 @@
 
 ## Download
 - Web app: [Open in your browser](https://kar883.github.io/Ultimate-Snowflake-Generator/)
-- Windows installer: [Snowflake-Generator-Windows-Installer-1.1.8.exe](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.8/Snowflake-Generator-Windows-Installer-1.1.8.exe)
-- Windows portable: [Snowflake-Generator-Windows-Portable-1.1.8.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.8/Snowflake-Generator-Windows-Portable-1.1.8.zip)
-- macOS installer: [Snowflake-Generator-macOS-Installer-1.1.8.dmg](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.8/Snowflake-Generator-macOS-Installer-1.1.8.dmg)
-- macOS portable: [Snowflake-Generator-macOS-Portable-1.1.8.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.8/Snowflake-Generator-macOS-Portable-1.1.8.zip)
-- Linux portable: [Snowflake-Generator-Linux-Portable-1.1.8.AppImage](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.8/Snowflake-Generator-Linux-Portable-1.1.8.AppImage)
-- Linux installer: [Snowflake-Generator-Linux-Installer-1.1.8.deb](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.8/Snowflake-Generator-Linux-Installer-1.1.8.deb)
+- Windows installer: [Snowflake-Generator-Windows-Installer-1.1.9.exe](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.9/Snowflake-Generator-Windows-Installer-1.1.9.exe)
+- Windows portable: [Snowflake-Generator-Windows-Portable-1.1.9.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.9/Snowflake-Generator-Windows-Portable-1.1.9.zip)
+- macOS installer: [Snowflake-Generator-macOS-Installer-1.1.9.dmg](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.9/Snowflake-Generator-macOS-Installer-1.1.9.dmg)
+- macOS portable: [Snowflake-Generator-macOS-Portable-1.1.9.zip](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.9/Snowflake-Generator-macOS-Portable-1.1.9.zip)
+- Linux portable: [Snowflake-Generator-Linux-Portable-1.1.9.AppImage](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.9/Snowflake-Generator-Linux-Portable-1.1.9.AppImage)
+- Linux installer: [Snowflake-Generator-Linux-Installer-1.1.9.deb](https://github.com/kar883/Ultimate-Snowflake-Generator/releases/download/v1.1.9/Snowflake-Generator-Linux-Installer-1.1.9.deb)
 - All release assets: [GitHub Releases](https://github.com/kar883/Ultimate-Snowflake-Generator/releases)
 
 ## Finished product examples
@@ -79,7 +79,7 @@ Use the **Settings** button in the app header to open the basic or advanced gett
 ## Tips
 - Start with simple text and 1 plane to get familiar, then explore more complex features.
 - To add a hanging ring, switch to the 2D view, select the target plane, turn on **Hanging ring**, adjust the diameter slider, and drag the green ring onto the desired arm. The ring position is saved with the plane.
-- Do most of your modeling in the 2D view to keep things fast and turn off "auto regenerate 3D" for faster editing. With auto regeneration off, use the 3D viewer's force-refresh button to rebuild from the latest settings, including slot and plane changes. Turn auto regeneration back on for real-time updates.
+- Do most of your modeling in the 2D view to keep things fast and turn off "auto regenerate 3D" for faster editing. With auto regeneration off, use the 3D viewer's force-refresh button to rebuild from the latest settings, including slot and plane changes. Exports use the latest settings even if the 3D preview has not been refreshed. Turn auto regeneration back on for real-time updates.
 - Use **ID Bodies** in the 3D preview to inspect disconnected bodies before exporting for 3D printing. A connectivity warning does not necessarily mean slots caused the separation.
 - Fillets and chamfers on existing model edges are retained when slots are cut. Newly cut slot edges remain sharp to preserve the mating clearance.
 - If 3D generation fails, the last successful preview may be out of date. Dismiss the error to keep editing, or use its retry button to rebuild from the current settings. Check the preview and export before printing.

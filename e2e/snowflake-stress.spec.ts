@@ -24,6 +24,7 @@ import { devices, test as base, expect, type Locator, type Page } from '@playwri
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import JSZip from 'jszip';
 import type { SnowflakeConfig } from '../src/types';
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -468,7 +469,7 @@ async function exportAs(page: Page, fmt: 'stl' | '3mf' | 'svg' | 'dxf') {
   await openExportMenu(page);
   const menu = page.locator('[data-tutorial="export-menu"]');
   await menu.getByRole('button', { name: fmt.toUpperCase(), exact: true }).click();
-  return captureDownload(page, () => menu.getByRole('button', { name: new RegExp(`^Export\\s+${fmt}`, 'i') }).click(), `.${fmt}`);
+  return captureDownload(page, () => menu.getByRole('button', { name: new RegExp(`^Export\\s+${fmt}`, 'i') }).click({ timeout: 180_000 }), `.${fmt}`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -930,15 +931,100 @@ test.describe('JSON save / load', () => {
 });
 
 // ── 8. Export formats ──────────────────────────────────────────────────────────────────────────
+test.describe('Selected plane exports', () => {
+    for (const slots of [false, true]) {
+      test(`exports all selected planes with a stale 3D preview, slots ${slots ? 'on' : 'off'}`, async ({ page }) => {
+        test.setTimeout(300_000);
+        await openApp(page);
+        const saved = await captureDownload(page, () => page.locator('[data-tutorial="save"]').click(), '.json');
+        const config: SnowflakeConfig = JSON.parse(saved.buffer.toString('utf8'));
+        Object.assign(config, {
+          projectName: 'plane-export-regression', slotEnabled: false, slotMode: '2-plane',
+          quality: 'low', bevelEnabled: false, syncAllLayers: false, freeFloatingCheck: false,
+          slotBridgesEnabled: false, globalStrokeWeight: 0,
+        });
+        config.layers.forEach((layer, index) => {
+          layer.enabled = index < 2;
+          layer.primary.enabled = false;
+          layer.secondary.enabled = false;
+          layer.secondaryEnabled = false;
+          layer.textGroups = [];
+          layer.abstracts = [];
+          layer.images = [];
+          if (layer.hangingRing) layer.hangingRing.enabled = false;
+          layer.hubs = [{
+            id: `export-hub-${index}`, enabled: true, shape: 'circle', sides: 6,
+            outerRadius: 20, hollow: false, wallThickness: 3, starRatio: 0.5,
+            rotationOffset: 0, oscillationEnabled: false, oscillationAmplitude: 0, oscillationFrequency: 6,
+          }];
+        });
+        await page.locator('input[type="file"][accept=".json"]').setInputFiles({
+          name: 'plane-export-regression.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(config)),
+        });
+        await expect(page.getByRole('textbox', { name: 'PROJECT NAME' })).toHaveValue(config.projectName);
+        await setSlotMode3Plane(page);
+        if (slots) await setSlots(page, true);
+
+        await openExportMenu(page);
+        const menu = page.locator('[data-tutorial="export-menu"]');
+        await menu.getByRole('button', { name: /^low$/i }).click();
+        for (const name of ['Base Plane', 'Cross Plane', 'Tilt Plane']) {
+          await menu.getByRole('button', { name: new RegExp(name, 'i') }).click();
+        }
+
+        const downloads: import('@playwright/test').Download[] = [];
+        page.on('download', (download) => downloads.push(download));
+        await menu.getByRole('button', { name: /^Export Selected \(3\) STL/i }).click();
+        await expect.poll(() => downloads.length, { timeout: 60_000 }).toBe(3);
+        const stls = await Promise.all(downloads.map(async (download) => ({
+          name: download.suggestedFilename(),
+          buffer: fs.readFileSync((await download.path())!),
+        })));
+        expect(stls.map((file) => file.name).sort()).toEqual([
+          'plane-export-regression_Base_Plane_low.stl',
+          'plane-export-regression_Cross_Plane_low.stl',
+          'plane-export-regression_Tilt_Plane_low.stl',
+        ]);
+        for (const { buffer } of stls) {
+          expect(buffer.readUInt32LE(80)).toBeGreaterThan(0);
+        }
+
+        await menu.waitFor({ state: 'hidden', timeout: 60_000 });
+        await openExportMenu(page);
+        await menu.getByRole('button', { name: '3MF', exact: true }).click();
+        const file = await captureDownload(page, () => menu.getByRole('button', { name: /^Export Selected \(3\) 3MF/i }).click(), '.3mf');
+        const archive = await JSZip.loadAsync(file.buffer);
+        const model = await archive.file('3D/3dmodel.model')!.async('string');
+        const xs = Array.from(model.matchAll(/<vertex x="([^"]+)"/g), (match) => Number(match[1])).sort((a, b) => a - b);
+        expect(xs.length).toBeGreaterThan(0);
+        expect(xs.filter((x, i) => i > 0 && x - xs[i - 1] > 4).length).toBe(2);
+
+        if (!slots) {
+          await menu.waitFor({ state: 'hidden', timeout: 60_000 });
+          config.layers.forEach((layer) => { layer.enabled = true; });
+          config.layers[2].hubs = [];
+          await page.locator('input[type="file"][accept=".json"]').setInputFiles({
+            name: 'empty-tilt.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(config)),
+          });
+          downloads.length = 0;
+          await openExportMenu(page);
+          await menu.getByRole('button', { name: 'STL', exact: true }).click();
+          await menu.getByRole('button', { name: /^Export Selected \(3\) STL/i }).click();
+          await expect(page.getByText('Generated export mesh not found for layer "Tilt Plane"')).toBeVisible({ timeout: 60_000 });
+          expect(downloads).toHaveLength(0);
+        }
+        await assertHealthy(page, 'selected plane exports');
+      });
+    }
+});
+
 test.describe('File exports', () => {
   test.describe.configure({ timeout: 300_000 });
-
   test.beforeEach(async ({ page }) => {
     await openApp(page);
     await setSlotMode3Plane(page);
     await setSlots(page, true);
   });
-
   test('SVG export downloads a vector file', async ({ page }) => {
     const f = await exportAs(page, 'svg');
     expect(f.buffer.toString('utf8')).toContain('<svg');
