@@ -116,8 +116,37 @@ export interface HangingRingConfig {
   enabled: boolean;
   x: number;
   y: number;
-  radius: number;
+  /** Legacy outer radius. New projects use innerDiameter and outerDiameter. */
+  radius?: number;
+  innerDiameter?: number;
+  outerDiameter?: number;
 }
+
+export const getHangingRingDimensions = (
+  ring?: HangingRingConfig,
+): { innerDiameter: number; outerDiameter: number } => {
+  const outerRadius = Math.max(
+    1.5,
+    Math.min(20, Number.isFinite(ring?.outerDiameter)
+      ? (ring!.outerDiameter! / 2)
+      : (ring?.radius ?? 6)),
+  );
+  const legacyTubeRadius = Math.max(0.8, Math.min(2.5, outerRadius * 0.25));
+  const innerDiameter = Math.max(
+    0.5,
+    Math.min(
+      (outerRadius * 2) - 1.6,
+      Number.isFinite(ring?.innerDiameter)
+        ? ring!.innerDiameter!
+        : 2 * (outerRadius - legacyTubeRadius),
+    ),
+  );
+
+  return {
+    innerDiameter,
+    outerDiameter: outerRadius * 2,
+  };
+};
 
 export const createDefaultImage = (
   id: string,

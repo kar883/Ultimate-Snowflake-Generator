@@ -111,6 +111,8 @@ export const createDefaultLayer = (id: string, name: string, rx = 0, ry = 0, isE
     x: 0,
     y: 0,
     radius: 6,
+    innerDiameter: 9,
+    outerDiameter: 12,
   }
 });
 

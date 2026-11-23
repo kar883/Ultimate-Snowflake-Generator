@@ -35,6 +35,7 @@ e2e/
 e2e/*
 !e2e/snowflake-stress.spec.ts
 !e2e/refresh-regression.spec.ts
+!e2e/disconnected-bodies.spec.ts
 e2e/**/*.spec.ts-snapshots/
 
 # Local test run outputs

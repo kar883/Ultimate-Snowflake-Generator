@@ -1,6 +1,6 @@
 
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
-import { SnowflakeConfig, LayerConfig, TextGroupConfig, HubConfig, AbstractConfig, ShortcutConfig, ImageConfig } from '../types';
+import { SnowflakeConfig, LayerConfig, TextGroupConfig, HubConfig, AbstractConfig, ShortcutConfig, ImageConfig, getHangingRingDimensions } from '../types';
 import { FONT_TTF_URLS } from '../constants';
 import { getHubOutlinePoints } from '../utils/hubGeometry';
 import opentype from 'opentype.js';
@@ -305,7 +305,7 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
       const nextY = originY - unrotatedY;
       onUpdateConfig({
         layers: config.layers.map((layer) => layer.id === layerId
-          ? { ...layer, hangingRing: { ...(layer.hangingRing ?? { enabled: true, x: 0, y: 0, radius: 6 }), x: nextX, y: nextY } }
+          ? { ...layer, hangingRing: { ...(layer.hangingRing ?? { enabled: true, x: 0, y: 0, innerDiameter: 9, outerDiameter: 12 }), x: nextX, y: nextY } }
           : layer),
       });
       return;
@@ -891,7 +891,13 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
               onClick={() => {
                 const layer = config.layers[config.activeLayerIndex];
                 if (!layer || !onUpdateConfig) return;
-                const current = layer.hangingRing ?? { enabled: false, x: 0, y: 0, radius: 6 };
+                const current = layer.hangingRing ?? {
+                  enabled: false,
+                  x: 0,
+                  y: 0,
+                  innerDiameter: 9,
+                  outerDiameter: 12,
+                };
                 onUpdateConfig({
                   layers: config.layers.map((candidate, index) => index === config.activeLayerIndex
                     ? { ...candidate, hangingRing: { ...current, enabled: !current.enabled } }
@@ -906,41 +912,67 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
               Hanging ring {config.layers[config.activeLayerIndex]?.hangingRing?.enabled ? 'ON' : 'OFF'}
             </button>
           </InfoTooltip>
-          {config.layers[config.activeLayerIndex]?.hangingRing?.enabled && (
-            <label className="flex items-center gap-2" title="Drag the ring in the 2D preview to position it">
-              <DeferredNumberInput
-                value={2 * (config.layers[config.activeLayerIndex].hangingRing?.radius ?? 6)}
-                min={6}
-                max={40}
-                step={1}
-                suffix="mm"
-                onChange={(outerDiameter) => {
-                  if (!onUpdateConfig) return;
-                  onUpdateConfig({
-                    layers: config.layers.map((candidate, index) => index === config.activeLayerIndex
-                      ? { ...candidate, hangingRing: { ...(candidate.hangingRing ?? { enabled: true, x: 0, y: 0, radius: 6 }), radius: outerDiameter / 2 } }
-                      : candidate),
-                  });
-                }}
-              />
-              <span className="flex items-center whitespace-nowrap text-[10px] font-semibold text-slate-400">
-                <InfoTooltip label="Inner diameter" description="The diameter of the opening through the hanging ring." placement="bottom" className="inline-flex">
-                  <span>ID {(
-                    2 * (
-                      (config.layers[config.activeLayerIndex].hangingRing?.radius ?? 6)
-                      - Math.max(0.8, Math.min(2.5, (config.layers[config.activeLayerIndex].hangingRing?.radius ?? 6) * 0.25))
-                    )
-                  ).toFixed(1)} mm</span>
+          {config.layers[config.activeLayerIndex]?.hangingRing?.enabled && (() => {
+            const activeRing = config.layers[config.activeLayerIndex].hangingRing;
+            const dimensions = getHangingRingDimensions(activeRing);
+            const minimumWall = 1.6;
+            const updateDiameter = (
+              property: 'innerDiameter' | 'outerDiameter',
+              value: number,
+              committed: boolean,
+            ) => {
+              if (!onUpdateConfig) return;
+              const next = { ...dimensions };
+              if (property === 'innerDiameter') {
+                next.innerDiameter = Math.min(value, dimensions.outerDiameter - minimumWall);
+              } else {
+                next.outerDiameter = Math.max(value, dimensions.innerDiameter + minimumWall);
+              }
+              onUpdateConfig({
+                layers: config.layers.map((candidate, index) => index === config.activeLayerIndex
+                  ? {
+                      ...candidate,
+                      hangingRing: {
+                        ...(candidate.hangingRing ?? { enabled: true, x: 0, y: 0 }),
+                        innerDiameter: next.innerDiameter,
+                        outerDiameter: next.outerDiameter,
+                      },
+                    }
+                  : candidate),
+              }, committed);
+            };
+
+            return (
+              <div className="flex items-center gap-3" title="Drag the ring in the 2D preview to position it">
+                <InfoTooltip label="Inner diameter" description="Diameter of the opening. Left buttons adjust by 1 mm; right buttons by 0.1 mm." placement="bottom">
+                  <div className="flex items-center gap-1">
+                    <span className="text-[9px] font-black text-slate-400">ID</span>
+                    <DeferredNumberInput
+                      value={dimensions.innerDiameter}
+                      min={0.5}
+                      max={dimensions.outerDiameter - minimumWall}
+                      step={0.1}
+                      suffix="mm"
+                      onChange={(value, committed) => updateDiameter('innerDiameter', value, committed)}
+                    />
+                  </div>
                 </InfoTooltip>
-                <span className="mx-1">·</span>
-                <InfoTooltip label="Outer diameter" description="The diameter measured across the outside edge of the hanging ring." placement="bottom" className="inline-flex">
-                  <span>OD {(
-                    2 * (config.layers[config.activeLayerIndex].hangingRing?.radius ?? 6)
-                  ).toFixed(1)} mm</span>
+                <InfoTooltip label="Outer diameter" description="Diameter across the outside edge. Left buttons adjust by 1 mm; right buttons by 0.1 mm." placement="bottom">
+                  <div className="flex items-center gap-1">
+                    <span className="text-[9px] font-black text-slate-400">OD</span>
+                    <DeferredNumberInput
+                      value={dimensions.outerDiameter}
+                      min={dimensions.innerDiameter + minimumWall}
+                      max={40}
+                      step={0.1}
+                      suffix="mm"
+                      onChange={(value, committed) => updateDiameter('outerDiameter', value, committed)}
+                    />
+                  </div>
                 </InfoTooltip>
-              </span>
-            </label>
-          )}
+              </div>
+            );
+          })()}
         </div>
       </div>
       <svg width="100%" height="100%" className="cursor-move" ref={svgRef}>
@@ -1011,32 +1043,36 @@ const SnowflakePreview: React.FC<SnowflakePreviewProps> = ({
                     {layer.name}
                   </text>
                   <circle cx="0" cy="0" r="2" fill="#ef4444" />
-                  <g transform="scale(1, -1)">
-                    {layer.hangingRing?.enabled && (
-                      <circle
-                        cx={layer.hangingRing.x}
-                        cy={layer.hangingRing.y}
-                        r={layer.hangingRing.radius}
-                        fill="none"
-                        stroke="#22c55e"
-                        strokeWidth={Math.max(1.5, Math.min(4, layer.hangingRing.radius * 0.45))}
-                        className="cursor-grab"
-                        onMouseDown={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          ringDrag.current = {
-                            layerId: layer.id,
-                            startX: event.clientX,
-                            startY: event.clientY,
-                            originX: layer.hangingRing?.x ?? 0,
-                            originY: layer.hangingRing?.y ?? 0,
-                            rotation: 0,
-                          };
-                        }}
-                        aria-label={`${layer.name} hanging ring`}
-                      />
-                    )}
-                  </g>
+                  {layer.hangingRing?.enabled && (() => {
+                    const { innerDiameter, outerDiameter } = getHangingRingDimensions(layer.hangingRing);
+                    const ringTubeRadius = (outerDiameter - innerDiameter) / 2;
+                    return (
+                      <g transform="scale(1, -1)">
+                        <circle
+                          cx={layer.hangingRing.x}
+                          cy={layer.hangingRing.y}
+                          r={(innerDiameter + outerDiameter) / 4}
+                          fill="none"
+                          stroke="#22c55e"
+                          strokeWidth={ringTubeRadius}
+                          className="cursor-grab"
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            ringDrag.current = {
+                              layerId: layer.id,
+                              startX: event.clientX,
+                              startY: event.clientY,
+                              originX: layer.hangingRing?.x ?? 0,
+                              originY: layer.hangingRing?.y ?? 0,
+                              rotation: 0,
+                            };
+                          }}
+                          aria-label={`${layer.name} hanging ring`}
+                        />
+                      </g>
+                    );
+                  })()}
                   <g
                     transform={`scale(1, -1) rotate(${zRotation})`}
                   >

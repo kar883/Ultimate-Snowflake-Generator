@@ -7,7 +7,6 @@ import * as THREE from 'three';
 
 // Run with: node scripts/test-slot-connectivity.mjs
 const appPath = path.resolve('src/App.tsx').replaceAll('\\', '/');
-const viewerPath = path.resolve('src/components/Snowflake3D.tsx').replaceAll('\\', '/');
 const vite = await createServer({
   appType: 'custom',
   server: { middlewareMode: true },
@@ -18,7 +17,6 @@ const vite = await createServer({
     load(id) {
       const file = id.replaceAll('\\', '/');
       if (file === appPath) return readFile(id, 'utf8').then((s) => `${s}\nexport { applyWatertightSlotCuts, createAngledSlotCuttersForLayer, createBakedBridgePlanesForLayer, createSlotProfilesForLayer, createFactoryInitialState, getSlotPlanePreset, loadStartupStateBase, scaleGeometryInPlane, scaleShapeInstancesInPlane };`);
-      if (file === viewerPath) return readFile(id, 'utf8').then((s) => `${s}\nexport { BODIES_WORKER_CODE };`);
     },
   }],
 });
@@ -34,9 +32,10 @@ try {
   const { BODIES_WORKER_CODE } = await vite.ssrLoadModule('/src/components/Snowflake3D.tsx');
   const { simplifyStraightSegments } = await vite.ssrLoadModule('/src/utils/simplifyStraightSegments.ts');
   const { createSlotProfileOutline, manifoldRemoveTinyComponents, manifoldSubtract, manifoldUnionGeometries } = await vite.ssrLoadModule('/src/manifoldCSG.ts');
+  const { bodyBounds, matchRemovedBodies, removeBodies } = await vite.ssrLoadModule('/src/disconnectedBodies.ts');
   const { getTopologyReport, surgicalSlotRepair } = await vite.ssrLoadModule('/src/surgicalSlotRepair.ts');
   const { createDefaultConfig } = await vite.ssrLoadModule('/src/defaults.ts');
-  const bodyCount = (geometry) => {
+  const analyzeBodies = (geometry) => {
     let response;
     const self = { postMessage: (result) => { response = result; } };
     vm.runInNewContext(BODIES_WORKER_CODE, { self, console, Math, Map, Float32Array, Int32Array, Uint32Array });
@@ -48,8 +47,9 @@ try {
       },
     });
     assert.equal(response?.success, true, response?.error);
-    return response.bodyCount;
+    return response;
   };
+  const bodyCount = (geometry) => analyzeBodies(geometry).bodyCount;
 
   const config = createDefaultConfig();
   const startupConfig = createFactoryInitialState();
@@ -90,6 +90,40 @@ try {
   const mixedComponents = await manifoldUnionGeometries(componentGeometries);
   componentGeometries.forEach((geometry) => geometry.dispose());
   assert.equal(bodyCount(mixedComponents), 3, 'fragment cleanup fixture should have two detached components');
+  const analysis = analyzeBodies(mixedComponents);
+  const { mainBody, bounds } = bodyBounds(mixedComponents, analysis.bodyPerVertex, analysis.bodyCount);
+  const floating = bounds.map((_, body) => body).filter((body) => body !== mainBody);
+  const removedDescriptor = { layerId: 'base', ...bounds[floating[0]] };
+  const oneRemoved = removeBodies(mixedComponents, analysis.bodyPerVertex, new Set([floating[0]]));
+  const allRemoved = removeBodies(mixedComponents, analysis.bodyPerVertex, new Set(floating));
+  try {
+    assert.equal(bodyCount(oneRemoved), 2, 'removing one body should leave the main body and the other disconnected body');
+    assert.equal(bodyCount(allRemoved), 1, 'remove all should preserve only the main body');
+    assert.equal(bodyCount(mixedComponents), 3, 'removal should not mutate the source mesh');
+    assert.deepEqual([...matchRemovedBodies([removedDescriptor], bounds, mainBody)], [floating[0]],
+      'export should match the selected body, not the main body');
+    assert.throws(() => matchRemovedBodies([removedDescriptor], [bounds[mainBody]], 0), /uniquely match/,
+      'export should fail rather than remove an unmatched body');
+    assert.throws(() => matchRemovedBodies([removedDescriptor], [bounds[mainBody], bounds[floating[0]], bounds[floating[0]]], 0), /uniquely match/,
+      'export should fail rather than guess between matching bodies');
+    const expanded = mixedComponents.toNonIndexed();
+    try {
+      const expandedAnalysis = analyzeBodies(expanded);
+      const expandedBounds = bodyBounds(expanded, expandedAnalysis.bodyPerVertex, expandedAnalysis.bodyCount);
+      const matched = matchRemovedBodies([removedDescriptor], expandedBounds.bounds, expandedBounds.mainBody);
+      const expandedResult = removeBodies(expanded, expandedAnalysis.bodyPerVertex, matched);
+      try {
+        assert.equal(bodyCount(expandedResult), 2, 'removal should work on non-indexed preview geometry');
+      } finally {
+        expandedResult.dispose();
+      }
+    } finally {
+      expanded.dispose();
+    }
+  } finally {
+    oneRemoved.dispose();
+    allRemoved.dispose();
+  }
   const cleanedComponents = await manifoldRemoveTinyComponents(mixedComponents);
   try {
     assert.notEqual(cleanedComponents, mixedComponents, 'tiny detached components should trigger a cleaned mesh');
@@ -251,6 +285,7 @@ try {
     twoPlaneCross.dispose();
   }
 
+  contourConfig.slotLength = 80;
   const contourBridges = createBakedBridgePlanesForLayer(
     contourConfig.layers[0],
     0,
@@ -358,9 +393,76 @@ try {
       Math.abs(crossMainWidth - crossTipInWidth) < 0.05,
       `cross tip-in and main bridge widths should be aligned (${crossMainWidth.toFixed(3)} vs ${crossTipInWidth.toFixed(3)} mm)`
     );
+    const bridgeXBounds = (geometry) => {
+      geometry.computeBoundingBox();
+      return [geometry.boundingBox.min.x, geometry.boundingBox.max.x];
+    };
+    for (const [name, geometry, expectedStart, expectedEnd] of [
+      ['base', baseBridges[0], -60, 0],
+      ['cross main', crossBridges[0], 0, 60],
+      ['cross tip-in', crossBridges[1], -60, -48],
+      ['tilt main', tiltBridges[0], 0, 60],
+      ['tilt rear extension', tiltBridges[1], -49.5, 0],
+      ['tilt forward extension', tiltBridges[2], -1.5, 48],
+    ]) {
+      const [start, end] = bridgeXBounds(geometry);
+      assert.ok(start <= expectedStart + 0.01 && end >= expectedEnd - 0.01,
+        `${name} bridge should cover its full slot contact (${start}, ${end})`);
+      assert.ok(start >= expectedStart - 2.01 && end <= expectedEnd + 2.01,
+        `${name} bridge should not extend beyond the contact overlap (${start}, ${end})`);
+    }
   } finally {
     bridgeWidthGeometries.flat().forEach((geometry) => geometry.dispose());
     bridgeWidthSource.dispose();
+  }
+
+  const narrowContact = new THREE.BoxGeometry(2, 0.2, contourConfig.extrusionDepth);
+  narrowContact.translate(3.5, 1.1, 0);
+  const narrowBridges = createBakedBridgePlanesForLayer(
+    contourConfig.layers[0], 0, contourConfig.layers, contourConfig,
+    contourConfig.extrusionDepth, 0, contourConfig.extrusionDepth, 2.5, 4.5, narrowContact, 190
+  );
+  try {
+    assert.equal(narrowBridges.length, 1, 'a narrow contact between sampled rows should still produce a bridge');
+    narrowBridges[0].computeBoundingBox();
+    assert.ok(narrowBridges[0].boundingBox.min.x <= 2.5 && narrowBridges[0].boundingBox.max.x >= 4.5,
+      'bridge should cover both ends of a narrow contact');
+  } finally {
+    narrowBridges.forEach((geometry) => geometry.dispose());
+    narrowContact.dispose();
+  }
+  const distantSource = new THREE.BoxGeometry(2, 0.2, contourConfig.extrusionDepth);
+  distantSource.translate(3.5, 25, 0);
+  const distantBridges = createBakedBridgePlanesForLayer(
+    contourConfig.layers[0], 0, contourConfig.layers, contourConfig,
+    contourConfig.extrusionDepth, 0, contourConfig.extrusionDepth, 2.5, 4.5, distantSource, 190
+  );
+  try {
+    assert.equal(distantBridges.length, 0, 'a slot without mesh contact should not generate a floating bridge');
+  } finally {
+    distantBridges.forEach((geometry) => geometry.dispose());
+    distantSource.dispose();
+  }
+
+  const angledConfig = structuredClone(bridgeWidthConfig);
+  angledConfig.automaticSlotLength = true;
+  angledConfig.layers[2].primary.rotationOffset = -45;
+  const angledSource = new THREE.BoxGeometry(100, 100, angledConfig.extrusionDepth);
+  const angledBridges = createBakedBridgePlanesForLayer(
+    angledConfig.layers[2], 2, angledConfig.layers, angledConfig,
+    angledConfig.extrusionDepth, 0, angledConfig.extrusionDepth, -50, 50, angledSource, 100
+  );
+  try {
+    assert.ok(angledBridges.length > 0, 'rotated slot should generate a bridge');
+    const positions = angledBridges[0].attributes.position;
+    let reach = 0;
+    for (let i = 0; i < positions.count; i++) {
+      reach = Math.max(reach, (positions.getX(i) + positions.getY(i)) / Math.SQRT2);
+    }
+    assert.ok(reach >= 70, `automatic bridge should reach rotated mesh contact (got ${reach})`);
+  } finally {
+    angledBridges.forEach((geometry) => geometry.dispose());
+    angledSource.dispose();
   }
 
   const scaledGeometry = new THREE.BoxGeometry(10, 20, 6);
@@ -447,21 +549,20 @@ try {
     75,
     65
   );
-  assert.ok((crossProfiles[0].chamferStart ?? 0) > 0, 'cross main slot should keep its start chamfer');
-  assert.ok((crossProfiles[0].chamferEnd ?? 0) > 0, 'cross main slot should keep its end chamfer');
-  assert.equal(crossProfiles[1].chamferStart ?? 0, 0, 'cross tip-in slot should have a square outer end');
-  assert.ok(crossProfiles[1].singleChamferEnd, 'cross tip-in slot should use one diagonal across its inner end');
-  const tipInOutline = createSlotProfileOutline(crossProfiles[1]);
-  assert.equal(tipInOutline.length, 4, 'single-slope tip-in outline should have four corners');
-  const diagonalEdges = tipInOutline.filter((point, index) => {
-    const next = tipInOutline[(index + 1) % tipInOutline.length];
-    return Math.abs(point[0] - next[0]) > 1e-6 && Math.abs(point[1] - next[1]) > 1e-6;
-  });
-  assert.equal(diagonalEdges.length, 1, 'tip-in outline should have exactly one diagonal end edge');
-  assert.ok(
-    tipInOutline[2][0] < tipInOutline[1][0] && tipInOutline[2][1] < tipInOutline[1][1],
-    'tip-in diagonal should slope in the flipped direction'
+  const tiltProfiles = createSlotProfilesForLayer(
+    config.layers[2], 2, config.layers, config, config.extrusionDepth, 30, 75, 65
   );
+  for (const profile of [...baseProfiles, ...crossProfiles, ...tiltProfiles]) {
+    const outline = createSlotProfileOutline(profile);
+    for (let i = 0; i < outline.length; i++) {
+      const point = outline[i];
+      const next = outline[(i + 1) % outline.length];
+      assert.ok(
+        Math.abs(point[0] - next[0]) < 1e-6 || Math.abs(point[1] - next[1]) < 1e-6,
+        'slot profile ends should be square rather than leave triangular peaks'
+      );
+    }
+  }
   const crossCutters = createAngledSlotCuttersForLayer(
     config.layers[1],
     1,
@@ -478,6 +579,62 @@ try {
   crossCutters.forEach((cutter) => cutter.dispose());
   baseCutters.forEach((cutter) => cutter.dispose());
   smallScaleBaseCutters.forEach((cutter) => cutter.dispose());
+
+  const squareEndConfig = structuredClone(config);
+  Object.assign(squareEndConfig, {
+    automaticSlotLength: false,
+    slotLength: 30,
+    slotBridgesEnabled: true,
+    bevelEnabled: false,
+  });
+  squareEndConfig.layers.forEach((layer) => {
+    layer.slotBridgeEnabled = true;
+    layer.primary.rotationOffset = 0;
+  });
+  const squareEndSource = new THREE.BoxGeometry(120, 120, squareEndConfig.extrusionDepth);
+  const material = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+  const pointIsSolid = (geometry, x, y) => {
+    const mesh = new THREE.Mesh(geometry, material);
+    const ray = new THREE.Raycaster(new THREE.Vector3(x, y, 0), new THREE.Vector3(0, 0, 1));
+    const distances = ray.intersectObject(mesh).map((hit) => hit.distance);
+    return distances.filter((distance, index) => index === 0 || distance - distances[index - 1] > 1e-5).length % 2 === 1;
+  };
+  try {
+    for (let layerIndex = 0; layerIndex < 3; layerIndex++) {
+      const layer = squareEndConfig.layers[layerIndex];
+      const profiles = createSlotProfilesForLayer(
+        layer, layerIndex, squareEndConfig.layers, squareEndConfig, squareEndConfig.extrusionDepth, 120
+      );
+      const output = await applyWatertightSlotCuts(
+        squareEndSource, layer, layerIndex, squareEndConfig.layers, squareEndConfig, 0,
+        { baseIsManifold: true }
+      );
+      try {
+        assert.equal(getTopologyReport(output).isManifold, true, 'square-ended slot should stay manifold');
+        const checkedProfiles = layerIndex === 1 ? profiles : profiles.slice(0, 1);
+        for (const profile of checkedProfiles) {
+          for (const x of [(profile.xOffset ?? 0) + 0.1, (profile.xOffset ?? 0) + profile.length - 0.1]) {
+            for (const y of [-profile.width * 0.35, profile.width * 0.35]) {
+              assert.equal(
+                pointIsSolid(output, x, y), false,
+                `layer ${layerIndex} slot should stay clear near its end at (${x.toFixed(2)}, ${y.toFixed(2)})`
+              );
+            }
+          }
+          const midpoint = (profile.xOffset ?? 0) + profile.length / 2;
+          assert.equal(
+            pointIsSolid(output, midpoint, profile.width * 2), true,
+            `layer ${layerIndex} should retain material beside the slot`
+          );
+        }
+      } finally {
+        output.dispose();
+      }
+    }
+  } finally {
+    material.dispose();
+    squareEndSource.dispose();
+  }
 
   async function checkOrientation(sineAngle, zigzagAngle) {
     const pieces = [];

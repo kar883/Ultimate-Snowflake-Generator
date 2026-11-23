@@ -1,10 +1,11 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { AppearanceSettings, SnowflakeConfig, TextGroupConfig, HubConfig, CharOffset, LayerConfig, AbstractConfig, DesignQuality, UnderlineConfig, ShortcutConfig, ImageConfig, createDefaultImage } from './types';
+import { AppearanceSettings, SnowflakeConfig, TextGroupConfig, HubConfig, CharOffset, LayerConfig, AbstractConfig, DesignQuality, UnderlineConfig, ShortcutConfig, ImageConfig, createDefaultImage, getHangingRingDimensions } from './types';
 import { CURSIVE_FONTS, FONT_TTF_URLS, BOLD_FONT_URLS, BOLD_FONT_THRESHOLD } from './constants';
 import { useFontPreloader } from './utils/fontPreloader';
 import ControlPanel from './components/ControlPanel';
 import SnowflakePreview from './components/SnowflakePreview';
-import Snowflake3D from './components/Snowflake3D';
+import Snowflake3D, { BODIES_WORKER_CODE } from './components/Snowflake3D';
+import { analyzeBodiesForExport, bodyBounds, matchRemovedBodies, removeBodies, type RemovedBody } from './disconnectedBodies';
 import Header from './components/Header';
 import ShortcutsModal from './components/ShortcutsModal';
 import AboutModal from './components/AboutModal';
@@ -54,7 +55,7 @@ import { clearSlotCache } from './slotGeometryCache';
 import { improvedSlotCutCache } from './improvedSlotCache';
 
 const MAX_HISTORY = 50;
-const APP_VERSION = '1.1.9';
+const APP_VERSION = '1.2.0';
 const hubFilletInfoCache = new Map<string, { applied: number; by: 'depth' | 'wall' | null }>();
 const APP_DEBUG = false;
 // Bump when mesh generation logic changes (slot geometry, CSG sequencing, etc.)
@@ -1042,7 +1043,6 @@ const getEffectiveBridgeManualWidth = (
 };
 
 const SLOT_BRIDGE_RULE_VERSION = 'slot-bridge-phase1-structural-width';
-const BAKED_BRIDGE_END_INSET_MM = 0.25;
 const BRIDGE_CONTACT_OVERLAP_MM = 2;
 const AUTO_BRIDGE_WIDTH_EXTRA = 1.5;
 const MIN_STRUCTURAL_BRIDGE_RESIDUAL_MM = 3;
@@ -1439,7 +1439,6 @@ const createSlotProfilesForLayer = (
   const crossTipInLength = Math.max(0.01, Math.min(rearMateReach, baseCrossTipInLength + crossTipInLengthAdjustment));
   const baseSlotLength = Math.max(drawLength, config.automaticSlotLength === false ? 0 : measuredRearReach) + mateOverlap;
   const mainSlotLength = Math.max(drawLength, config.automaticSlotLength === false ? 0 : measuredForwardReach) + mateOverlap;
-  const mainSlotChamfer = Math.min(slotThickness / 2, mateOverlap);
 
   if (config.slotMode === '2-plane') {
     if (layerIndex === 0) {
@@ -1458,8 +1457,6 @@ const createSlotProfilesForLayer = (
       xOffset: -baseSlotLength,
       yOffset: 0,
       rotationDeg: -armAngle,
-      chamferStart: mainSlotChamfer,
-      chamferEnd: mainSlotChamfer,
     });
     return slots;
   }
@@ -1480,8 +1477,6 @@ const createSlotProfilesForLayer = (
       width: crossMainSlotThickness,
       yOffset: 0,
       rotationDeg: -armAngle,
-      chamferStart: Math.min(crossMainSlotThickness / 2, mateOverlap),
-      chamferEnd: Math.min(crossMainSlotThickness / 2, mateOverlap),
     });
     // Tip-in: outer arm tip inward, stopping where tilt extension begins.
     slots.push({
@@ -1490,8 +1485,6 @@ const createSlotProfilesForLayer = (
       xOffset: -rearMateReach,
       yOffset: 0,
       rotationDeg: -armAngle,
-      chamferEnd: Math.min(crossTipInSlotThickness / 2, mateOverlap),
-      singleChamferEnd: true,
     });
     return slots;
   }
@@ -1515,8 +1508,6 @@ const createSlotProfilesForLayer = (
       width: tiltMainSlotThickness,
       yOffset: 0,
       rotationDeg: -armAngle,
-      chamferStart: Math.min(tiltMainSlotThickness / 2, mateOverlap),
-      chamferEnd: Math.min(tiltMainSlotThickness / 2, mateOverlap),
     });
     // Opposite-arm extension: start at the origin and cut outward on the
     // negative-X arm for 75% of slotLength.
@@ -1599,37 +1590,14 @@ const createAngledSlotCuttersForLayer = (
     slotThickness: number,
     rotXDeg: number,
     rotZDeg: number,
-    yOffset = 0,
-    startChamfer = Math.min(slotThickness / 2, mateOverlap),
-    endChamfer = startChamfer,
-    singleChamferEnd = false
+    yOffset = 0
   ) => {
     if (length <= 0.01 || slotThickness <= 0.01) return;
-    // Build the cutter from a chamfered length/thickness profile so fallback
-    // CSG has the same slot contour as the baked Manifold profile.
-    const safeStartChamfer = Math.min(slotThickness / 2, Math.max(0, startChamfer), length / 2);
-    const safeEndChamfer = Math.min(slotThickness / 2, Math.max(0, endChamfer), length / 2);
-    const halfThickness = slotThickness / 2;
     const shape = new THREE_ACTUAL.Shape();
-    if (singleChamferEnd) {
-      shape.moveTo(nearX + safeStartChamfer, halfThickness);
-      shape.lineTo(nearX + length, halfThickness);
-      shape.lineTo(nearX + length - safeEndChamfer, -halfThickness);
-      shape.lineTo(nearX + safeStartChamfer, -halfThickness);
-      if (safeStartChamfer > 0) {
-        shape.lineTo(nearX, -halfThickness + safeStartChamfer);
-        shape.lineTo(nearX, halfThickness - safeStartChamfer);
-      }
-    } else {
-      shape.moveTo(nearX + safeStartChamfer, halfThickness);
-      shape.lineTo(nearX + length - safeEndChamfer, halfThickness);
-      shape.lineTo(nearX + length, halfThickness - safeEndChamfer);
-      shape.lineTo(nearX + length, -halfThickness + safeEndChamfer);
-      shape.lineTo(nearX + length - safeEndChamfer, -halfThickness);
-      shape.lineTo(nearX + safeStartChamfer, -halfThickness);
-      shape.lineTo(nearX, -halfThickness + safeStartChamfer);
-      shape.lineTo(nearX, halfThickness - safeStartChamfer);
-    }
+    createSlotProfileOutline({ xOffset: nearX, length, width: slotThickness }).forEach(([x, y], index) => {
+      if (index === 0) shape.moveTo(x, y);
+      else shape.lineTo(x, y);
+    });
     shape.closePath();
     const g = new THREE_ACTUAL.ExtrudeGeometry(shape, {
       depth: fullPunch,
@@ -1683,9 +1651,7 @@ const createAngledSlotCuttersForLayer = (
 
     addCutter(0, mainSlotLength, crossMainSlotThickness, 240, -armAngle, 0);
     // Tip-in X-blade: from outer tip inward, stopping where tilt extension begins.
-    // Keep one angled blade so the inner end has one continuous sloped face.
-    const crossTipInChamfer = Math.min(crossTipInSlotThickness / 2, mateOverlap);
-    addCutter(-rearMateReach, crossTipInLength, crossTipInSlotThickness, 120, -armAngle, 0, 0, crossTipInChamfer, true);
+    addCutter(-rearMateReach, crossTipInLength, crossTipInSlotThickness, 120, -armAngle, 0);
     return cutters;
   }
 
@@ -1776,13 +1742,18 @@ const createBakedBridgePlanesForLayer = (
   const bridge = Math.min(0.4, Math.max(0.15, slotThickness * 0.08));
   const halfChannel = Math.max(0.12, (slotThickness - bridge) / 2);
   const mateOverlap = Math.min(1.5, Math.max(0.35, slotThickness * 0.4));
-  const rearMateReach = getRearMateReach(drawLength, armCount, config.slotMode);
+  const measuredRearReach = measureRearReach(sourceGeoForContact, -armAngle, 1e6) + 0.5;
+  const measuredForwardReach = measureRearReach(sourceGeoForContact, 180 - armAngle, 1e6) + 0.5;
+  const rearMateReach = Math.max(
+    getRearMateReach(drawLength, armCount, config.slotMode),
+    config.automaticSlotLength === false ? 0 : measuredRearReach
+  );
   const rearExtensionReach = Math.min(tiltExtensionLength, rearMateReach);
   const baseCrossTipInLength = Math.max(0.01, rearMateReach - rearExtensionReach);
   const crossTipInLengthAdjustment = (layer.slotCrossTipInLengthAdjustment ?? 0) * diameterScale;
   const crossTipInLength = Math.max(0.01, Math.min(rearMateReach, baseCrossTipInLength + crossTipInLengthAdjustment));
-  const baseSlotLength = drawLength + mateOverlap;
-  const mainSlotLength = drawLength + mateOverlap;
+  const baseSlotLength = Math.max(drawLength, config.automaticSlotLength === false ? 0 : measuredRearReach) + mateOverlap;
+  const mainSlotLength = Math.max(drawLength, config.automaticSlotLength === false ? 0 : measuredForwardReach) + mateOverlap;
 
   const bridgeGeometries: THREE_ACTUAL.BufferGeometry[] = [];
   const seenBridgePlanes = new Set<string>();
@@ -1819,6 +1790,26 @@ const createBakedBridgePlanesForLayer = (
         (-x * sinTheta) + (y * cosTheta),
       ];
     };
+    const clipPolygon = (
+      polygon: Array<[number, number]>,
+      axis: 0 | 1,
+      boundary: number,
+      keepGreater: boolean
+    ): Array<[number, number]> => {
+      const clipped: Array<[number, number]> = [];
+      for (let i = 0; i < polygon.length; i++) {
+        const a = polygon[i];
+        const b = polygon[(i + 1) % polygon.length];
+        const aInside = keepGreater ? a[axis] >= boundary : a[axis] <= boundary;
+        const bInside = keepGreater ? b[axis] >= boundary : b[axis] <= boundary;
+        if (aInside) clipped.push(a);
+        if (aInside !== bInside) {
+          const ratio = (boundary - a[axis]) / (b[axis] - a[axis]);
+          clipped.push([a[0] + (b[0] - a[0]) * ratio, a[1] + (b[1] - a[1]) * ratio]);
+        }
+      }
+      return clipped;
+    };
 
     for (let triangle = 0; triangle + 2 < indexCount; triangle += 3) {
       const points = [
@@ -1828,6 +1819,21 @@ const createBakedBridgePlanesForLayer = (
       ];
       const minY = Math.min(points[0][1], points[1][1], points[2][1]);
       const maxY = Math.max(points[0][1], points[1][1], points[2][1]);
+      const minX = Math.min(points[0][0], points[1][0], points[2][0]);
+      const maxX = Math.max(points[0][0], points[1][0], points[2][0]);
+      if (maxX < runStart || minX > runEnd || maxY < rowYs[0] || minY > rowYs[rowCount - 1]) continue;
+
+      let clipped = clipPolygon(points, 0, runStart, true);
+      clipped = clipPolygon(clipped, 0, runEnd, false);
+      clipped = clipPolygon(clipped, 1, rowYs[0], true);
+      clipped = clipPolygon(clipped, 1, rowYs[rowCount - 1], false);
+      clipped.forEach(([x, y]) => {
+        const rowPosition = Math.min(rowCount - 1, Math.max(0, (y - rowYs[0]) / width * (rowCount - 1)));
+        [Math.floor(rowPosition), Math.ceil(rowPosition)].forEach((row) => {
+          rowMinX[row] = Math.min(rowMinX[row], x);
+          rowMaxX[row] = Math.max(rowMaxX[row], x);
+        });
+      });
       for (let row = 0; row < rowCount; row++) {
         const scanY = rowYs[row];
         if (scanY < minY - 1e-7 || scanY > maxY + 1e-7) continue;
@@ -1845,20 +1851,26 @@ const createBakedBridgePlanesForLayer = (
             intersections.push(a[0] + ((b[0] - a[0]) * ratio));
           }
         }
-        intersections.forEach((x) => {
-          if (x >= runStart - 1e-5 && x <= runEnd + 1e-5) {
-            rowMinX[row] = Math.min(rowMinX[row], x);
-            rowMaxX[row] = Math.max(rowMaxX[row], x);
-          }
-        });
+        if (intersections.length < 2) continue;
+        const minX = Math.max(runStart, Math.min(...intersections));
+        const maxX = Math.min(runEnd, Math.max(...intersections));
+        if (minX <= maxX) {
+          rowMinX[row] = Math.min(rowMinX[row], minX);
+          rowMaxX[row] = Math.max(rowMaxX[row], maxX);
+        }
       }
     }
 
+    const contactRows = rowMinX.map((minX, row) => Number.isFinite(minX) ? row : -1).filter((row) => row >= 0);
+    if (contactRows.length === 0) return null;
     const left: THREE_ACTUAL.Vector2[] = [];
     const right: THREE_ACTUAL.Vector2[] = [];
     for (let row = 0; row < rowCount; row++) {
-      const minX = Math.max(runStart, rowMinX[row] - BRIDGE_CONTACT_OVERLAP_MM);
-      const maxX = Math.min(runEnd, rowMaxX[row] + BRIDGE_CONTACT_OVERLAP_MM);
+      const nearestRow = contactRows.reduce((nearest, candidate) =>
+        Math.abs(candidate - row) < Math.abs(nearest - row) ? candidate : nearest
+      );
+      const minX = Math.max(runStart, rowMinX[nearestRow] - BRIDGE_CONTACT_OVERLAP_MM);
+      const maxX = Math.min(runEnd, rowMaxX[nearestRow] + BRIDGE_CONTACT_OVERLAP_MM);
       if (!Number.isFinite(minX) || !Number.isFinite(maxX) || maxX - minX <= 0.05) continue;
       left.push(new THREE_ACTUAL.Vector2(minX - centerX, rowYs[row] - yOffset));
       right.push(new THREE_ACTUAL.Vector2(maxX - centerX, rowYs[row] - yOffset));
@@ -1874,109 +1886,18 @@ const createBakedBridgePlanesForLayer = (
     return footprint;
   };
   const createBridgePlaneGeometry = (
-    length: number,
-    width: number,
     height: number,
-    contourFootprint?: THREE_ACTUAL.Shape | null
+    contourFootprint: THREE_ACTUAL.Shape
   ): THREE_ACTUAL.BufferGeometry => {
-    const safeLength = Math.max(0.01, length);
-    const safeWidth = Math.max(0.01, width);
     const safeHeight = Math.max(0.01, height);
-
-    if (!config.bevelEnabled && !contourFootprint) {
-      return new THREE_ACTUAL.BoxGeometry(safeLength, safeWidth, safeHeight);
-    }
-
-    if (contourFootprint) {
-      const contourGeometry = new THREE_ACTUAL.ExtrudeGeometry(contourFootprint, {
-        depth: safeHeight,
-        bevelEnabled: false,
-        steps: 1,
-        curveSegments: 2,
-      });
-      contourGeometry.translate(0, 0, -safeHeight * 0.5);
-      return contourGeometry;
-    }
-
-    const bevelPerSide = Math.min(
-      config.bevelAmount,
-      safeLength * 0.5,
-      safeWidth * 0.5,
-      safeHeight * 0.5
-    );
-
-    if (bevelPerSide <= 0.0001) {
-      return new THREE_ACTUAL.BoxGeometry(safeLength, safeWidth, safeHeight);
-    }
-
-    const halfLen = safeLength * 0.5;
-    const halfWid = safeWidth * 0.5;
-    const shape = new THREE_ACTUAL.Shape();
-    shape.moveTo(-halfLen, -halfWid);
-    shape.lineTo(halfLen, -halfWid);
-    shape.lineTo(halfLen, halfWid);
-    shape.lineTo(-halfLen, halfWid);
-    shape.lineTo(-halfLen, -halfWid);
-
-    const coreDepth = Math.max(0.001, safeHeight - (bevelPerSide * 2));
-    const bevelSegments = config.bevelType === 'chamfer'
-      ? 1
-      : Math.max(2, Math.min(config.bevelSegments, 8));
-    const beveled = new THREE_ACTUAL.ExtrudeGeometry(shape, {
-      depth: coreDepth,
-      bevelEnabled: true,
-      bevelThickness: bevelPerSide,
-      bevelSize: bevelPerSide,
-      bevelSegments,
-      curveSegments: 4,
+    const contourGeometry = new THREE_ACTUAL.ExtrudeGeometry(contourFootprint, {
+      depth: safeHeight,
+      bevelEnabled: false,
       steps: 1,
+      curveSegments: 2,
     });
-    beveled.translate(0, 0, (-safeHeight * 0.5) + bevelPerSide);
-    return beveled;
-  };
-
-  const getSlotContactBounds = (
-    rotZDeg: number,
-    yOffset: number,
-    runStart: number,
-    runEnd: number,
-    mirrorY = false
-  ): { start: number; end: number } | null => {
-    if (!sourcePositions || sourcePositions.count === 0) return null;
-
-    const theta = (rotZDeg * Math.PI) / 180;
-    const cosTheta = Math.cos(theta);
-    const sinTheta = Math.sin(theta);
-    // Use a wider band around slot centerline so angled/beveled geometry
-    // contributes enough samples for stable contact detection.
-    const bandHalfWidth = Math.max(1.0, (slotThickness * 0.5) + 0.9);
-
-    let minContactX = Number.POSITIVE_INFINITY;
-    let maxContactX = Number.NEGATIVE_INFINITY;
-
-    for (let i = 0; i < sourcePositions.count; i++) {
-      const x = sourcePositions.getX(i);
-      const y = sourcePositions.getY(i);
-
-      // Convert world XY into slot-local frame (inverse rotZ).
-      const localX = (x * cosTheta) + (y * sinTheta);
-      const localY = (-x * sinTheta) + (y * cosTheta);
-
-      const yDelta = mirrorY
-        ? Math.abs(Math.abs(localY) - Math.abs(yOffset))
-        : Math.abs(localY - yOffset);
-      if (yDelta > bandHalfWidth) continue;
-      if (localX < runStart || localX > runEnd) continue;
-
-      if (localX < minContactX) minContactX = localX;
-      if (localX > maxContactX) maxContactX = localX;
-    }
-
-    if (!Number.isFinite(minContactX) || !Number.isFinite(maxContactX) || (maxContactX - minContactX) <= 0.01) {
-      return null;
-    }
-
-    return { start: minContactX, end: maxContactX };
+    contourGeometry.translate(0, 0, -safeHeight * 0.5);
+    return contourGeometry;
   };
 
   /**
@@ -1987,14 +1908,14 @@ const createBakedBridgePlanesForLayer = (
     nearX: number,
     length: number,
     bridgeThickness: number,
-    rotXDeg: number,
+    _rotXDeg: number,
     rotZDeg: number,
     yOffset = 0,
-    strictContactClamp = false,
+    _strictContactClamp = false,
     pairedCutThicknessBoost = 0,
     autoWidthExtra = 1.0,
     minSafetyMargin = 0.2,
-    mirrorYContact = false,
+    _mirrorYContact = false,
     useContactClamp = true,
     localSlotThickness = slotThickness,
     localWidthAdjustmentPerSide = widthAdjustmentPerSide,
@@ -2011,40 +1932,9 @@ const createBakedBridgePlanesForLayer = (
     const clampedRunEnd = useContactClamp
       ? runEnd
       : Math.min(runEnd, Math.max(meshMinX, meshMaxX));
-    const contactBounds = useContactClamp
-      ? getSlotContactBounds(
-          rotZDeg,
-          yOffset,
-          clampedRunStart,
-          clampedRunEnd,
-          mirrorYContact
-        )
-      : null;
-    const nominalRunLength = Math.max(0, clampedRunEnd - clampedRunStart);
-    const contactLength = contactBounds ? Math.max(0, contactBounds.end - contactBounds.start) : 0;
-    // Vertex-sampled contact bounds can under-estimate runs on angled/short slots
-    // (notably tilt main and cross tip-in). If the sampled span is too small,
-    // fall back to the deterministic clamped run.
-    const contactLooksReliable = Boolean(contactBounds) && (
-      strictContactClamp
-        ? contactLength >= 0.15
-        : contactLength >= Math.max(1.0, nominalRunLength * 0.2)
-    );
-    const effectiveRunStart = contactLooksReliable && contactBounds
-      ? Math.max(clampedRunStart, contactBounds.start + (strictContactClamp ? 0.08 : 0))
-      : clampedRunStart;
-    const effectiveRunEnd = contactLooksReliable && contactBounds
-      ? Math.min(clampedRunEnd, contactBounds.end - (strictContactClamp ? 0.08 : 0))
-      : clampedRunEnd;
-    const clampedLength = effectiveRunEnd - effectiveRunStart;
-    if (clampedLength <= 0.01) return;
-
-    // Pull bridge ends slightly inside slot start/end so boolean cutting
-    // does not leave visible end caps at either side of the slot run.
-    const rawLength = Math.max(0.01, clampedLength);
-    const endpointInset = Math.min(BAKED_BRIDGE_END_INSET_MM, Math.max(0, (rawLength * 0.5) - 0.01));
-    const trimmedLength = Math.max(0.01, rawLength - (endpointInset * 2));
-    const trimmedNearX = effectiveRunStart + endpointInset;
+    const trimmedLength = clampedRunEnd - clampedRunStart;
+    if (trimmedLength <= 0.01) return;
+    const trimmedNearX = clampedRunStart;
     
     // Bridges must have the same full extrusion thickness as the main model.
     const bridgeHeightZ = Math.max(0.01, config.extrusionDepth);
@@ -2110,17 +2000,17 @@ const createBakedBridgePlanesForLayer = (
     if (seenBridgePlanes.has(bridgeKey)) return;
     seenBridgePlanes.add(bridgeKey);
     // Keep bridge inside the source plane thickness (z-axis) for both sides of slot.
-    // Match model edge profile by applying the same bevel style used by base geometry.
     const centerX = trimmedNearX + (trimmedLength / 2);
     const contourFootprint = createContourFootprint(
       rotZDeg,
       centerX,
-      effectiveRunStart,
-      effectiveRunEnd,
+      clampedRunStart,
+      clampedRunEnd,
       yOffset,
       bridgeThicknessMargin
     );
-    const g = createBridgePlaneGeometry(trimmedLength, bridgeThicknessMargin, bridgeHeightZ, contourFootprint);
+    if (!contourFootprint) return;
+    const g = createBridgePlaneGeometry(bridgeHeightZ, contourFootprint);
     g.translate(centerX, yOffset, 0);
     g.rotateZ((rotZDeg * Math.PI) / 180);
     g.translate(0, 0, centerZ);
@@ -2282,16 +2172,9 @@ const createBakedBridgePlanesForLayer = (
 
     const tiltBridgeThickness = tiltMainSlotThickness;
     const tiltCenterCutCompBoost = PAIRED_CUT_BRIDGE_WIDTH_BOOST;
-    // Preserve a guaranteed empty hub zone on tilt bridges so no bridge bars
-    // intrude into the center void.
-    const tiltHubKeepout = Math.max(2.8, tiltMainSlotThickness * 0.9);
-    const symmetricExtensionReach = Math.max(0.01, Math.min(rearExtensionReach, tiltExtensionLength));
-
-    // useContactClamp=true: sample actual mesh vertices projected onto the slot-local X axis
-    // so bridges stop at arm tips rather than extending to drawLength in empty space.
     addBridgePlane(
-      tiltHubKeepout,
-      Math.max(0.01, drawLength - tiltHubKeepout),
+      0,
+      mainSlotLength,
       tiltBridgeThickness,
       240,
       -armAngle,
@@ -2307,8 +2190,8 @@ const createBakedBridgePlanesForLayer = (
       tiltMainManualBridgeWidth ?? undefined
     );
     addBridgePlane(
-      -symmetricExtensionReach,
-      Math.max(0.01, symmetricExtensionReach - tiltHubKeepout),
+      -(rearExtensionReach + mateOverlap),
+      rearExtensionReach + mateOverlap,
       tiltExtensionSlotThickness,
       240,
       -armAngle,
@@ -2324,8 +2207,8 @@ const createBakedBridgePlanesForLayer = (
       tiltExtensionManualBridgeWidth ?? undefined
     );
     addBridgePlane(
-      tiltHubKeepout,
-      Math.max(0.01, symmetricExtensionReach - tiltHubKeepout),
+      -mateOverlap,
+      tiltExtensionLength + mateOverlap,
       tiltExtensionSlotThickness,
       240,
       -armAngle,
@@ -4140,6 +4023,7 @@ const App: React.FC = () => {
   const forceRegenerateRef = useRef<() => void>(() => {});
   const [identifyBodiesMode, setIdentifyBodiesMode] = useState(false);
   const [floatingBodiesByLayer, setFloatingBodiesByLayer] = useState<Record<string, boolean>>({});
+  const removedBodiesRef = useRef<{ configKey: string; bodies: RemovedBody[] } | null>(null);
   const [isProcessing3D, setIsProcessing3D] = useState(false);
   const anyFloatingBodies = useMemo(
     () => Object.values(floatingBodiesByLayer).some(Boolean),
@@ -4284,6 +4168,26 @@ const App: React.FC = () => {
   const { handleError } = useErrorHandler();
   const { exportWithProgress } = useExportManager();
   const { notifications, showNotification } = useUserFeedback();
+  const recordRemovedBodies = useCallback((bodies: RemovedBody[], configKey: string): boolean => {
+    if (JSON.stringify(config) !== configKey) {
+      showNotification('The 3D preview is out of date. Refresh it before removing bodies.', 'error', 8000);
+      return false;
+    }
+    const previous = removedBodiesRef.current;
+    removedBodiesRef.current = {
+      configKey,
+      bodies: [...(previous?.configKey === configKey ? previous.bodies : []), ...bodies],
+    };
+    return true;
+  }, [config, showNotification]);
+
+  useEffect(() => {
+    if (removedBodiesRef.current && removedBodiesRef.current.configKey !== JSON.stringify(config)) {
+      removedBodiesRef.current = null;
+      setRendered3DIfChanged(config);
+      showNotification('The design changed, so removed bodies have been restored.', 'info', 5000);
+    }
+  }, [config, setRendered3DIfChanged, showNotification]);
 
   // Stable debounced setters Ã¢â‚¬â€ backed by refs so they never change identity
   // and never reset their internal timer on re-render.
@@ -4645,7 +4549,8 @@ const App: React.FC = () => {
 
         for (const layer of enabledLayers) {
             if (layer.hangingRing?.enabled) {
-                const ringRadius = Math.max(3, Math.min(20, layer.hangingRing.radius));
+                const { outerDiameter } = getHangingRingDimensions(layer.hangingRing);
+                const ringRadius = outerDiameter / 2;
                 const ringDistance = Math.hypot(layer.hangingRing.x, layer.hangingRing.y) + ringRadius + bevelPadding;
                 if (ringDistance > maxR) maxR = ringDistance;
             }
@@ -5638,12 +5543,19 @@ const App: React.FC = () => {
             const uConf = textGroup.underline;
             let underlineShapes: THREE_ACTUAL.Shape[] = [];
             let underlineGeo = null;
+            let underlineExtrusionDepth = 0;
+            let underlineBevelExpansion = 0;
 
             if (uConf && uConf.enabled) {
               const t = uConf.thickness + (config.globalStrokeWeight || 0);
-                const halfT = t / 2;
-                const startX = textGroup.textX + uConf.startXOffset;
-                const endX = startX + uConf.length;
+              const underlineStrokeBevel = (config.globalStrokeWeight || 0) / 2;
+              const underlineBevelSize = Math.min(
+                bevelPerSide + underlineStrokeBevel,
+                Math.max(0, (t / 2) - 0.0001),
+              );
+              const halfT = Math.max(0.0001, (t / 2) - underlineBevelSize);
+              const startX = textGroup.textX + uConf.startXOffset;
+              const endX = startX + uConf.length;
 
               const makeCapsuleShape = (centerY: number) => {
                 const radius = Math.max(0.0001, halfT);
@@ -5764,9 +5676,22 @@ const App: React.FC = () => {
             }
 
             if (underlineShapes.length > 0) {
+                const underlineStrokeBevel = (config.globalStrokeWeight || 0) / 2;
+                const underlineBevelSize = Math.min(
+                  bevelPerSide + underlineStrokeBevel,
+                  Math.max(0, ((uConf.thickness + (config.globalStrokeWeight || 0)) / 2) - 0.0001),
+                );
                 const underlineExtrudeSettings = {
                   ...textExtrudeSettings,
+                  bevelSize: underlineBevelSize,
+                  bevelThickness: Math.min(bevelPerSide + underlineStrokeBevel, maxBevelPerSide),
+                  depth: Math.max(
+                    0.001,
+                    effectiveDepth - (2 * Math.min(bevelPerSide + underlineStrokeBevel, maxBevelPerSide)),
+                  ),
                 };
+                underlineExtrusionDepth = underlineExtrudeSettings.depth;
+                underlineBevelExpansion = config.globalStrokeWeight || 0;
                 const underlineKey = makeUnderlineKey(
                   layer.id,
                   textGroup,
@@ -5819,7 +5744,7 @@ const App: React.FC = () => {
                 }
                 if (underlineGeo && underlineGeo.attributes.position?.count > 0) {
                     const uInst = underlineGeo.clone();
-                    uInst.translate(0, 0, centerZOffset);
+                    uInst.translate(0, 0, -underlineExtrusionDepth / 2);
                     uInst.rotateX(Math.PI);
                     uInst.rotateZ(-angle);
                     layerGeometries.push(uInst);
@@ -5830,7 +5755,7 @@ const App: React.FC = () => {
                         makeScaleMatrix2D(1, -1),
                         makeRotationMatrix2D(-angle)
                       ),
-                      0
+                      underlineBevelExpansion
                     );
                 }
               }
@@ -6336,19 +6261,30 @@ const App: React.FC = () => {
       processAbstracts(layer.abstracts);
       processImages(layer.images);
       if (layer.hangingRing?.enabled) {
-        const ringRadius = Math.max(3, Math.min(20, layer.hangingRing.radius));
-        const ringTubeRadius = Math.max(0.8, Math.min(2.5, ringRadius * 0.25));
+        const { innerDiameter, outerDiameter } = getHangingRingDimensions(layer.hangingRing);
+        const ringRadius = outerDiameter / 2;
+        const ringInnerRadius = innerDiameter / 2;
+        const ringTubeRadius = ringRadius - ringInnerRadius;
+        const ringBevelSize = extrudeSettings.bevelEnabled
+          ? Math.min(extrudeSettings.bevelSize, Math.max(0, (ringTubeRadius / 2) - 0.001))
+          : 0;
+        const ringBevelThickness = extrudeSettings.bevelEnabled ? extrudeSettings.bevelThickness : 0;
+        const ringShapeOuterRadius = Math.max(
+          0.001,
+          ringRadius - ringBevelSize,
+        );
+        const ringShapeInnerRadius = ringInnerRadius + ringBevelSize;
         const ringShape = new THREE_ACTUAL.Shape();
-        ringShape.absarc(0, 0, ringRadius, 0, Math.PI * 2, false);
+        ringShape.absarc(0, 0, ringShapeOuterRadius, 0, Math.PI * 2, false);
         const ringHole = new THREE_ACTUAL.Path();
-        ringHole.absarc(0, 0, Math.max(0.5, ringRadius - ringTubeRadius), 0, Math.PI * 2, true);
+        ringHole.absarc(0, 0, Math.max(0.5, ringShapeInnerRadius), 0, Math.PI * 2, true);
         ringShape.holes.push(ringHole);
         const ringExtrudeSettings = {
           ...extrudeSettings,
-          bevelEnabled: maxLayerBevelThickness > 1e-5,
-          depth: Math.max(0.001, effectiveDepth - 2 * maxLayerBevelThickness),
-          bevelThickness: maxLayerBevelThickness,
-          bevelSize: maxLayerBevelSize,
+          bevelEnabled: ringBevelThickness > 1e-5,
+          depth: Math.max(0.001, effectiveDepth - 2 * ringBevelThickness),
+          bevelThickness: ringBevelThickness,
+          bevelSize: ringBevelSize,
         };
         const ringGeo = new THREE_ACTUAL.ExtrudeGeometry(ringShape, ringExtrudeSettings);
         ringGeo.translate(layer.hangingRing.x, layer.hangingRing.y, -ringExtrudeSettings.depth / 2);
@@ -6500,7 +6436,13 @@ const App: React.FC = () => {
             }
           } else {
           let unioned2DLayerGeo: THREE_ACTUAL.BufferGeometry | null = null;
-          const canUseFlat2DPreUnion = !slotUsesBeveledSolids;
+          const hasEnabledImages = (layer.images || []).some((image) => image.enabled);
+          // Exact exports with individually beveled font extrusion can feed open
+          // glyph seams into the bridge union. The 2D CrossSection path produces
+          // one closed profile before extrusion and preserves the same bevel.
+          // SVG images do not currently register 2D shape instances, so retain the
+          // profiled-solid fallback for layers containing them.
+          const canUseFlat2DPreUnion = !slotUsesBeveledSolids || !hasEnabledImages;
           // For interactive slot preview, always prefer worker-first cutting.
           // Manifold on very dense text meshes can OOM and stall the UI.
           const preferWorkerPreviewCut = !config.manifoldExact && (interactiveSlotPreview || forceWorkerSlotCut);
@@ -7059,6 +7001,42 @@ const App: React.FC = () => {
     return modelCache3D.get(makeModelCacheKey(config, qualityToUse)) || null;
   }, [config, makeModelCacheKey]);
 
+  const applyBodyRemovalsToExport = async (group: THREE_ACTUAL.Group): Promise<THREE_ACTUAL.Group> => {
+    const removal = removedBodiesRef.current;
+    if (!removal) return group;
+    if (removal.configKey !== JSON.stringify(config)) {
+      throw new Error('The design changed after body removal. Refresh the preview before exporting.');
+    }
+    const clone = group.clone(true);
+    const meshes: THREE_ACTUAL.Mesh[] = [];
+    clone.traverse((child) => {
+      if (child instanceof THREE_ACTUAL.Mesh && child.userData.layerId) meshes.push(child);
+    });
+    const replacements: THREE_ACTUAL.BufferGeometry[] = [];
+    try {
+      for (const mesh of meshes) {
+        const descriptors = removal.bodies.filter((body) => body.layerId === mesh.userData.layerId);
+        if (descriptors.length === 0) continue;
+        const geometry = mesh.geometry as THREE_ACTUAL.BufferGeometry;
+        const { bodyPerVertex, bodyCount } = await analyzeBodiesForExport(geometry, BODIES_WORKER_CODE);
+        const { bounds, mainBody } = bodyBounds(geometry, bodyPerVertex, bodyCount);
+        const removed = matchRemovedBodies(descriptors, bounds, mainBody);
+        const filtered = removeBodies(geometry, bodyPerVertex, removed);
+        replacements.push(filtered);
+        mesh.geometry = filtered;
+      }
+      if (removedBodiesRef.current !== removal || removal.configKey !== JSON.stringify(config)) {
+        throw new Error('The design changed during export. Try again.');
+      }
+      return clone;
+    } catch (error) {
+      replacements.forEach((geometry) => geometry.dispose());
+      const message = error instanceof Error ? error.message : String(error);
+      showNotification(message, 'error', 8000);
+      throw error;
+    }
+  };
+
   const persistEstimateCalibration = useCallback(() => {
     try {
       window.localStorage.setItem(exportEstimateCalibrationStorageKey, JSON.stringify(exportEstimateCalibrationRef.current));
@@ -7450,7 +7428,7 @@ const App: React.FC = () => {
       const fallbackMode: MeshGenerationMode = (config.slotEnabled || qualityToUse !== rendered3DConfig.quality) ? 'export' : 'preview';
 
         await yieldToMainThread();
-      const group = previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode);
+      const group = await applyBodyRemovalsToExport(previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode));
 
         await yieldToMainThread();
         logPreExportTopology(group, 'combined-stl');
@@ -7489,7 +7467,7 @@ const App: React.FC = () => {
       const fallbackMode: MeshGenerationMode = (config.slotEnabled || qualityToUse !== rendered3DConfig.quality) ? 'export' : 'preview';
 
       await yieldToMainThread();
-      const group = previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode);
+      const group = await applyBodyRemovalsToExport(previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode));
 
       await yieldToMainThread();
       logPreExportTopology(group, 'combined-3mf');
@@ -7528,7 +7506,7 @@ const App: React.FC = () => {
       const fallbackMode: MeshGenerationMode = (config.slotEnabled || qualityToUse !== rendered3DConfig.quality) ? 'export' : 'preview';
 
         await yieldToMainThread();
-      const group = previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode, { targetLayerIds: [layer.id] });
+      const group = await applyBodyRemovalsToExport(previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode, { targetLayerIds: [layer.id] }));
         const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
         if (!mesh) {
           throw new Error(`Generated export mesh not found for layer "${layer.name}"`);
@@ -7570,7 +7548,7 @@ const App: React.FC = () => {
       const fallbackMode: MeshGenerationMode = (config.slotEnabled || qualityToUse !== rendered3DConfig.quality) ? 'export' : 'preview';
 
       await yieldToMainThread();
-      const group = previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode, { targetLayerIds: [layer.id] });
+      const group = await applyBodyRemovalsToExport(previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode, { targetLayerIds: [layer.id] }));
       const mesh = group.children.find(c => c instanceof THREE_ACTUAL.Mesh && c.userData.layerId === layer.id) as THREE_ACTUAL.Mesh | undefined;
       if (!mesh) {
         throw new Error(`Generated export mesh not found for layer "${layer.name}"`);
@@ -7599,7 +7577,7 @@ const App: React.FC = () => {
         const previewGroup = getCachedPreviewGroupForExport(qualityToUse);
         const fallbackMode: MeshGenerationMode = (config.slotEnabled || qualityToUse !== rendered3DConfig.quality) ? 'export' : 'preview';
           await yieldToMainThread();
-        const group = previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode);
+        const group = await applyBodyRemovalsToExport(previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode));
           const zip = new JSZip();
 
             if (identifyBodiesMode) {
@@ -7670,7 +7648,7 @@ const App: React.FC = () => {
 
       await yieldToMainThread();
       const targetLayerIds = selectedLayers.map(({ layer }) => layer.id);
-      const group = previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode, { targetLayerIds });
+      const group = await applyBodyRemovalsToExport(previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode, { targetLayerIds }));
       const exporter = new STLExporter();
       let totalTriangles = 0;
       let totalBytes = 0;
@@ -7729,7 +7707,7 @@ const App: React.FC = () => {
 
       await yieldToMainThread();
       const targetLayerIds = selectedLayers.map(({ layer }) => layer.id);
-      const group = previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode, { targetLayerIds });
+      const group = await applyBodyRemovalsToExport(previewGroup || await generateMesh(() => {}, qualityToUse, config, fallbackMode, { targetLayerIds }));
       const exporter = new ThreeMFExporter();
       const enabledLayers = config.layers.filter((layer) => layer.enabled);
       const selectedPlanes = selectedLayers.map(({ layer }) => {
@@ -9083,6 +9061,8 @@ const App: React.FC = () => {
                             identifyBodiesMode={identifyBodiesMode}
                             onFloatingBodiesChange={setFloatingBodiesByLayer}
                             onDisconnectedPiecesDetected={() => setIdentifyBodiesMode(true)}
+                            onBodiesRemoved={recordRemovedBodies}
+                            onBodyRemovalsReset={() => { removedBodiesRef.current = null; }}
                             onProcessingChange={setIsProcessing3D}
                             emergencyStopSeq={emergencyStopSeq}
                             forceRefreshToken={forceRefresh3DToken}

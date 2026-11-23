@@ -5,6 +5,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 // @ts-ignore
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils';
 import { SnowflakeConfig, ShortcutConfig, DesignQuality } from '../types';
+import { bodyBounds, removeBodies, type RemovedBody } from '../disconnectedBodies';
 
 const SLOT_DEBUG_OVERLAY_ENABLED = false;
 const CONFLICT_DEBUG_OVERLAY_ENABLED = false;
@@ -873,6 +874,8 @@ interface Snowflake3DProps {
   identifyBodiesMode?: boolean;
   onFloatingBodiesChange?: (floatingByLayer: Record<string, boolean>) => void;
   onDisconnectedPiecesDetected?: () => void;
+  onBodiesRemoved?: (bodies: RemovedBody[], configKey: string) => boolean;
+  onBodyRemovalsReset?: () => void;
   onProcessingChange?: (isProcessing: boolean) => void;
   emergencyStopSeq?: number;
   forceRefreshToken?: number;
@@ -883,7 +886,7 @@ interface Snowflake3DProps {
 }
 
 // Worker code at module scope — array of lines avoids Babel TSX template-literal parsing.
-const BODIES_WORKER_CODE = [
+export const BODIES_WORKER_CODE = [
   "",
   "// ------ Fast connected-bodies analysis ---------------------------------------------------------------------------------------------------------------------------",
   "// Approach:",
@@ -965,7 +968,7 @@ const BODIES_WORKER_CODE = [
   "    const MAX_ISLANDS = 2000;",
   "    console.log('[Worker] origCount=' + origCount + ' canonCount=' + canonCount + ' rawCount=' + rawCount);",
   "    if (rawCount <= 1 || rawCount > MAX_ISLANDS) {",
-  "      const colorArr = buildBodyColors(origBody, Math.min(rawCount,MAX_ISLANDS), designColor, origCount);",
+  "      const colorArr = buildBodyColors(origBody, rawCount, designColor, positions, indices);",
   "      self.postMessage({success:true,bodyPerVertex:origBody,bodyCount:rawCount,colorArr},",
   "        [origBody.buffer,colorArr.buffer]); return;",
   "    }",
@@ -1137,7 +1140,7 @@ const BODIES_WORKER_CODE = [
   "    const bodyPerVertex=new Int32Array(origCount);",
   "    for(let i=0;i<origCount;i++) bodyPerVertex[i]=remap[origBody[i]]??0;",
   "",
-  "    const colorArr=buildBodyColors(bodyPerVertex,bodyCount,designColor,origCount);",
+  "    const colorArr=buildBodyColors(bodyPerVertex,bodyCount,designColor,positions,indices);",
   "    console.log('[Worker] Final bodyCount=' + bodyCount + ' after merge');",
   "    self.postMessage({success:true,bodyPerVertex,bodyCount,colorArr},",
   "      [bodyPerVertex.buffer,colorArr.buffer]);",
@@ -1147,14 +1150,23 @@ const BODIES_WORKER_CODE = [
   "  }",
   "};",
   "",
-  "function buildBodyColors(bpv,bodyCount,designColor,origCount){",
+  "function buildBodyColors(bpv,bodyCount,designColor,positions,indices){",
+  "  const origCount=positions.length/3;",
   "  const FLOAT_COLOR='#f97316';",
   "  const hexToRgb=h=>{const n=parseInt(h.replace('#',''),16);",
   "    return[(n>>16&255)/255,(n>>8&255)/255,(n&255)/255];};",
   "  const sizes=new Int32Array(bodyCount);",
   "  for(let i=0;i<origCount;i++) if(bpv[i]>=0&&bpv[i]<bodyCount) sizes[bpv[i]]++;",
+  "  const areas=new Float64Array(bodyCount);",
+  "  const count=indices?indices.length:origCount;",
+  "  for(let i=0;i+2<count;i+=3){",
+  "    const a=indices?indices[i]:i, b=indices?indices[i+1]:i+1, c=indices?indices[i+2]:i+2;",
+  "    const abx=positions[b*3]-positions[a*3], aby=positions[b*3+1]-positions[a*3+1], abz=positions[b*3+2]-positions[a*3+2];",
+  "    const acx=positions[c*3]-positions[a*3], acy=positions[c*3+1]-positions[a*3+1], acz=positions[c*3+2]-positions[a*3+2];",
+  "    areas[bpv[a]]+=Math.hypot(aby*acz-abz*acy,abz*acx-abx*acz,abx*acy-aby*acx);",
+  "  }",
   "  let mainBody=0;",
-  "  for(let b=1;b<bodyCount;b++) if(sizes[b]>sizes[mainBody]) mainBody=b;",
+  "  for(let b=1;b<bodyCount;b++) if(areas[b]>areas[mainBody]||(areas[b]===areas[mainBody]&&sizes[b]>sizes[mainBody])) mainBody=b;",
   "  const colors=[];",
   "  const floatRgb=hexToRgb(FLOAT_COLOR);",
   "  for(let b=0;b<bodyCount;b++)",
@@ -1178,6 +1190,8 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   identifyBodiesMode = false,
   onFloatingBodiesChange,
   onDisconnectedPiecesDetected,
+  onBodiesRemoved,
+  onBodyRemovalsReset,
   onProcessingChange,
   emergencyStopSeq = 0,
   forceRefreshToken = 0,
@@ -1236,12 +1250,16 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   const [slotDisconnectedLayers, setSlotDisconnectedLayers] = useState<string[]>([]);
   const [slotAnalysisError, setSlotAnalysisError] = useState<string | null>(null);
   const [slotWarningDismissed, setSlotWarningDismissed] = useState(false);
+  const [floatingBodyCount, setFloatingBodyCount] = useState(0);
+  const [bodyRemovalError, setBodyRemovalError] = useState<string | null>(null);
   const prevForceRefreshTokenRef = useRef(forceRefreshToken);
   const hardStopTokenRef = useRef(0);
   const bodiesWorkersRef = useRef(new Map<Worker, string>());
   const bodiesAnalysisTokenRef = useRef(0);
   const completedConfigKeyRef = useRef<string | null>(null);
   const runBodiesAnalysisRef = useRef<() => void>(() => {});
+  const onBodyRemovalsResetRef = useRef(onBodyRemovalsReset);
+  onBodyRemovalsResetRef.current = onBodyRemovalsReset;
   // Bump this counter to trigger applyAppearance after worker completes
   // const [bodyResultKey, setBodyResultKey] = useState(0);
 
@@ -1767,12 +1785,15 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
           geo.deleteAttribute('color');
         }
         child.userData.hasFloatingBodies = false;
+        child.userData.bodyPerVertex = undefined;
+        child.userData.mainBody = undefined;
       });
       applyAppearanceRef.current();
     }
     if (notify) {
       onFloatingBodiesChange?.({});
     }
+    setFloatingBodyCount(0);
   }, [onFloatingBodiesChange]);
 
   const runBodiesAnalysis = useCallback(() => {
@@ -1814,9 +1835,14 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
     const floatingByLayer: Record<string, boolean> = {};
     const disconnectedLayers = new Set<string>();
     const analysisErrors: string[] = [];
+    let floatingCount = 0;
 
     const jobs = meshes.map((mesh) => new Promise<void>((resolve) => {
       const geo = mesh.geometry as THREE.BufferGeometry;
+      mesh.userData.bodyPerVertex = undefined;
+      mesh.userData.mainBody = undefined;
+      mesh.userData.hasFloatingBodies = false;
+      if (geo.getAttribute('color')) geo.deleteAttribute('color');
       const posAttr = geo.attributes.position as THREE.BufferAttribute | undefined;
       if (!posAttr) {
         mesh.userData.hasFloatingBodies = false;
@@ -1855,9 +1881,9 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
           return;
         }
 
-        const { success, bodyCount, colorArr, error } = ev.data || {};
+        const { success, bodyCount, bodyPerVertex, colorArr, error } = ev.data || {};
         const layerId = String(mesh.userData.layerId ?? '');
-        if (!success || typeof bodyCount !== 'number') {
+        if (!success || typeof bodyCount !== 'number' || !(bodyPerVertex instanceof Int32Array) || bodyPerVertex.length !== posAttr.count) {
           analysisErrors.push(`${mesh.name || 'Plane'}: ${error || 'body analysis returned no result'}`);
           resolve();
           return;
@@ -1866,16 +1892,39 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
         if (isFloating && automaticSlotCheck) disconnectedLayers.add(layerId);
 
         const visibleForIdentification = identifyBodiesMode && (planeVisibility[layerId] ?? true);
+        if (isFloating && visibleForIdentification && colorArr?.length !== posAttr.count * 3) {
+          analysisErrors.push(`${mesh.name || 'Plane'}: body highlight data does not match the mesh`);
+          mesh.userData.hasFloatingBodies = false;
+          resolve();
+          return;
+        }
+        let mainBody: number | undefined;
+        if (isFloating && visibleForIdentification) {
+          try {
+            mainBody = bodyBounds(geo, bodyPerVertex, bodyCount).mainBody;
+          } catch (error) {
+            analysisErrors.push(`${mesh.name || 'Plane'}: ${error instanceof Error ? error.message : String(error)}`);
+            mesh.userData.hasFloatingBodies = false;
+            resolve();
+            return;
+          }
+        }
         mesh.userData.hasFloatingBodies = isFloating && visibleForIdentification;
         if (layerId && visibleForIdentification) {
           floatingByLayer[layerId] = (floatingByLayer[layerId] ?? false) || isFloating;
+          floatingCount += Math.max(0, bodyCount - 1);
         }
 
         if (isFloating && visibleForIdentification && colorArr?.length === posAttr.count * 3) {
+          mesh.userData.bodyPerVertex = bodyPerVertex;
+          mesh.userData.bodyCount = bodyCount;
+          mesh.userData.mainBody = mainBody;
           geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colorArr), 3));
           geo.attributes.color.needsUpdate = true;
-        } else if (geo.getAttribute('color')) {
-          geo.deleteAttribute('color');
+        } else {
+          mesh.userData.bodyPerVertex = undefined;
+          mesh.userData.mainBody = undefined;
+          if (geo.getAttribute('color')) geo.deleteAttribute('color');
         }
 
         resolve();
@@ -1912,9 +1961,11 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
         }
       });
       setIsAnalyzingBodies(false);
+      setFloatingBodyCount(floatingCount);
       onFloatingBodiesChange?.(floatingByLayer);
       setSlotDisconnectedLayers(automaticSlotCheck ? [...disconnectedLayers] : []);
       setSlotAnalysisError(automaticSlotCheck && analysisErrors.length ? analysisErrors.join('; ') : null);
+      if (identifyBodiesMode && analysisErrors.length) setBodyRemovalError(analysisErrors.join('; '));
       if (
         automaticSlotCheck
         && disconnectedLayers.size > 0
@@ -1932,6 +1983,95 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
   useEffect(() => {
     runBodiesAnalysisRef.current = runBodiesAnalysis;
   }, [runBodiesAnalysis]);
+
+  const removeSelectedBodies = useCallback((selection: Array<{ mesh: THREE.Mesh; bodies: Set<number> }>) => {
+    const replacements: Array<{ mesh: THREE.Mesh; geometry: THREE.BufferGeometry }> = [];
+    const descriptors: RemovedBody[] = [];
+    try {
+      for (const { mesh, bodies } of selection) {
+        const geometry = mesh.geometry as THREE.BufferGeometry;
+        const bodyPerVertex = mesh.userData.bodyPerVertex as Int32Array;
+        const count = mesh.userData.bodyCount as number;
+        const { mainBody, bounds } = bodyBounds(geometry, bodyPerVertex, count);
+        for (const body of bodies) {
+          if (body === mainBody || !bounds[body]) throw new Error('The main body cannot be removed.');
+          descriptors.push({ layerId: String(mesh.userData.layerId), ...bounds[body] });
+        }
+        replacements.push({ mesh, geometry: removeBodies(geometry, bodyPerVertex, bodies) });
+      }
+      if (descriptors.length === 0) return;
+      if (!onBodiesRemoved?.(descriptors, configKey)) {
+        replacements.forEach(({ geometry }) => geometry.dispose());
+        return;
+      }
+      replacements.forEach(({ mesh, geometry }) => {
+        mesh.geometry.dispose();
+        mesh.geometry = geometry;
+        mesh.userData.bodyPerVertex = undefined;
+        mesh.userData.mainBody = undefined;
+      });
+      setBodyRemovalError(null);
+      runBodiesAnalysisRef.current();
+    } catch (error) {
+      replacements.forEach(({ geometry }) => geometry.dispose());
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('Disconnected-body removal failed:', error);
+      setBodyRemovalError(message);
+    }
+  }, [configKey, onBodiesRemoved]);
+
+  const removeAllFloatingBodies = useCallback(() => {
+    if (!meshGroupRef.current || isAnalyzingBodies) return;
+    const selection: Array<{ mesh: THREE.Mesh; bodies: Set<number> }> = [];
+    meshGroupRef.current.traverse((child) => {
+      if (!(child instanceof THREE.Mesh) || !child.visible || !child.userData.hasFloatingBodies) return;
+      const count = child.userData.bodyCount as number;
+      const mainBody = child.userData.mainBody as number;
+      const bodies = new Set<number>();
+      for (let body = 0; body < count; body++) if (body !== mainBody) bodies.add(body);
+      selection.push({ mesh: child, bodies });
+    });
+    removeSelectedBodies(selection);
+  }, [isAnalyzingBodies, removeSelectedBodies]);
+
+  useEffect(() => {
+    const canvas = rendererRef.current?.domElement;
+    if (!canvas || !identifyBodiesMode || !isVisible || loading || isAnalyzingBodies) return;
+    let start: { x: number; y: number; id: number } | null = null;
+    const down = (event: PointerEvent) => {
+      if (event.button === 0) start = { x: event.clientX, y: event.clientY, id: event.pointerId };
+    };
+    const up = (event: PointerEvent) => {
+      if (!start || start.id !== event.pointerId || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) {
+        start = null;
+        return;
+      }
+      start = null;
+      if (!cameraRef.current || !meshGroupRef.current) return;
+      const rect = canvas.getBoundingClientRect();
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(new THREE.Vector2(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -((event.clientY - rect.top) / rect.height) * 2 + 1
+      ), cameraRef.current);
+      const meshes: THREE.Mesh[] = [];
+      meshGroupRef.current.traverse((child) => {
+        if (child instanceof THREE.Mesh && child.visible && child.userData.layerId && !child.userData.slotDebug) meshes.push(child);
+      });
+      const hit = raycaster.intersectObjects(meshes, false)[0];
+      if (!hit?.face || !(hit.object instanceof THREE.Mesh)) return;
+      const bodies = hit.object.userData.bodyPerVertex as Int32Array | undefined;
+      const body = bodies?.[hit.face.a];
+      if (body === undefined || body === hit.object.userData.mainBody) return;
+      removeSelectedBodies([{ mesh: hit.object, bodies: new Set([body]) }]);
+    };
+    canvas.addEventListener('pointerdown', down);
+    canvas.addEventListener('pointerup', up);
+    return () => {
+      canvas.removeEventListener('pointerdown', down);
+      canvas.removeEventListener('pointerup', up);
+    };
+  }, [identifyBodiesMode, isVisible, loading, isAnalyzingBodies, removeSelectedBodies]);
 
   useEffect(() => {
     onProcessingChange?.(loading || isAnalyzingBodies);
@@ -2138,6 +2278,8 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
         // Keep cached/export geometry immutable by operating on a preview clone.
         const groupFromGenerator = generatedGroup.clone(true);
         if (cancelled || loadToken !== hardStopTokenRef.current || !sceneRef.current) return;
+        onBodyRemovalsResetRef.current?.();
+        setBodyRemovalError(null);
 
         if (meshGroupRef.current) {
           sceneRef.current.remove(meshGroupRef.current);
@@ -2366,6 +2508,7 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
                       Slots may separate a plane. Consider rotating the design elements relative to the slot direction
                       so the cuts follow a longer arm, then check the pieces and fit again. Camera rotation does not change the cuts.
                       Pieces may also have been disconnected before slotting.
+                      When appropriate, click a highlighted body to remove it, or remove all highlighted bodies on visible planes.
                     </p>
                   </>
                 )}
@@ -2393,6 +2536,31 @@ const Snowflake3D: React.FC<Snowflake3DProps> = ({
                 Retry connectivity check
               </button>
             )}
+          </div>
+        </div>
+      )}
+
+      {identifyBodiesMode && isVisible && !loading && (floatingBodyCount > 0 || bodyRemovalError) && (
+        <div className="absolute top-24 right-4 z-40 max-w-[min(26rem,calc(100%-2rem))]">
+          <div role="status" className="rounded-lg border border-orange-400/50 bg-slate-950/95 p-3 text-sm text-orange-100 shadow-xl">
+            {floatingBodyCount > 0 && (
+              <>
+                <p className="font-semibold">{floatingBodyCount} disconnected {floatingBodyCount === 1 ? 'body' : 'bodies'} highlighted.</p>
+                <p className="mt-1 text-xs">
+                  Click a highlighted body to remove it, or remove all highlighted bodies on visible planes.
+                  Removals apply to this generated design and its 3D exports; regenerating restores them.
+                </p>
+                <button
+                  type="button"
+                  disabled={isAnalyzingBodies}
+                  onClick={removeAllFloatingBodies}
+                  className="mt-2 rounded border border-orange-300/50 px-3 py-1 text-xs font-semibold hover:bg-orange-900 disabled:opacity-50"
+                >
+                  Remove all highlighted bodies
+                </button>
+              </>
+            )}
+            {bodyRemovalError && <p role="alert" className="mt-1 text-xs text-red-200">{bodyRemovalError}</p>}
           </div>
         </div>
       )}
