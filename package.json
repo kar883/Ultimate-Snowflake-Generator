@@ -8,6 +8,8 @@
     "dev": "vite",
     "build": "vite build",
     "build:web": "vite build --base=./ --outDir dist-web",
+    "build:orca": "node scripts/build-orca-plugin.mjs",
+    "test:orca": "node scripts/test-orca-plugin.mjs",
     "build:clean": "npm run build",
     "preview": "vite preview",
     "test:e2e": "playwright test",

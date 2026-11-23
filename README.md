@@ -34,6 +34,17 @@ Inspired by [Jexom's OpenSCAD snowflake](https://www.thingiverse.com/thing:27022
 - For system-font access in a browser, use Chrome or Edge 103+ in a secure context (HTTPS or localhost). The system font picker may not be available in other browsers.
 - AI-powered suggestions require an internet connection and a Gemini API key. Open **Settings & Shortcuts → API Key** in the app to add your key. It is stored in the browser's local storage and sent directly to Google when AI features are used; it is not sent to this app's server. Avoid saving it on shared devices or including it in shared project files.
 
+## OrcaSlicer Plugin
+
+The Pages plugin opens the generator in an OrcaSlicer tab. It requires an OrcaSlicer build with Python plugins and the Pages capability.
+
+1. Download the `snowflake_generator_orcaslicer.py` file from a release that includes it, or build it from the source with `npm install` followed by `npm run build:orca`. The generated file is in `dist-orca`. Keep its filename unchanged: OrcaSlicer imports it as a Python module.
+2. In OrcaSlicer, choose **File → Plugins**, open the arrow next to **Browse plugins**, and select **Install local plugin**. Choose the `.py` file and activate the plugin and its Pages capability.
+3. Open the **Snowflake Generator** tab. Export a file using the app's normal download controls, then import that file into OrcaSlicer. The documented host API is read-only, so the plugin does not add models directly to the plate.
+
+Fonts and AI features may require internet access; system-font access and downloads depend on the embedded browser and operating system. Plugin pages are reloaded when the tab is reloaded, so save your project before reloading. Browser storage availability depends on the OrcaSlicer webview.
+The plugin's **Config** panel explains where to find app settings and how to export; design settings are configured in the generator tab, not in the Plugins dialog.
+
 ## What You Can Do
 - Create designs/snowflakes from repeating text, per-letter adjustments, hubs, oscillating outlines, abstract patterns and fractals, and imported SVG artwork. SVG artwork can be repeated radially or placed once in the center.
 - Build one-, two-, or three-plane designs using Base, Cross, and Tilt planes. Choose whether edits apply to all planes or only the active plane.

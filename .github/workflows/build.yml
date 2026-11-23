@@ -118,6 +118,15 @@ jobs:
     - name: Build browser-only app
       run: npm run build:web
 
+    - name: Build OrcaSlicer plugin
+      run: npm run build:orca
+
+    - name: Upload OrcaSlicer plugin
+      uses: actions/upload-artifact@v5
+      with:
+        name: orca-plugin
+        path: dist-orca/*.py
+
     - name: Package web build
       run: |
         VERSION=$(node -p "require('./package.json').version")
@@ -154,6 +163,7 @@ jobs:
           release-assets/**/*Linux-Installer*.deb
           release-assets/**/*Linux-Portable*.tar.gz
           release-assets/**/*Web-Portable*.zip
+          release-assets/**/snowflake_generator_orcaslicer.py
           !release-assets/**/*.blockmap
           !release-assets/**/builder-debug.yml
           !release-assets/**/builder-effective-config.yaml
